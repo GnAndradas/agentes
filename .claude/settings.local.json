@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(tree:*)",
+      "Bash(cat:*)",
+      "Bash(dir /s /b \"c:\\Users\\Guille\\Desktop\\AGENTES\\ocaas\\frontend\\src\\*.tsx\")",
+      "Bash(dir /s /b \"c:\\Users\\Guille\\Desktop\\AGENTES\\ocaas\\frontend\\src\")",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install)",
+      "Bash(dir:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

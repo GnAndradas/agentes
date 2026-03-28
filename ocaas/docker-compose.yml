@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - HOST=0.0.0.0
+      - DATABASE_URL=file:/app/data/ocaas.db
+      - OPENCLAW_GATEWAY_URL=http://openclaw:8080
+      - OPENCLAW_API_KEY=${OPENCLAW_API_KEY:-}
+    volumes:
+      - backend-data:/app/data
+    depends_on:
+      - openclaw
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  openclaw:
+    image: openclaw/gateway:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - openclaw-workspace:/root/.openclaw/workspace
+    restart: unless-stopped
+
+volumes:
+  backend-data:
+  openclaw-workspace:

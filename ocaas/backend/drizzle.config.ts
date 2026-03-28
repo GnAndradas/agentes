@@ -1,8 +1,9 @@
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-  schema: './src/db/schema/index.ts',
-  out: './src/db/migrations',
+  // Point directly to schema files to avoid .js extension resolution issues
+  schema: './src/db/schema/*.ts',
+  out: './drizzle',
   dialect: 'sqlite',
   dbCredentials: {
     url: process.env.DATABASE_URL || './data/ocaas.db',

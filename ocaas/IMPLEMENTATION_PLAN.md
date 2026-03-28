@@ -2033,6 +2033,50 @@ async spawn(options: SpawnOptions): Promise<SpawnResult> {
 - [x] RUNBOOK_LINUX.md creado
 - [x] Tests críticos documentados
 
+### Correcciones Drizzle (2026-03-28)
+
+**Problema detectado:** drizzle-kit no resolvía imports con extensión `.js` en `src/db/schema/index.ts`.
+
+**Correcciones aplicadas:**
+
+1. **`drizzle.config.ts`** - Cambiado schema de `./src/db/schema/index.ts` a glob `./src/db/schema/*.ts`
+2. **`drizzle.config.ts`** - Cambiado directorio de migraciones de `./src/db/migrations` a `./drizzle`
+3. **`package.json`** - Añadidos scripts `db:migrate` y `db:drop`
+4. **`backend/data/.gitkeep`** - Creado para mantener directorio en git
+5. **`RUNBOOK_LINUX.md`** - Actualizado con troubleshooting de DB y comandos correctos
+
+**Comandos de DB disponibles:**
+- `npm run db:push` - Sincroniza schema con DB (desarrollo)
+- `npm run db:generate` - Genera archivos de migración SQL
+- `npm run db:migrate` - Aplica migraciones
+- `npm run db:studio` - Abre Drizzle Studio (GUI)
+
+### Auditoría de Instalación (2026-03-28)
+
+**Inconsistencias detectadas y corregidas:**
+
+| Problema | Archivo | Corrección |
+|----------|---------|------------|
+| Tabla `agent_feedback` faltante en fallback SQL | `src/db/index.ts` | Añadida CREATE TABLE + índices |
+| Endpoint `/health` solo bajo `/api` | `src/api/system/routes.ts` | Añadido `rootHealthRoute` en raíz |
+| Import faltante en router | `src/api/index.ts` | Añadido import y registro de `rootHealthRoute` |
+| Node version inconsistente | `package.json` | Cambiado de `>=18.0.0` a `>=20.0.0` |
+
+**Endpoints de health disponibles:**
+- `/health` - Root-level para verificaciones rápidas
+- `/api/system/health` - Bajo API prefix
+
+**Verificación post-instalación:**
+```bash
+# Verificar que todas las tablas existen
+sqlite3 backend/data/ocaas.db ".tables"
+# Debe mostrar: agent_feedback agents approvals events...
+
+# Verificar endpoints
+curl http://localhost:3001/health
+curl http://localhost:3001/api/system/health
+```
+
 ### Estado: LISTO PARA GIT
 
 ```bash

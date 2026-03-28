@@ -11,6 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "db:migrate": "drizzle-kit migrate",
+    "db:drop": "drizzle-kit drop",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

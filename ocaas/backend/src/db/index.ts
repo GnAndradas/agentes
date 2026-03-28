@@ -192,6 +192,25 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
     CREATE INDEX IF NOT EXISTS idx_approvals_resource ON approvals(type, resource_id);
     CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config(key);
+
+    CREATE TABLE IF NOT EXISTS agent_feedback (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      session_id TEXT,
+      message TEXT NOT NULL,
+      requirement TEXT,
+      context TEXT,
+      processed INTEGER NOT NULL DEFAULT 0,
+      processing_result TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_feedback_task ON agent_feedback(task_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent ON agent_feedback(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_feedback_processed ON agent_feedback(processed);
   `);
 
   logger.info('Database initialized');

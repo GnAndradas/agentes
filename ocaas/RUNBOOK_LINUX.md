@@ -83,21 +83,69 @@ npm install
 
 **Nota:** `better-sqlite3` compila código nativo. Si falla, verificar build-essential/Xcode.
 
+### Errores comunes de instalación
+
+| Error | Solución |
+|-------|----------|
+| `gyp ERR! find Python` | Instalar Python 3: `sudo apt install python3` |
+| `node-pre-gyp ERR!` | Reinstalar: `npm rebuild better-sqlite3` |
+| `EACCES permission denied` | No usar sudo. Usar nvm o fix permisos npm |
+
 ---
 
 ## 3. Inicializar Base de Datos
 
+### Estructura de archivos de schema
+
+Los schemas de Drizzle están en `backend/src/db/schema/`:
+- `agents.ts`, `tasks.ts`, `skills.ts`, `tools.ts`
+- `permissions.ts`, `generations.ts`, `events.ts`
+- `system.ts`, `approvals.ts`, `feedback.ts`
+
+### Generar y aplicar migraciones
+
 ```bash
 cd backend
 
-# Generar migraciones desde schema
-npm run db:generate
-
-# Aplicar migraciones a SQLite
+# Opción 1: Push directo (desarrollo - recomendado)
+# Sincroniza schema con DB sin generar archivos de migración
 npm run db:push
 ```
 
-Verificar que se creó `backend/data/ocaas.db`.
+```bash
+# Opción 2: Generar migraciones (producción)
+# Genera archivos SQL en backend/drizzle/
+npm run db:generate
+
+# Luego aplicar migraciones
+npm run db:migrate
+```
+
+### Verificar
+
+```bash
+# Debe existir el archivo de base de datos
+ls -la backend/data/ocaas.db
+
+# Verificar tablas creadas
+sqlite3 backend/data/ocaas.db ".tables"
+# Debe mostrar: agents approvals events feedback generations ...
+```
+
+### Troubleshooting DB
+
+| Error | Causa | Solución |
+|-------|-------|----------|
+| `Cannot find module './agents.js'` | drizzle-kit no resuelve imports | Usar glob `*.ts` en config (ya corregido) |
+| `SQLITE_ERROR: no such table` | DB no inicializada | `npm run db:push` |
+| `Error: database is locked` | Otro proceso usando DB | Cerrar otros procesos |
+
+### Reiniciar DB desde cero
+
+```bash
+rm -f backend/data/ocaas.db
+cd backend && npm run db:push
+```
 
 ---
 

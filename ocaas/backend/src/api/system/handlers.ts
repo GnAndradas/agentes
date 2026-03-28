@@ -8,7 +8,7 @@ import {
   loadAutonomyConfig,
   type AutonomyConfig,
 } from '../../config/autonomy.js';
-import { getTaskRouter } from '../../orchestrator/index.js';
+import { getTaskRouter, getFeedbackService } from '../../orchestrator/index.js';
 
 export async function health(_req: FastifyRequest, reply: FastifyReply) {
   return reply.send({ status: 'ok', timestamp: Date.now() });
@@ -16,12 +16,15 @@ export async function health(_req: FastifyRequest, reply: FastifyReply) {
 
 export async function stats(_req: FastifyRequest, reply: FastifyReply) {
   try {
-    const { agentService, taskService, generationService } = getServices();
+    const { agentService, taskService, generationService, approvalService } = getServices();
+    const feedbackService = getFeedbackService();
 
-    const [agents, tasks, generations] = await Promise.all([
+    const [agents, tasks, generations, approvals, feedback] = await Promise.all([
       agentService.list(),
-      taskService.list({ limit: 500 }),
+      taskService.list({ limit: 1000 }),
       generationService.list(),
+      approvalService.list(),
+      feedbackService.getAll(),
     ]);
 
     const agentStats = {
@@ -32,6 +35,11 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
       error: agents.filter(a => a.status === 'error').length,
     };
 
+    // Separate parent tasks from subtasks
+    const parentTasks = tasks.filter(t => !t.parentTaskId);
+    const subtasks = tasks.filter(t => t.parentTaskId);
+    const decomposedTasks = parentTasks.filter(t => t.metadata?._decomposed);
+
     const taskStats = {
       total: tasks.length,
       pending: tasks.filter(t => t.status === 'pending').length,
@@ -39,6 +47,12 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
       running: tasks.filter(t => t.status === 'running').length,
       completed: tasks.filter(t => t.status === 'completed').length,
       failed: tasks.filter(t => t.status === 'failed').length,
+      // Additional metrics
+      parentTasks: parentTasks.length,
+      subtasks: subtasks.length,
+      decomposed: decomposedTasks.length,
+      subtasksCompleted: subtasks.filter(t => t.status === 'completed').length,
+      subtasksFailed: subtasks.filter(t => t.status === 'failed').length,
     };
 
     const generationStats = {
@@ -46,12 +60,46 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
       pending: generations.filter(g => g.status === 'pending_approval').length,
       approved: generations.filter(g => g.status === 'approved' || g.status === 'active').length,
       rejected: generations.filter(g => g.status === 'rejected').length,
+      active: generations.filter(g => g.status === 'active').length,
+      failed: generations.filter(g => g.status === 'failed').length,
     };
+
+    const approvalStats = {
+      total: approvals.length,
+      pending: approvals.filter(a => a.status === 'pending').length,
+      approved: approvals.filter(a => a.status === 'approved').length,
+      rejected: approvals.filter(a => a.status === 'rejected').length,
+      expired: approvals.filter(a => a.status === 'expired').length,
+    };
+
+    const feedbackStats = {
+      total: feedback.length,
+      processed: feedback.filter(f => f.processed).length,
+      unprocessed: feedback.filter(f => !f.processed).length,
+      byType: {
+        missingTool: feedback.filter(f => f.type === 'missing_tool').length,
+        missingSkill: feedback.filter(f => f.type === 'missing_skill').length,
+        missingCapability: feedback.filter(f => f.type === 'missing_capability').length,
+        blocked: feedback.filter(f => f.type === 'blocked').length,
+      },
+    };
+
+    // Get orchestrator status
+    const taskRouter = getTaskRouter();
+    const orchestratorStatus = taskRouter.getStatus();
 
     return reply.send({
       agents: agentStats,
       tasks: taskStats,
       generations: generationStats,
+      approvals: approvalStats,
+      feedback: feedbackStats,
+      orchestrator: {
+        running: orchestratorStatus.running,
+        queueSize: orchestratorStatus.queueSize,
+        processing: orchestratorStatus.processing,
+        sequentialMode: orchestratorStatus.sequentialMode,
+      },
       system: {
         uptime: process.uptime() * 1000,
         memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024,

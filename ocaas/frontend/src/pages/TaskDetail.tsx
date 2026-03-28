@@ -1,9 +1,10 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, XCircle, RotateCcw, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { ArrowLeft, XCircle, RotateCcw, Clock, CheckCircle, AlertCircle, GitBranch, FolderTree } from 'lucide-react';
 import { taskApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
+import { SubtasksPanel } from '../components/SubtasksPanel';
 import { TASK_PRIORITY } from '../types';
 
 const statusVariant = {
@@ -76,6 +77,13 @@ export function TaskDetail() {
   const canCancel = task.status === 'pending' || task.status === 'queued' || task.status === 'running';
   const canRetry = task.status === 'failed';
 
+  // Check if this is a decomposed parent task
+  const isDecomposed = Boolean(task.metadata?._decomposed);
+  const subtaskCount = (task.metadata?._subtaskCount as number) || 0;
+
+  // Check if this is a subtask
+  const isSubtask = Boolean(task.parentTaskId);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -83,9 +91,39 @@ export function TaskDetail() {
           <ArrowLeft className="w-4 h-4" />
         </Button>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold">{task.title}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold">{task.title}</h1>
+            {isDecomposed && (
+              <Badge variant="active" className="ml-2">
+                <FolderTree className="w-3 h-3 mr-1" />
+                Parent ({subtaskCount} subtasks)
+              </Badge>
+            )}
+            {isSubtask && (
+              <Badge variant="pending" className="ml-2">
+                <GitBranch className="w-3 h-3 mr-1" />
+                Subtask
+              </Badge>
+            )}
+          </div>
           <p className="text-dark-500 text-sm">{task.type}</p>
           <p className="text-dark-400">Task ID: {task.id}</p>
+          {isSubtask && (
+            <p className="text-dark-400 text-sm">
+              Parent:{' '}
+              <a
+                href={`/tasks/${task.parentTaskId}`}
+                className="text-primary-400 hover:underline"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate(`/tasks/${task.parentTaskId}`);
+                }}
+              >
+                {task.parentTaskId}
+              </a>
+              {task.sequenceOrder && ` (Step ${task.sequenceOrder})`}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {canCancel && (
@@ -203,6 +241,11 @@ export function TaskDetail() {
             <p className="text-red-400 font-mono text-sm">{task.error}</p>
           </div>
         </Card>
+      )}
+
+      {/* Subtasks panel - only shown for decomposed parent tasks */}
+      {isDecomposed && (
+        <SubtasksPanel parentTaskId={task.id} parentTitle={task.title} />
       )}
     </div>
   );

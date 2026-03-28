@@ -172,4 +172,39 @@ export class QueueManager {
       batchesProcessing: this.processingBatches.size,
     };
   }
+
+  /**
+   * Get a specific task from the queue (for priority retry)
+   */
+  getTask(taskId: string): QueuedTask | null {
+    return this.queue.find(q => q.task.id === taskId) || null;
+  }
+
+  /**
+   * Move a task to the front of its priority level (for retry after generation)
+   */
+  prioritizeTask(taskId: string): boolean {
+    const index = this.queue.findIndex(q => q.task.id === taskId);
+    if (index < 0) return false;
+
+    const item = this.queue[index]!;
+    // Move to front by setting addedAt to 0 (oldest)
+    item.addedAt = 0;
+
+    // Re-sort to move it to front of its priority level
+    this.queue.sort((a, b) => {
+      if (b.task.priority !== a.task.priority) {
+        return b.task.priority - a.task.priority;
+      }
+      if (a.task.batchId && a.task.batchId === b.task.batchId) {
+        const seqA = a.task.sequenceOrder ?? 999;
+        const seqB = b.task.sequenceOrder ?? 999;
+        if (seqA !== seqB) return seqA - seqB;
+      }
+      return a.addedAt - b.addedAt;
+    });
+
+    logger.info({ taskId }, 'Task prioritized for retry');
+    return true;
+  }
 }

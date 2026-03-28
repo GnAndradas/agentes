@@ -39,8 +39,21 @@ function rowToDTO(row: typeof schema.generations.$inferSelect): GenerationDTO {
   };
 }
 
+// Callback type for when a generation is activated
+export type OnGenerationActivatedCallback = (generationId: string) => Promise<void>;
+
 export class GenerationService {
+  private onActivatedCallback: OnGenerationActivatedCallback | null = null;
+
   constructor(private eventService: EventService) {}
+
+  /**
+   * Register callback to be called when a generation is activated
+   * Used by ActionExecutor to trigger task retries
+   */
+  setOnActivatedCallback(callback: OnGenerationActivatedCallback): void {
+    this.onActivatedCallback = callback;
+  }
 
   async list(opts?: { status?: GenerationStatus; type?: GenerationType }): Promise<GenerationDTO[]> {
     let query = db.select().from(schema.generations);
@@ -204,6 +217,15 @@ export class GenerationService {
       resourceType: 'generation',
       resourceId: id,
     });
+
+    // Trigger callback for task retry if registered
+    if (this.onActivatedCallback) {
+      try {
+        await this.onActivatedCallback(id);
+      } catch (err) {
+        logger.error({ err, id }, 'Error in onActivatedCallback');
+      }
+    }
 
     return this.getById(id);
   }

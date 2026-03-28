@@ -8,6 +8,7 @@ import { generationRoutes } from './generations/routes.js';
 import { systemRoutes } from './system/routes.js';
 import { approvalRoutes } from './approvals/routes.js';
 import { webhookRoutes } from './webhooks/routes.js';
+import { feedbackRoutes } from './feedback/routes.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   await app.register(systemRoutes, { prefix: '/api' });
@@ -19,4 +20,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(generationRoutes, { prefix: '/api/generations' });
   await app.register(approvalRoutes, { prefix: '/api/approvals' });
   await app.register(webhookRoutes, { prefix: '/api/webhooks' });
+  await app.register(feedbackRoutes, { prefix: '/api/feedback' });
 }

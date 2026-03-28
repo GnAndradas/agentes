@@ -6,6 +6,7 @@ export async function taskRoutes(fastify: FastifyInstance) {
   fastify.get('/pending', h.getPending);
   fastify.get('/running', h.getRunning);
   fastify.get('/:id', h.get);
+  fastify.get('/:id/subtasks', h.getSubtasks);
   fastify.post('/', h.create);
   fastify.patch('/:id', h.update);
   fastify.delete('/:id', h.remove);

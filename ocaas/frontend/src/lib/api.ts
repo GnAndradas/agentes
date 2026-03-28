@@ -34,6 +34,12 @@ export const api = {
       body: data ? JSON.stringify(data) : undefined,
     }),
 
+  put: <T>(endpoint: string, data: unknown) =>
+    request<T>(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
   patch: <T>(endpoint: string, data: unknown) =>
     request<T>(endpoint, {
       method: 'PATCH',
@@ -77,6 +83,10 @@ export const taskApi = {
   get: async (id: string) => {
     const res = await api.get<DataResponse<import('../types').Task>>(`/tasks/${id}`);
     return res.data;
+  },
+  getSubtasks: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').Task[]>>(`/tasks/${id}/subtasks`);
+    return { subtasks: res.data };
   },
   create: async (data: { title: string; description?: string; type: string; priority?: number }) => {
     const res = await api.post<DataResponse<import('../types').Task>>('/tasks', data);
@@ -153,4 +163,73 @@ export const generationApi = {
 export const systemApi = {
   health: () => api.get<{ status: string; timestamp: number }>('/system/health'),
   stats: () => api.get<import('../types').SystemStats>('/system/stats'),
+  getAutonomy: async () => {
+    const res = await api.get<DataResponse<import('../types').AutonomyConfig>>('/system/autonomy');
+    return res.data;
+  },
+  updateAutonomy: async (data: Partial<import('../types').AutonomyConfig>) => {
+    const res = await api.put<DataResponse<import('../types').AutonomyConfig>>('/system/autonomy', data);
+    return res.data;
+  },
+  getOrchestrator: async () => {
+    const res = await api.get<DataResponse<import('../types').OrchestratorStatus>>('/system/orchestrator');
+    return res.data;
+  },
+};
+
+// Approval API
+export const approvalApi = {
+  list: async (params?: { status?: string; type?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
+    const res = await api.get<DataResponse<import('../types').Approval[]>>(`/approvals${query}`);
+    return { approvals: res.data };
+  },
+  getPending: async () => {
+    const res = await api.get<DataResponse<import('../types').Approval[]>>('/approvals/pending');
+    return { approvals: res.data };
+  },
+  get: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').Approval>>(`/approvals/${id}`);
+    return res.data;
+  },
+  approve: async (id: string) => {
+    const res = await api.post<DataResponse<import('../types').Approval>>(`/approvals/${id}/approve`);
+    return res.data;
+  },
+  reject: async (id: string, reason?: string) => {
+    const res = await api.post<DataResponse<import('../types').Approval>>(`/approvals/${id}/reject`, { reason });
+    return res.data;
+  },
+  respond: async (id: string, approved: boolean, reason?: string) => {
+    const res = await api.post<DataResponse<import('../types').Approval>>(`/approvals/${id}/respond`, { approved, reason });
+    return res.data;
+  },
+  delete: (id: string) => api.delete(`/approvals/${id}`),
+};
+
+// Feedback API
+export const feedbackApi = {
+  list: async (params?: { taskId?: string; processed?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
+    const res = await api.get<DataResponse<import('../types').AgentFeedback[]>>(`/feedback${query}`);
+    return { feedback: res.data };
+  },
+  getByTask: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').AgentFeedback[]>>(`/feedback/task/${taskId}`);
+    return { feedback: res.data };
+  },
+  get: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').AgentFeedback>>(`/feedback/${id}`);
+    return res.data;
+  },
+  clearForTask: (taskId: string) => api.delete(`/feedback/task/${taskId}`),
+};
+
+// Events API
+export const eventApi = {
+  list: async (params?: { type?: string; category?: string; limit?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
+    const res = await api.get<DataResponse<import('../types').SystemEvent[]>>(`/events${query}`);
+    return { events: res.data };
+  },
 };

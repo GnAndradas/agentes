@@ -84,8 +84,40 @@ export const EVENT_TYPE = {
 
   SYSTEM_STARTED: 'system.started',
   SYSTEM_ERROR: 'system.error',
+  SYSTEM_INFO: 'system.info',
+  SYSTEM_WARNING: 'system.warning',
   OPENCLAW_CONNECTED: 'openclaw.connected',
   OPENCLAW_DISCONNECTED: 'openclaw.disconnected',
+
+  // Action executor events
+  ACTION_CREATED: 'action.created',
+  ACTION_APPROVED: 'action.approved',
+  ACTION_EXECUTED: 'action.executed',
+  ACTION_FAILED: 'action.failed',
+  TASK_RETRY_TRIGGERED: 'task.retry_triggered',
+
+  // Agent feedback events
+  AGENT_FEEDBACK_RECEIVED: 'agent.feedback_received',
+  AGENT_BLOCKED: 'agent.blocked',
+  AGENT_MISSING_TOOL: 'agent.missing_tool',
+  AGENT_MISSING_SKILL: 'agent.missing_skill',
+  AGENT_MISSING_CAPABILITY: 'agent.missing_capability',
+
+  // Task analysis events (Fase 6: Jefe Inteligente)
+  TASK_ANALYSIS_STARTED: 'task.analysis_started',
+  TASK_ANALYSIS_COMPLETED: 'task.analysis_completed',
+  TASK_ANALYSIS_FAILED: 'task.analysis_failed',
+  INTELLIGENT_AGENT_SELECTED: 'orchestrator.intelligent_agent_selected',
+  MISSING_CAPABILITY_DETECTED: 'orchestrator.missing_capability_detected',
+
+  // Task decomposition events (Fase 7: Subdivisión automática)
+  TASK_DECOMPOSITION_STARTED: 'task.decomposition_started',
+  TASK_DECOMPOSITION_COMPLETED: 'task.decomposition_completed',
+  TASK_DECOMPOSITION_FAILED: 'task.decomposition_failed',
+  SUBTASK_CREATED: 'task.subtask_created',
+  SUBTASK_STARTED: 'task.subtask_started',
+  SUBTASK_COMPLETED: 'task.subtask_completed',
+  PARENT_TASK_COMPLETED: 'task.parent_completed',
 } as const;
 
 // WebSocket channels
@@ -95,4 +127,5 @@ export const WS_CHANNEL = {
   TASKS: 'tasks',
   GENERATIONS: 'generations',
   EVENTS: 'events',
+  APPROVALS: 'approvals',
 } as const;

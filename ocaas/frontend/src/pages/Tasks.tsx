@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, ListTodo, XCircle, RotateCcw, Filter } from 'lucide-react';
+import { Plus, ListTodo, XCircle, RotateCcw, Filter, FolderTree, GitBranch } from 'lucide-react';
 import { taskApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -179,9 +179,24 @@ export function Tasks() {
                   onClick={() => navigate(`/tasks/${task.id}`)}
                 >
                   <TableCell>
-                    <div>
-                      <p className="font-medium">{task.title}</p>
-                      <p className="text-dark-500 text-xs">{task.type}</p>
+                    <div className="flex items-start gap-2">
+                      {/* Hierarchy indicator */}
+                      {task.metadata?._decomposed ? (
+                        <FolderTree className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" title="Parent task (decomposed)" />
+                      ) : task.parentTaskId ? (
+                        <GitBranch className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" title="Subtask" />
+                      ) : null}
+                      <div>
+                        <p className="font-medium">{task.title}</p>
+                        <div className="flex items-center gap-2">
+                          <span className="text-dark-500 text-xs">{task.type}</span>
+                          {task.parentTaskId && (
+                            <span className="text-dark-500 text-xs">
+                              Step {task.sequenceOrder || '?'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>

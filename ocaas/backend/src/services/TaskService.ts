@@ -354,4 +354,81 @@ export class TaskService {
       t.status === TASK_STATUS.CANCELLED
     );
   }
+
+  /**
+   * Get all subtasks for a parent task
+   */
+  async getSubtasks(parentTaskId: string): Promise<TaskDTO[]> {
+    const rows = await db
+      .select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.parentTaskId, parentTaskId))
+      .orderBy(schema.tasks.sequenceOrder, schema.tasks.createdAt);
+    return rows.map(rowToDTO);
+  }
+
+  /**
+   * Check if all subtasks of a parent are completed
+   */
+  async areSubtasksComplete(parentTaskId: string): Promise<boolean> {
+    const subtasks = await this.getSubtasks(parentTaskId);
+    if (subtasks.length === 0) return true;
+    return subtasks.every(t =>
+      t.status === TASK_STATUS.COMPLETED ||
+      t.status === TASK_STATUS.FAILED ||
+      t.status === TASK_STATUS.CANCELLED
+    );
+  }
+
+  /**
+   * Check if all subtasks completed successfully
+   */
+  async areSubtasksSuccessful(parentTaskId: string): Promise<boolean> {
+    const subtasks = await this.getSubtasks(parentTaskId);
+    if (subtasks.length === 0) return true;
+    return subtasks.every(t => t.status === TASK_STATUS.COMPLETED);
+  }
+
+  /**
+   * Get the next pending subtask for a parent
+   */
+  async getNextSubtask(parentTaskId: string): Promise<TaskDTO | null> {
+    const subtasks = await this.getSubtasks(parentTaskId);
+    for (const subtask of subtasks) {
+      if (subtask.status === TASK_STATUS.PENDING || subtask.status === TASK_STATUS.QUEUED) {
+        const canRun = await this.areDependenciesMet(subtask);
+        if (canRun) return subtask;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Mark parent task as decomposed (add metadata flag)
+   */
+  async markAsDecomposed(parentTaskId: string, subtaskCount: number): Promise<TaskDTO> {
+    const task = await this.getById(parentTaskId);
+    const now = nowTimestamp();
+
+    const metadata = {
+      ...task.metadata,
+      _decomposed: true,
+      _subtaskCount: subtaskCount,
+      _decomposedAt: now,
+    };
+
+    await db.update(schema.tasks).set({
+      metadata: JSON.stringify(metadata),
+      updatedAt: now,
+    }).where(eq(schema.tasks.id, parentTaskId));
+
+    return this.getById(parentTaskId);
+  }
+
+  /**
+   * Check if a task has been decomposed
+   */
+  isDecomposed(task: TaskDTO): boolean {
+    return Boolean(task.metadata?._decomposed);
+  }
 }

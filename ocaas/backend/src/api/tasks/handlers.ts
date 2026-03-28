@@ -217,3 +217,16 @@ export async function getRunning(_req: FastifyRequest, reply: FastifyReply) {
     return reply.status(statusCode).send(body);
   }
 }
+
+export async function getSubtasks(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { taskService } = getServices();
+    // Verify parent exists
+    await taskService.getById(req.params.id);
+    const data = await taskService.getSubtasks(req.params.id);
+    return reply.send({ data });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

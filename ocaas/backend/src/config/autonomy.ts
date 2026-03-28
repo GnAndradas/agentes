@@ -180,7 +180,7 @@ export function requiresApprovalForTask(priority: number): boolean {
     case 'none':
       return false;
     case 'high_priority':
-      return priority >= 8; // Priority 8-10 requires approval
+      return priority >= 3; // Priority 3 (HIGH) and 4 (CRITICAL) require approval
     case 'all':
       return true;
     default:

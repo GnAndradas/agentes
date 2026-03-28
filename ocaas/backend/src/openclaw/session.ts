@@ -1,6 +1,7 @@
 import { createLogger } from '../utils/logger.js';
 import { getGateway } from './gateway.js';
 import { getServices } from '../services/index.js';
+import { getFeedbackService, type FeedbackType } from '../orchestrator/feedback/index.js';
 import { AGENT_STATUS } from '../config/constants.js';
 import type { SpawnOptions, SendOptions } from './types.js';
 
@@ -113,6 +114,34 @@ export class SessionManager {
         this.activeSessions.set(agent.id, agent.sessionId);
       }
     }
+  }
+
+  /**
+   * Report feedback from agent during execution
+   * This is the main entry point for agent-reported issues
+   */
+  async reportFeedback(
+    agentId: string,
+    taskId: string,
+    type: FeedbackType,
+    message: string,
+    requirement?: string,
+    context?: Record<string, unknown>
+  ): Promise<void> {
+    const sessionId = this.activeSessions.get(agentId);
+    const feedbackService = getFeedbackService();
+
+    await feedbackService.receiveFeedback({
+      type,
+      agentId,
+      taskId,
+      sessionId,
+      message,
+      requirement,
+      context,
+    });
+
+    logger.info({ agentId, taskId, type, requirement }, 'Agent feedback reported via SessionManager');
   }
 }
 

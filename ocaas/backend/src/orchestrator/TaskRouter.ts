@@ -4,11 +4,15 @@ import { getServices } from '../services/index.js';
 import { getSessionManager } from '../openclaw/index.js';
 import { QueueManager } from './QueueManager.js';
 import { getDecisionEngine } from './DecisionEngine.js';
+import { getActionExecutor } from './ActionExecutor.js';
+import { getTaskDecomposer } from './TaskDecomposer.js';
+import { getFeedbackService } from './feedback/index.js';
 import { DEFAULT_ORCHESTRATOR_CONFIG } from './types.js';
 import {
   getAutonomyConfig,
   requiresApprovalForTask,
 } from '../config/autonomy.js';
+import { EVENT_TYPE } from '../config/constants.js';
 import type { TaskDTO } from '../types/domain.js';
 import type { OrchestratorConfig } from './types.js';
 import type { CreateTaskInput } from '../services/TaskService.js';
@@ -93,7 +97,7 @@ export class TaskRouter {
       return false;
     }
 
-    const { taskService, approvalService, notificationService } = getServices();
+    const { taskService, approvalService, notificationService, eventService } = getServices();
     const decisionEngine = getDecisionEngine();
     const sessionManager = getSessionManager();
 
@@ -151,15 +155,170 @@ export class TaskRouter {
       // If approved, continue with execution
     }
 
-    // Find best agent
-    const assignment = await decisionEngine.findBestAgent(task);
+    // Use intelligent decision (AI-powered when available)
+    const decision = await decisionEngine.makeIntelligentDecision(task);
+
+    // Store analysis metadata on task for future reference
+    if (decision.analysis) {
+      const analysisMetadata = {
+        ...task.metadata,
+        _analysis: {
+          taskType: decision.analysis.taskType,
+          complexity: decision.analysis.complexity,
+          capabilities: decision.analysis.requiredCapabilities,
+          confidence: decision.analysis.confidence,
+          usedFallback: decision.usedFallback,
+        },
+      };
+      // Note: Could persist this via taskService.update() if needed
+    }
+
+    // Log intelligent decision info
+    if (!decision.usedFallback) {
+      logger.info({
+        taskId: task.id,
+        analysisType: decision.analysis.taskType,
+        complexity: decision.analysis.complexity,
+        confidence: decision.analysis.confidence,
+        suggestedActions: decision.suggestedActions.map(a => a.action),
+      }, 'Intelligent decision made');
+    }
+
+    // Check if task should be decomposed into subtasks
+    const taskDecomposer = getTaskDecomposer();
+    if (decision.analysis && !decision.usedFallback) {
+      if (taskDecomposer.shouldDecompose(task, decision.analysis)) {
+        logger.info({
+          taskId: task.id,
+          subtaskCount: decision.analysis.suggestedSubtasks?.length,
+          complexity: decision.analysis.complexity,
+        }, 'Task should be decomposed');
+
+        const decompResult = await taskDecomposer.decompose(task, decision.analysis);
+
+        if (decompResult.decomposed) {
+          // Submit subtasks to queue
+          for (const subtaskId of decompResult.subtaskIds) {
+            const subtask = await taskService.getById(subtaskId);
+            await taskService.queue(subtaskId);
+            this.queue.add(subtask);
+          }
+
+          // Remove parent from queue (it will be completed when subtasks finish)
+          this.queue.remove(task.id);
+
+          logger.info({
+            parentTaskId: task.id,
+            subtaskCount: decompResult.subtaskIds.length,
+          }, 'Parent task decomposed and subtasks queued');
+
+          // Process next (which will be a subtask)
+          return true;
+        }
+      }
+    }
+
+    const assignment = decision.assignment;
 
     if (!assignment) {
-      // Check for missing capability
+      // No agent found - check if we should execute suggested actions
+      const actionExecutor = getActionExecutor();
+
+      // Check if there's already a pending generation for this task
+      if (actionExecutor.hasPendingGeneration(task.id)) {
+        logger.debug({ taskId: task.id }, 'Task has pending generation, waiting');
+        return false;
+      }
+
+      if (decision.missingReport && decision.missingReport.suggestions.length > 0) {
+        logger.info({
+          taskId: task.id,
+          missingCapabilities: decision.missingReport.missingCapabilities,
+          suggestions: decision.missingReport.suggestions.map(s => ({
+            type: s.type,
+            name: s.name,
+            canAutoGenerate: s.canAutoGenerate,
+          })),
+          requiresApproval: decision.missingReport.requiresApproval,
+        }, 'Missing capabilities detected with suggestions');
+
+        // Emit event for potential UI notification
+        await eventService.emit({
+          type: EVENT_TYPE.SYSTEM_INFO,
+          category: 'orchestrator',
+          severity: 'warning',
+          message: `Task "${task.title}" requires capabilities that are not available`,
+          resourceType: 'task',
+          resourceId: task.id,
+          data: {
+            missingCapabilities: decision.missingReport.missingCapabilities,
+            suggestions: decision.missingReport.suggestions,
+          },
+        });
+
+        // Execute suggested actions if autonomy allows
+        if (autonomyConfig.level !== 'manual') {
+          const results = await actionExecutor.executeActions(
+            task.id,
+            decision.missingReport,
+            decision.suggestedActions
+          );
+
+          // Log action execution results
+          for (const result of results) {
+            if (result.success) {
+              logger.info({
+                taskId: task.id,
+                action: result.action,
+                generationId: result.generationId,
+                requiresApproval: result.requiresApproval,
+              }, 'Action executed successfully');
+
+              await eventService.emit({
+                type: EVENT_TYPE.ACTION_CREATED,
+                category: 'orchestrator',
+                severity: 'info',
+                message: `Action ${result.action} created for task "${task.title}"`,
+                resourceType: 'task',
+                resourceId: task.id,
+                data: {
+                  action: result.action,
+                  generationId: result.generationId,
+                  approvalId: result.approvalId,
+                  requiresApproval: result.requiresApproval,
+                },
+              });
+            } else {
+              logger.error({
+                taskId: task.id,
+                action: result.action,
+                error: result.error,
+              }, 'Action execution failed');
+
+              await eventService.emit({
+                type: EVENT_TYPE.ACTION_FAILED,
+                category: 'orchestrator',
+                severity: 'error',
+                message: `Action ${result.action} failed: ${result.error}`,
+                resourceType: 'task',
+                resourceId: task.id,
+                data: { action: result.action, error: result.error },
+              });
+            }
+          }
+
+          // If any action was initiated, task stays queued waiting for completion
+          if (results.some(r => r.success)) {
+            logger.info({ taskId: task.id }, 'Task waiting for resource generation');
+            return false;
+          }
+        }
+      }
+
+      // Fallback: also check legacy method
       const missing = await decisionEngine.detectMissingCapability(task);
       if (missing) {
-        logger.info({ taskId: task.id, missingCapability: missing }, 'Task requires missing capability');
-        // Could trigger generation here
+        logger.debug({ taskId: task.id, missingCapability: missing }, 'Legacy missing capability check');
       }
       return false;
     }
@@ -198,6 +357,15 @@ export class TaskRouter {
         // Task completed
         await taskService.complete(task.id, { response });
         this.queue.markDone(task.id);
+        // Clear any feedback for this task
+        await getFeedbackService().clearForTask(task.id);
+
+        // Check if this is a subtask and parent needs to be completed
+        if (task.parentTaskId) {
+          const decomposer = getTaskDecomposer();
+          await decomposer.checkParentCompletion(task);
+        }
+
         return true;
       }
 
@@ -219,6 +387,15 @@ export class TaskRouter {
       } else {
         await taskService.fail(task.id, message);
         this.queue.markDone(task.id);
+        // Clear any feedback for this task
+        await getFeedbackService().clearForTask(task.id);
+
+        // Check if this is a subtask and parent needs to be marked as failed
+        if (task.parentTaskId) {
+          const decomposer = getTaskDecomposer();
+          await decomposer.checkParentCompletion(task);
+        }
+
         logger.error({ taskId: task.id, retryCount: task.retryCount }, 'Task failed after max retries');
       }
 
@@ -236,6 +413,39 @@ export class TaskRouter {
     }
 
     return false;
+  }
+
+  /**
+   * Retry a specific task (used after resource generation)
+   * Prioritizes the task in queue and triggers processing
+   */
+  async retryTask(taskId: string): Promise<boolean> {
+    const { eventService, taskService } = getServices();
+
+    // Check if task is in queue
+    if (!this.queue.has(taskId)) {
+      logger.warn({ taskId }, 'Task not in queue for retry');
+      return false;
+    }
+
+    // Get task info for event
+    const task = await taskService.getById(taskId);
+
+    // Emit retry triggered event
+    await eventService.emit({
+      type: EVENT_TYPE.TASK_RETRY_TRIGGERED,
+      category: 'orchestrator',
+      severity: 'info',
+      message: `Task "${task.title}" retry triggered after resource generation`,
+      resourceType: 'task',
+      resourceId: taskId,
+    });
+
+    // Prioritize this task
+    this.queue.prioritizeTask(taskId);
+
+    // Process (will pick up the prioritized task)
+    return this.processNext();
   }
 
   // Recover pending tasks from database on startup
@@ -261,11 +471,21 @@ export class TaskRouter {
     if (this.running) return;
 
     this.running = true;
+    let cleanupCounter = 0;
+
     this.intervalId = setInterval(async () => {
       try {
         // Process expired approvals
         const { approvalService } = getServices();
         await approvalService.processExpired();
+
+        // Cleanup old pending retries every ~60 seconds
+        cleanupCounter++;
+        if (cleanupCounter >= 60) {
+          cleanupCounter = 0;
+          const actionExecutor = getActionExecutor();
+          actionExecutor.cleanupOldPending();
+        }
 
         // Process next task
         await this.processNext();

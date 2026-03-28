@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Bot, ListTodo, Sparkles, Wrench, Activity, Clock } from 'lucide-react';
 import { systemApi, agentApi, taskApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
+import { ApprovalsPanel, AutonomyPanel, FeedbackEventsPanel, MetricsPanel } from '../components/control';
 
 export function Dashboard() {
   const { setStats, setActiveAgents, setRunningTasks } = useAppStore();
@@ -75,6 +76,16 @@ export function Dashboard() {
           icon={Wrench}
           color="orange"
         />
+      </div>
+
+      {/* Metrics Dashboard */}
+      <MetricsPanel />
+
+      {/* Control Panels */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <ApprovalsPanel />
+        <AutonomyPanel />
+        <FeedbackEventsPanel />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

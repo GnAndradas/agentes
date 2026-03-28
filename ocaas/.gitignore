@@ -37,3 +37,20 @@ coverage/
 tmp/
 temp/
 .cache/
+
+# Drizzle migrations (generated)
+drizzle/
+
+# Data directory (runtime)
+data/
+
+# Package lock conflicts (keep package-lock.json)
+yarn.lock
+pnpm-lock.yaml
+
+# Test artifacts
+.nyc_output/
+junit.xml
+
+# Workspace directories (OpenClaw runtime)
+.openclaw/

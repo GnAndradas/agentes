@@ -48,9 +48,14 @@ export async function initDatabase(): Promise<void> {
       priority INTEGER NOT NULL DEFAULT 2,
       agent_id TEXT,
       parent_task_id TEXT,
+      batch_id TEXT,
+      depends_on TEXT,
+      sequence_order INTEGER,
       input TEXT,
       output TEXT,
       error TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 3,
       metadata TEXT,
       started_at INTEGER,
       completed_at INTEGER,
@@ -179,6 +184,7 @@ export async function initDatabase(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
     CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
     CREATE INDEX IF NOT EXISTS idx_generations_status ON generations(status);

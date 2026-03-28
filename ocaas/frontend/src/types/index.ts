@@ -41,6 +41,11 @@ export interface Task {
   priority: TaskPriority;
   agentId?: string;
   parentTaskId?: string;
+  batchId?: string;
+  dependsOn?: string[];
+  sequenceOrder?: number;
+  retryCount: number;
+  maxRetries: number;
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;
   error?: string;
@@ -118,12 +123,43 @@ export interface SystemStats {
     running: number;
     completed: number;
     failed: number;
+    parentTasks: number;
+    subtasks: number;
+    decomposed: number;
+    subtasksCompleted: number;
+    subtasksFailed: number;
   };
   generations: {
     total: number;
     pending: number;
     approved: number;
     rejected: number;
+    active: number;
+    failed: number;
+  };
+  approvals: {
+    total: number;
+    pending: number;
+    approved: number;
+    rejected: number;
+    expired: number;
+  };
+  feedback: {
+    total: number;
+    processed: number;
+    unprocessed: number;
+    byType: {
+      missingTool: number;
+      missingSkill: number;
+      missingCapability: number;
+      blocked: number;
+    };
+  };
+  orchestrator: {
+    running: boolean;
+    queueSize: number;
+    processing: number;
+    sequentialMode: boolean;
   };
   system: {
     uptime: number;
@@ -140,4 +176,85 @@ export interface WSEvent {
     data: unknown;
   };
   timestamp: number;
+}
+
+// Approval types
+export type ApprovalType = 'task' | 'agent' | 'skill' | 'tool';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface Approval {
+  id: string;
+  type: ApprovalType;
+  resourceId?: string;
+  status: ApprovalStatus;
+  requestedAt: number;
+  expiresAt?: number;
+  respondedAt?: number;
+  respondedBy?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// Autonomy types
+export type AutonomyLevel = 'manual' | 'supervised' | 'autonomous';
+export type FallbackBehavior = 'pause' | 'reject' | 'auto_approve';
+export type TaskApprovalPolicy = 'none' | 'high_priority' | 'all';
+
+export interface AutonomyConfig {
+  level: AutonomyLevel;
+  canCreateAgents: boolean;
+  canGenerateSkills: boolean;
+  canGenerateTools: boolean;
+  requireApprovalFor: {
+    taskExecution: TaskApprovalPolicy;
+    agentCreation: boolean;
+    skillGeneration: boolean;
+    toolGeneration: boolean;
+  };
+  humanTimeout: number;
+  fallbackBehavior: FallbackBehavior;
+  sequentialExecution: boolean;
+}
+
+export interface OrchestratorStatus {
+  running: boolean;
+  queueSize: number;
+  processing: number;
+  sequentialMode: boolean;
+  autonomyLevel: AutonomyLevel;
+}
+
+// Feedback types
+export type FeedbackType = 'missing_tool' | 'missing_skill' | 'missing_capability' | 'blocked' | 'cannot_continue';
+
+export interface AgentFeedback {
+  id: string;
+  type: FeedbackType;
+  agentId: string;
+  taskId: string;
+  sessionId?: string;
+  message: string;
+  requirement?: string;
+  context?: Record<string, unknown>;
+  createdAt: number;
+  processed: boolean;
+  processingResult?: {
+    action?: string;
+    generationId?: string;
+    approvalId?: string;
+    error?: string;
+  };
+}
+
+// Event types
+export interface SystemEvent {
+  id: string;
+  type: string;
+  category: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  resourceType?: string;
+  resourceId?: string;
+  data?: Record<string, unknown>;
+  createdAt: number;
 }

@@ -94,11 +94,11 @@ export class OpenClawGateway {
 
   async spawn(options: SpawnOptions): Promise<SpawnResult> {
     if (!this.connected) {
-      logger.warn('Gateway not connected, spawn simulated');
-      return {
-        sessionId: `sim_${Date.now()}`,
-        success: true,
-      };
+      logger.error('Gateway not connected - cannot spawn agent session');
+      throw new OpenClawError('Gateway not connected - cannot spawn agent session', {
+        operation: 'spawn',
+        agentId: options.agentId,
+      });
     }
 
     return this.request<SpawnResult>('/sessions/spawn', {
@@ -109,11 +109,11 @@ export class OpenClawGateway {
 
   async send(options: SendOptions): Promise<SendResult> {
     if (!this.connected) {
-      logger.warn('Gateway not connected, send simulated');
-      return {
-        success: true,
-        response: 'Simulated response',
-      };
+      logger.error('Gateway not connected - cannot send message to agent');
+      throw new OpenClawError('Gateway not connected - cannot send message to agent', {
+        operation: 'send',
+        sessionId: options.sessionId,
+      });
     }
 
     return this.request<SendResult>(`/sessions/${options.sessionId}/send`, {
@@ -127,11 +127,12 @@ export class OpenClawGateway {
 
   async exec(options: ExecOptions): Promise<ExecResult> {
     if (!this.connected) {
-      logger.warn('Gateway not connected, exec simulated');
-      return {
-        success: true,
-        output: { simulated: true },
-      };
+      logger.error('Gateway not connected - cannot execute tool');
+      throw new OpenClawError('Gateway not connected - cannot execute tool', {
+        operation: 'exec',
+        sessionId: options.sessionId,
+        tool: options.toolName,
+      });
     }
 
     return this.request<ExecResult>(`/sessions/${options.sessionId}/exec`, {

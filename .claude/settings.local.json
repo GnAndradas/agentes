@@ -16,7 +16,9 @@
       "Bash(while read line)",
       "Bash(do if ! echo \"$line\")",
       "Bash(then echo \"MISSING .js: $line\" fi done done)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(where:*)",
+      "Bash(npx openclaw:*)"
     ],
     "deny": [],
     "ask": []

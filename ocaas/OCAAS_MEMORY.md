@@ -393,13 +393,40 @@ useQuery({
 
 ## 10. Integración OpenClaw
 
-### 10.1 Funcionalidades
+### 10.1 API Webhook (v2026+)
 
-- **Sesiones de agente**: Crear/destruir sesiones para ejecutar tareas
+OCAAS usa la **Webhook API** de OpenClaw, NO REST tradicional.
+
+**Documentación oficial**: https://docs.openclaw.ai/automation/webhook
+
+**Endpoints utilizados**:
+- `GET /health` - Health check
+- `POST /hooks/agent` - Envío de mensajes al agente
+- `POST /hooks/wake` - Eventos de sistema (wake)
+
+**Autenticación**:
+```
+Authorization: Bearer <OPENCLAW_API_KEY>
+```
+
+**Ejemplo de request a /hooks/agent**:
+```json
+{
+  "message": "Genera un agente de coding",
+  "wakeMode": "now",
+  "deliver": false,
+  "model": "claude-sonnet-4-20250514",
+  "timeoutSeconds": 120
+}
+```
+
+### 10.2 Funcionalidades
+
+- **Sesiones de agente**: Gestionadas localmente con sessionKey
 - **Workspace**: Leer/escribir skills y tools en `~/.openclaw/workspace/`
-- **LLM Proxy**: Todas las llamadas a modelos pasan por el Gateway
+- **LLM via Webhook**: Todas las llamadas pasan por `/hooks/agent`
 
-### 10.2 Modo Offline
+### 10.3 Modo Offline
 
 Si el Gateway no está disponible:
 - Generación AI deshabilitada

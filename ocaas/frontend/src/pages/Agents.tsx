@@ -162,11 +162,11 @@ export function Agents() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {agent.capabilities.length > 0
-                      ? agent.capabilities.slice(0, 3).join(', ')
+                    {(agent.capabilities?.length ?? 0) > 0
+                      ? agent.capabilities!.slice(0, 3).join(', ')
                       : '-'}
-                    {agent.capabilities.length > 3 &&
-                      ` +${agent.capabilities.length - 3}`}
+                    {(agent.capabilities?.length ?? 0) > 3 &&
+                      ` +${agent.capabilities!.length - 3}`}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">

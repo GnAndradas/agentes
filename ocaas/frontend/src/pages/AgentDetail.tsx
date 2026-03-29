@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Power, PowerOff, Trash2, Edit2 } from 'lucide-react';
+import { ArrowLeft, Power, PowerOff, Trash2 } from 'lucide-react';
 import { agentApi, taskApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -26,6 +26,7 @@ const statusVariant = {
 
 const taskStatusVariant = {
   pending: 'pending',
+  queued: 'pending',
   assigned: 'pending',
   running: 'active',
   completed: 'success',
@@ -161,7 +162,7 @@ export function AgentDetail() {
 
         <Card>
           <CardHeader title="Capabilities" />
-          {agent.capabilities.length === 0 ? (
+          {!agent.capabilities || agent.capabilities.length === 0 ? (
             <p className="text-dark-400 text-sm">No capabilities defined</p>
           ) : (
             <div className="flex flex-wrap gap-2">

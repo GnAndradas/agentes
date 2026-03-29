@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { History, CheckCircle, XCircle, Play, Bot, Sparkles, Wrench } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { History, CheckCircle, XCircle, Play, Bot, Sparkles, Wrench, Eye } from 'lucide-react';
 import { generationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -16,6 +17,7 @@ import {
   EmptyState,
 } from '../components/ui';
 import type { Generation } from '../types';
+import { fromTimestamp } from '../lib/date';
 
 const statusVariant = {
   draft: 'inactive',
@@ -34,6 +36,7 @@ const typeIcons = {
 };
 
 export function Generations() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
 
@@ -67,7 +70,10 @@ export function Generations() {
   });
 
   const generations = data?.generations || [];
-  const formatDate = (ts: number) => new Date(ts).toLocaleString();
+  const formatDate = (ts: number) => {
+    const date = fromTimestamp(ts);
+    return date ? date.toLocaleString() : '-';
+  };
 
   const canApprove = (g: Generation) =>
     g.status === 'generated' || g.status === 'pending_approval';
@@ -105,7 +111,11 @@ export function Generations() {
                 const TypeIcon = typeIcons[generation.type];
 
                 return (
-                  <TableRow key={generation.id}>
+                  <TableRow
+                    key={generation.id}
+                    onClick={() => navigate(`/generations/${generation.id}`)}
+                    className="cursor-pointer"
+                  >
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <TypeIcon className="w-4 h-4 text-dark-400" />
@@ -130,12 +140,26 @@ export function Generations() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/generations/${generation.id}`);
+                          }}
+                          title="View details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </Button>
                         {canApprove(generation) && (
                           <>
                             <Button
                               variant="success"
                               size="sm"
-                              onClick={() => approveMutation.mutate(generation.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                approveMutation.mutate(generation.id);
+                              }}
                               loading={approveMutation.isPending}
                             >
                               <CheckCircle className="w-4 h-4" />
@@ -144,7 +168,10 @@ export function Generations() {
                             <Button
                               variant="danger"
                               size="sm"
-                              onClick={() => rejectMutation.mutate(generation.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                rejectMutation.mutate(generation.id);
+                              }}
                               loading={rejectMutation.isPending}
                             >
                               <XCircle className="w-4 h-4" />
@@ -156,7 +183,10 @@ export function Generations() {
                           <Button
                             variant="primary"
                             size="sm"
-                            onClick={() => activateMutation.mutate(generation.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              activateMutation.mutate(generation.id);
+                            }}
                             loading={activateMutation.isPending}
                           >
                             <Play className="w-4 h-4" />

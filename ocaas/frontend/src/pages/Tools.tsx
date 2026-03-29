@@ -20,6 +20,7 @@ import {
   CardHeader,
   EmptyState,
 } from '../components/ui';
+import { fromTimestamp } from '../lib/date';
 
 const typeOptions = [
   { value: 'script', label: 'Script' },
@@ -105,7 +106,10 @@ export function Tools() {
   };
 
   const tools = data?.tools || [];
-  const formatDate = (ts?: number) => ts ? new Date(ts).toLocaleDateString() : '-';
+  const formatDate = (ts?: number) => {
+    const date = fromTimestamp(ts);
+    return date ? date.toLocaleDateString() : '-';
+  };
 
   return (
     <div className="space-y-6">

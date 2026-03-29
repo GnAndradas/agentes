@@ -12,6 +12,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { feedbackApi, eventApi } from '../../lib/api';
+import { formatRelativeTime } from '../../lib/date';
 import { Badge } from '../ui/Badge';
 import type { AgentFeedback, SystemEvent } from '../../types';
 
@@ -30,17 +31,6 @@ const feedbackColors = {
   blocked: 'text-red-400',
   cannot_continue: 'text-red-400',
 };
-
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return date.toLocaleDateString();
-}
 
 function FeedbackItem({ feedback }: { feedback: AgentFeedback }) {
   const [expanded, setExpanded] = useState(false);
@@ -66,7 +56,7 @@ function FeedbackItem({ feedback }: { feedback: AgentFeedback }) {
             )}
           </div>
           <p className="text-xs text-dark-400 truncate">{feedback.message}</p>
-          <p className="text-xs text-dark-500 mt-1">{formatTime(feedback.createdAt)}</p>
+          <p className="text-xs text-dark-500 mt-1">{formatRelativeTime(feedback.createdAt)}</p>
         </div>
         {expanded ? (
           <ChevronDown className="w-4 h-4 text-dark-500" />
@@ -110,7 +100,7 @@ function EventItem({ event }: { event: SystemEvent }) {
       <div className="flex-1 min-w-0">
         <p className="text-xs text-dark-500">{event.type}</p>
         <p className="text-sm truncate">{event.message}</p>
-        <p className="text-xs text-dark-500 mt-1">{formatTime(event.createdAt)}</p>
+        <p className="text-xs text-dark-500 mt-1">{formatRelativeTime(event.createdAt)}</p>
       </div>
     </div>
   );

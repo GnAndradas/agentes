@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableCell,
 } from '../components/ui';
+import { fromTimestamp } from '../lib/date';
 
 const statusVariant = {
   active: 'active',
@@ -83,7 +84,10 @@ export function AgentDetail() {
   }
 
   const tasks = tasksData?.tasks || [];
-  const formatDate = (ts: number) => new Date(ts).toLocaleString();
+  const formatDate = (ts: number) => {
+    const date = fromTimestamp(ts);
+    return date ? date.toLocaleString() : '-';
+  };
 
   return (
     <div className="space-y-6">

@@ -20,6 +20,7 @@ import {
   CardHeader,
   EmptyState,
 } from '../components/ui';
+import { fromTimestamp } from '../lib/date';
 
 const statusOptions = [
   { value: 'active', label: 'Active' },
@@ -99,7 +100,10 @@ export function Skills() {
   };
 
   const skills = data?.skills || [];
-  const formatDate = (ts?: number) => ts ? new Date(ts).toLocaleDateString() : '-';
+  const formatDate = (ts?: number) => {
+    const date = fromTimestamp(ts);
+    return date ? date.toLocaleDateString() : '-';
+  };
 
   return (
     <div className="space-y-6">

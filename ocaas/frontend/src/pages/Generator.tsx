@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Wand2, Bot, Sparkles, Wrench } from 'lucide-react';
 import { generationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
+import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import { Button, Input, Textarea, Card, CardHeader } from '../components/ui';
 import { clsx } from 'clsx';
 
@@ -41,9 +42,11 @@ export function Generator() {
     prompt: '',
   });
 
-  const generateMutation = useMutation({
+  const generateMutation = useTrackedMutation({
     mutationFn: generationApi.create,
-    onSuccess: (data) => {
+    activityType: 'generation',
+    activityMessage: (data) => `Generating ${data.type}: ${data.name}`,
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generations'] });
       addNotification({
         type: 'success',

@@ -23,6 +23,7 @@ import {
 } from '../components/ui';
 
 import { TASK_PRIORITY } from '../types';
+import { fromTimestamp } from '../lib/date';
 
 const statusVariant = {
   pending: 'pending',
@@ -115,8 +116,10 @@ export function Tasks() {
   };
 
   const tasks = data?.tasks || [];
-  const formatDate = (ts: number | null) =>
-    ts ? new Date(ts).toLocaleString() : '-';
+  const formatDate = (ts: number | null) => {
+    const date = fromTimestamp(ts);
+    return date ? date.toLocaleString() : '-';
+  };
 
   return (
     <div className="space-y-6">

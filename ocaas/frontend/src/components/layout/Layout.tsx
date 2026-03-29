@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { Notifications } from './Notifications';
+import { StatusBar } from './StatusBar';
 import { socketClient } from '../../lib/socket';
 import { useAppStore } from '../../stores/app';
 
@@ -41,6 +42,7 @@ export function Layout() {
         <main className="flex-1 overflow-auto p-6">
           <Outlet />
         </main>
+        <StatusBar />
       </div>
       <Notifications />
     </div>

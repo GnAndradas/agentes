@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle, XCircle, Clock, AlertTriangle, Bot, Sparkles, Wrench, ListTodo } from 'lucide-react';
 import { approvalApi } from '../../lib/api';
+import { fromTimestamp } from '../../lib/date';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import type { Approval } from '../../types';
@@ -20,7 +21,8 @@ const typeColors = {
 };
 
 function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
+  const date = fromTimestamp(timestamp);
+  if (!date) return '-';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 

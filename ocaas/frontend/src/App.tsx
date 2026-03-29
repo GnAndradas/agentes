@@ -9,6 +9,7 @@ import { Skills } from './pages/Skills';
 import { Tools } from './pages/Tools';
 import { Generator } from './pages/Generator';
 import { Generations } from './pages/Generations';
+import { GenerationDetail } from './pages/GenerationDetail';
 import { Settings } from './pages/Settings';
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="tools" element={<Tools />} />
           <Route path="generator" element={<Generator />} />
           <Route path="generations" element={<Generations />} />
+          <Route path="generations/:id" element={<GenerationDetail />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

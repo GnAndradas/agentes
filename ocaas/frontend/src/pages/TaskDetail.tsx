@@ -6,6 +6,7 @@ import { useAppStore } from '../stores/app';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
 import { SubtasksPanel } from '../components/SubtasksPanel';
 import { TASK_PRIORITY } from '../types';
+import { fromTimestamp } from '../lib/date';
 
 const statusVariant = {
   pending: 'pending',
@@ -71,8 +72,10 @@ export function TaskDetail() {
   }
 
   const StatusIcon = statusIcons[task.status];
-  const formatDate = (ts: number | null) =>
-    ts ? new Date(ts).toLocaleString() : '-';
+  const formatDate = (ts: number | null) => {
+    const date = fromTimestamp(ts);
+    return date ? date.toLocaleString() : '-';
+  };
 
   const canCancel = task.status === 'pending' || task.status === 'queued' || task.status === 'running';
   const canRetry = task.status === 'failed';

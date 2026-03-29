@@ -56,7 +56,11 @@ nano backend/.env
 # OBLIGATORIAS
 PORT=3001
 DATABASE_URL=./data/ocaas.db
-OPENCLAW_GATEWAY_URL=http://localhost:3000
+
+# OpenClaw Gateway (puerto por defecto: 18789)
+OPENCLAW_GATEWAY_URL=http://localhost:18789
+# Modelo por defecto para llamadas LLM
+OPENCLAW_DEFAULT_MODEL=claude-sonnet-4-20250514
 
 # RECOMENDADAS
 API_SECRET_KEY=<generar-clave-segura-32-chars>
@@ -66,6 +70,11 @@ AUTONOMY_LEVEL=supervised
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 ```
+
+**Nota sobre OpenClaw Gateway:**
+- Puerto por defecto de OpenClaw: `18789` (no 3000)
+- OCAAS usa la API OpenAI-compatible (`/v1/chat/completions`)
+- Endpoint de salud: `/health`
 
 ---
 
@@ -156,9 +165,13 @@ cd backend && npm run db:push
 ### Terminal 1: OpenClaw Gateway
 
 ```bash
-cd <directorio-gateway>
-npm run dev
-# Debe estar en http://localhost:3000
+# Iniciar OpenClaw Gateway
+openclaw gateway start
+# O si usas el comando directo:
+# openclaw gateway --port 18789
+
+# Verificar que está corriendo
+curl http://localhost:18789/health
 ```
 
 ### Terminal 2: Backend OCAAS
@@ -194,7 +207,7 @@ curl http://localhost:3001/health
   "timestamp": "...",
   "gateway": {
     "connected": true,  // <-- CRÍTICO
-    "url": "http://localhost:3000"
+    "url": "http://localhost:18789"
   },
   "database": "connected",
   "orchestrator": {
@@ -213,7 +226,11 @@ Abrir http://localhost:5173 en navegador.
 ### Verificar Gateway
 
 ```bash
-curl http://localhost:3000/status
+# OpenClaw Gateway health endpoint
+curl http://localhost:18789/health
+
+# Verificar modelos disponibles
+curl http://localhost:18789/v1/models
 ```
 
 ---

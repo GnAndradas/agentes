@@ -28,6 +28,7 @@ export const config = {
     gatewayUrl: env.OPENCLAW_GATEWAY_URL,
     workspacePath: resolveHomePath(env.OPENCLAW_WORKSPACE_PATH),
     apiKey: env.OPENCLAW_API_KEY,
+    defaultModel: env.OPENCLAW_DEFAULT_MODEL,
   },
   security: {
     apiSecretKey: env.API_SECRET_KEY,

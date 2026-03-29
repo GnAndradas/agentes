@@ -2077,6 +2077,45 @@ curl http://localhost:3001/health
 curl http://localhost:3001/api/system/health
 ```
 
+### Adaptación a OpenClaw API Real (2026-03-28)
+
+**Problema detectado:** OCAAS estaba diseñado para una API REST que OpenClaw Gateway no expone.
+
+**APIs que OpenClaw v2026.3.24+ realmente ofrece:**
+- `/health` - Health check (HTTP)
+- `/v1/models` - Lista de modelos (OpenAI-compatible)
+- `/v1/chat/completions` - Generación de texto (OpenAI-compatible)
+- WebSocket en puerto principal para sesiones interactivas
+
+**APIs que OCAAS asumía (NO existen):**
+- `/status` - Retorna HTML, no JSON
+- `/sessions` - Retorna HTML, no JSON
+- `/generate` - No existe
+
+**Solución implementada:**
+
+1. **`gateway.ts` reescrito** para usar API OpenAI-compatible:
+   - `getStatus()` → usa `/health`
+   - `generate()` → usa `/v1/chat/completions`
+   - `send()` → usa `/v1/chat/completions`
+   - `spawn()` → genera session ID local (sin REST de sessions)
+
+2. **Configuración actualizada:**
+   - Puerto por defecto: `18789` (no 3000)
+   - Nueva variable: `OPENCLAW_DEFAULT_MODEL`
+
+3. **Archivos modificados:**
+   - `backend/src/openclaw/gateway.ts` - Cliente completo reescrito
+   - `backend/src/config/env.ts` - Nueva variable de modelo
+   - `backend/src/config/index.ts` - Exporta nueva config
+   - `backend/.env.example` - Documentación actualizada
+   - `RUNBOOK_LINUX.md` - Comandos de verificación actualizados
+
+**Limitaciones conocidas:**
+- Sesiones se gestionan localmente, no en el Gateway
+- No hay WebSocket implementado aún (fase futura)
+- Tools se ejecutan via prompt, no via function calling nativo
+
 ### Estado: LISTO PARA GIT
 
 ```bash

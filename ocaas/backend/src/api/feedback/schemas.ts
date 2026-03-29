@@ -13,5 +13,6 @@ export const CreateFeedbackSchema = z.object({
 export const ListFeedbackQuerySchema = z.object({
   taskId: z.string().optional(),
   agentId: z.string().optional(),
+  type: z.enum(['missing_tool', 'missing_skill', 'missing_capability', 'blocked', 'cannot_continue']).optional(),
   processed: z.enum(['true', 'false']).optional(),
 });

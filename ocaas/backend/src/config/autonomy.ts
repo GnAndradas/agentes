@@ -98,7 +98,11 @@ export async function loadAutonomyConfig(): Promise<AutonomyConfig> {
   return cachedConfig;
 }
 
-export async function saveAutonomyConfig(config: Partial<AutonomyConfig>): Promise<AutonomyConfig> {
+type PartialAutonomyConfigInput = Omit<Partial<AutonomyConfig>, 'requireApprovalFor'> & {
+  requireApprovalFor?: Partial<ApprovalPolicy>;
+};
+
+export async function saveAutonomyConfig(config: PartialAutonomyConfigInput): Promise<AutonomyConfig> {
   const current = await loadAutonomyConfig();
   const updated: AutonomyConfig = {
     ...current,

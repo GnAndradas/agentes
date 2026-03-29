@@ -120,6 +120,8 @@ export const EVENT_TYPE = {
   PARENT_TASK_COMPLETED: 'task.parent_completed',
 } as const;
 
+export type EventType = typeof EVENT_TYPE[keyof typeof EVENT_TYPE];
+
 // WebSocket channels
 export const WS_CHANNEL = {
   SYSTEM: 'system',

@@ -256,8 +256,8 @@ export class TaskRouter {
           },
         });
 
-        // Execute suggested actions if autonomy allows
-        if (autonomyConfig.level !== 'manual') {
+        // Execute suggested actions (manual mode already returned early)
+        {
           const results = await actionExecutor.executeActions(
             task.id,
             decision.missingReport,

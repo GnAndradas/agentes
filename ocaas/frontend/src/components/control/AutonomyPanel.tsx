@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Settings, Zap, Eye, Hand, Bot, Sparkles, Wrench, Loader2 } from 'lucide-react';
 import { systemApi } from '../../lib/api';
+import { useAppStore } from '../../stores/app';
 import { Button } from '../ui/Button';
 import type { AutonomyLevel, AutonomyConfig } from '../../types';
 
@@ -57,6 +58,7 @@ function ToggleItem({ label, icon: Icon, enabled, onChange, disabled }: {
 
 export function AutonomyPanel() {
   const queryClient = useQueryClient();
+  const { addNotification } = useAppStore();
 
   const { data: config, isLoading } = useQuery({
     queryKey: ['system', 'autonomy'],
@@ -68,6 +70,9 @@ export function AutonomyPanel() {
     mutationFn: (data: Partial<AutonomyConfig>) => systemApi.updateAutonomy(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['system', 'autonomy'] });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to update autonomy', message: err.message });
     },
   });
 

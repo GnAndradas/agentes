@@ -95,7 +95,7 @@ export class OpenClawGateway {
       });
 
       if (response.ok) {
-        const data = await response.json().catch(() => ({}));
+        const data = await response.json().catch(() => ({})) as { version?: string };
         return {
           connected: true,
           version: data.version || 'unknown',

@@ -10,7 +10,13 @@
       "Bash(npm run build:*)",
       "Bash(npm install)",
       "Bash(dir:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(find:*)",
+      "Bash(for f in /c/Users/Guille/Desktop/AGENTES/ocaas/backend/src/api/*/handlers.ts)",
+      "Bash(while read line)",
+      "Bash(do if ! echo \"$line\")",
+      "Bash(then echo \"MISSING .js: $line\" fi done done)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

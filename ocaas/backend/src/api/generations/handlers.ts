@@ -45,11 +45,51 @@ export async function create(req: FastifyRequest, reply: FastifyReply) {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Validation failed', details: parsed.error.flatten() });
     }
+
+    const { type, name, description = '', prompt } = parsed.data;
+    const genType = type as GenerationType;
+
+    // Execute the appropriate generator which handles the full flow:
+    // create -> generate -> validate -> mark pending approval
+    let result;
+    switch (genType) {
+      case 'agent':
+        result = await getAgentGenerator().generate({
+          type: 'agent',
+          name,
+          description,
+          prompt,
+        });
+        break;
+      case 'skill':
+        result = await getSkillGenerator().generate({
+          type: 'skill',
+          name,
+          description,
+          prompt,
+        }, 'api');
+        break;
+      case 'tool':
+        result = await getToolGenerator().generate({
+          type: 'tool',
+          name,
+          description,
+          prompt,
+        }, 'api');
+        break;
+      default:
+        return reply.status(400).send({ error: `Unknown generation type: ${type}` });
+    }
+
+    // Return the generation record
     const { generationService } = getServices();
-    const data = await generationService.create({
-      ...parsed.data,
-      type: parsed.data.type as GenerationType,
-    });
+    const generationId = result.metadata?.generationId;
+    if (!generationId || typeof generationId !== 'string') {
+      return reply.status(500).send({ error: 'Generation creation failed: no generation ID returned' });
+    }
+    const data = await generationService.getById(generationId);
+
+    logger.info({ generationId, type: genType, name }, 'Generation created via API');
     return reply.status(201).send({ data });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);

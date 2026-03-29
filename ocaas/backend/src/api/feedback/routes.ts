@@ -8,12 +8,14 @@ export async function feedbackRoutes(app: FastifyInstance): Promise<void> {
   // List feedback
   app.get('/', handlers.list);
 
-  // Get specific feedback
-  app.get('/:id', handlers.get);
-
+  // Literal routes MUST come before parameterized routes
   // Get feedback by task
   app.get('/task/:taskId', handlers.getByTask);
 
   // Clear feedback for task
   app.delete('/task/:taskId', handlers.clearForTask);
+
+  // Parameterized routes after literal routes
+  // Get specific feedback
+  app.get('/:id', handlers.get);
 }

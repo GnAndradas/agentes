@@ -72,7 +72,7 @@ export function TaskDetail() {
   }
 
   const StatusIcon = statusIcons[task.status];
-  const formatDate = (ts: number | null) => {
+  const formatDate = (ts: number | undefined | null) => {
     const date = fromTimestamp(ts);
     return date ? date.toLocaleString() : '-';
   };

@@ -78,7 +78,7 @@ export function Tools() {
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
+    mutationFn: ({ id, status }: { id: string; status: 'active' | 'inactive' | 'deprecated' }) =>
       toolApi.update(id, { status }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tools'] });
@@ -192,7 +192,7 @@ export function Tools() {
                           onChange={(e) =>
                             updateStatusMutation.mutate({
                               id: tool.id,
-                              status: e.target.value,
+                              status: e.target.value as 'active' | 'inactive' | 'deprecated',
                             })
                           }
                           options={statusOptions}

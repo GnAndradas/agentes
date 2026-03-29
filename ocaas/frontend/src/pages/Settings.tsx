@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Settings as SettingsIcon, Server, Database, Cpu, HardDrive } from 'lucide-react';
+import { Server, Database, Cpu, HardDrive } from 'lucide-react';
 import { systemApi } from '../lib/api';
 import { Card, CardHeader, Badge } from '../components/ui';
 

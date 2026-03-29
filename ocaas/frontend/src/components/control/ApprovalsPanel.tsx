@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle, XCircle, Clock, AlertTriangle, Bot, Sparkles, Wrench, ListTodo } from 'lucide-react';
 import { approvalApi } from '../../lib/api';
 import { fromTimestamp } from '../../lib/date';
+import { useAppStore } from '../../stores/app';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import type { Approval } from '../../types';
@@ -80,6 +81,7 @@ function ApprovalItem({ approval, onApprove, onReject, isLoading }: {
 
 export function ApprovalsPanel() {
   const queryClient = useQueryClient();
+  const { addNotification } = useAppStore();
 
   const { data, isLoading } = useQuery({
     queryKey: ['approvals', 'pending'],
@@ -91,6 +93,10 @@ export function ApprovalsPanel() {
     mutationFn: (id: string) => approvalApi.approve(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      addNotification({ type: 'success', title: 'Approved' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to approve', message: err.message });
     },
   });
 
@@ -98,6 +104,10 @@ export function ApprovalsPanel() {
     mutationFn: (id: string) => approvalApi.reject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      addNotification({ type: 'success', title: 'Rejected' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to reject', message: err.message });
     },
   });
 

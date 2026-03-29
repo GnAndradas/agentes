@@ -7,7 +7,7 @@ import type { Task } from '../types';
 
 interface SubtasksPanelProps {
   parentTaskId: string;
-  parentTitle: string;
+  parentTitle?: string;
 }
 
 const statusVariant = {
@@ -55,7 +55,7 @@ function getOverallStatus(subtasks: Task[]): 'pending' | 'running' | 'completed'
   return 'pending';
 }
 
-export function SubtasksPanel({ parentTaskId, parentTitle }: SubtasksPanelProps) {
+export function SubtasksPanel({ parentTaskId }: SubtasksPanelProps) {
   const navigate = useNavigate();
 
   const { data, isLoading, error } = useQuery({
@@ -164,7 +164,9 @@ export function SubtasksPanel({ parentTaskId, parentTitle }: SubtasksPanelProps)
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm truncate">{subtask.title}</span>
                     {subtask.dependsOn && subtask.dependsOn.length > 0 && (
-                      <GitBranch className="w-3 h-3 text-dark-400" title="Has dependencies" />
+                      <span title="Has dependencies">
+                        <GitBranch className="w-3 h-3 text-dark-400" />
+                      </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-1">

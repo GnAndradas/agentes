@@ -12,6 +12,7 @@ import {
   XCircle,
   Trash2,
   Cpu,
+  Terminal,
 } from 'lucide-react';
 import { systemApi } from '../../lib/api';
 import { useAppStore, type StatusActivity } from '../../stores/app';
@@ -65,6 +66,8 @@ export function StatusBar() {
     activities,
     clearActivities,
     setGatewayConnected,
+    monitorOpen,
+    setMonitorOpen,
   } = useAppStore();
 
   // Check gateway health periodically
@@ -183,6 +186,20 @@ export function StatusBar() {
               <span>{runningActivities.length} operations</span>
             </div>
           )}
+
+          {/* Gateway Monitor toggle */}
+          <button
+            onClick={() => setMonitorOpen(!monitorOpen)}
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
+              monitorOpen
+                ? 'bg-primary-600/20 text-primary-400'
+                : 'hover:bg-dark-800 text-dark-400 hover:text-dark-200'
+            }`}
+            title={monitorOpen ? 'Close Gateway Monitor' : 'Open Gateway Monitor'}
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            <span>Monitor</span>
+          </button>
         </div>
 
         {/* Toggle button */}

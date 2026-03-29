@@ -42,22 +42,23 @@ export class EventService {
     const now = nowTimestamp();
     const id = nanoid();
 
-    const row: typeof schema.events.$inferInsert = {
+    const severity = input.severity ?? 'info';
+    const row = {
       id,
       type: input.type,
       category: input.category,
-      severity: input.severity ?? 'info',
+      severity,
       message: input.message,
-      resourceType: input.resourceType,
-      resourceId: input.resourceId,
-      agentId: input.agentId,
+      resourceType: input.resourceType ?? null,
+      resourceId: input.resourceId ?? null,
+      agentId: input.agentId ?? null,
       data: input.data ? JSON.stringify(input.data) : null,
       createdAt: now,
     };
 
     await db.insert(schema.events).values(row);
 
-    const event = rowToDTO({ ...row, createdAt: now });
+    const event = rowToDTO(row);
 
     if (input.severity === 'error' || input.severity === 'critical') {
       logger.error({ type: input.type }, input.message);

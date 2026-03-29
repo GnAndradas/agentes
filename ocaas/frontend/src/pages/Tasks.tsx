@@ -185,9 +185,13 @@ export function Tasks() {
                     <div className="flex items-start gap-2">
                       {/* Hierarchy indicator */}
                       {task.metadata?._decomposed ? (
-                        <FolderTree className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" title="Parent task (decomposed)" />
+                        <span title="Parent task (decomposed)">
+                          <FolderTree className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                        </span>
                       ) : task.parentTaskId ? (
-                        <GitBranch className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" title="Subtask" />
+                        <span title="Subtask">
+                          <GitBranch className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
+                        </span>
                       ) : null}
                       <div>
                         <p className="font-medium">{task.title}</p>
@@ -238,7 +242,7 @@ export function Tasks() {
                           <XCircle className="w-4 h-4" />
                         </Button>
                       )}
-                      {task.status === 'failed' && task.attempts < task.maxAttempts && (
+                      {task.status === 'failed' && task.retryCount < task.maxRetries && (
                         <Button
                           variant="ghost"
                           size="sm"

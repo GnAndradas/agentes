@@ -31,6 +31,12 @@ interface AppState {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
+  // Gateway Monitor
+  monitorOpen: boolean;
+  monitorMinimized: boolean;
+  setMonitorOpen: (open: boolean) => void;
+  setMonitorMinimized: (minimized: boolean) => void;
+
   // Active agents (quick access)
   activeAgents: Agent[];
   setActiveAgents: (agents: Agent[]) => void;
@@ -89,6 +95,11 @@ export const useAppStore = create<AppState>((set) => ({
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+  monitorOpen: false,
+  monitorMinimized: false,
+  setMonitorOpen: (open) => set({ monitorOpen: open }),
+  setMonitorMinimized: (minimized) => set({ monitorMinimized: minimized }),
 
   activeAgents: [],
   setActiveAgents: (agents) => set({ activeAgents: agents }),

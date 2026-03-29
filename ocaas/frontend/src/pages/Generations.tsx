@@ -46,10 +46,13 @@ export function Generations() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: generationApi.approve,
+    mutationFn: (id: string) => generationApi.approve(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generations'] });
       addNotification({ type: 'success', title: 'Generation approved' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to approve', message: err.message });
     },
   });
 
@@ -59,13 +62,19 @@ export function Generations() {
       queryClient.invalidateQueries({ queryKey: ['generations'] });
       addNotification({ type: 'info', title: 'Generation rejected' });
     },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to reject', message: err.message });
+    },
   });
 
   const activateMutation = useMutation({
-    mutationFn: generationApi.activate,
+    mutationFn: (id: string) => generationApi.activate(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generations'] });
       addNotification({ type: 'success', title: 'Generation activated' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to activate', message: err.message });
     },
   });
 

@@ -346,8 +346,9 @@ export class FeedbackService {
         .where(eq(agentFeedback.id, id))
         .limit(1);
 
-      if (rows.length === 0) return null;
-      return rowToFeedback(rows[0]);
+      const row = rows[0];
+      if (!row) return null;
+      return rowToFeedback(row);
     } catch (err) {
       logger.error({ err, feedbackId: id }, 'Failed to get feedback by ID from DB');
       return null;

@@ -31,7 +31,7 @@ export const api = {
   post: <T>(endpoint: string, data?: unknown) =>
     request<T>(endpoint, {
       method: 'POST',
-      body: data ? JSON.stringify(data) : undefined,
+      body: JSON.stringify(data ?? {}),
     }),
 
   put: <T>(endpoint: string, data: unknown) =>
@@ -115,7 +115,7 @@ export const skillApi = {
     return res.data;
   },
   delete: (id: string) => api.delete(`/skills/${id}`),
-  sync: () => api.post('/skills/sync'),
+  // sync: () => api.post('/skills/sync'), // TODO: Backend route not implemented
 };
 
 // Tool API
@@ -229,7 +229,7 @@ export const feedbackApi = {
 export const eventApi = {
   list: async (params?: { type?: string; category?: string; limit?: string }) => {
     const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
-    const res = await api.get<DataResponse<import('../types').SystemEvent[]>>(`/events${query}`);
+    const res = await api.get<DataResponse<import('../types').SystemEvent[]>>(`/system/events${query}`);
     return { events: res.data };
   },
 };

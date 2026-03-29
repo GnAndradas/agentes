@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Sparkles, RefreshCw, Trash2 } from 'lucide-react';
+import { Plus, Sparkles, Trash2 } from 'lucide-react';
 import { skillApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -64,16 +64,17 @@ export function Skills() {
     },
   });
 
-  const syncMutation = useMutation({
-    mutationFn: skillApi.sync,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills'] });
-      addNotification({ type: 'success', title: 'Skills synchronized' });
-    },
-  });
+  // NOTE: Sync functionality commented out - backend route not implemented
+  // const syncMutation = useMutation({
+  //   mutationFn: skillApi.sync,
+  //   onSuccess: () => {
+  //     queryClient.invalidateQueries({ queryKey: ['skills'] });
+  //     addNotification({ type: 'success', title: 'Skills synchronized' });
+  //   },
+  // });
 
   const updateStatusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
+    mutationFn: ({ id, status }: { id: string; status: 'active' | 'inactive' | 'deprecated' }) =>
       skillApi.update(id, { status }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['skills'] });
@@ -113,6 +114,7 @@ export function Skills() {
           description="Manage reusable agent skills"
           action={
             <div className="flex items-center gap-3">
+              {/* Sync button disabled - backend route not implemented
               <Button
                 variant="secondary"
                 onClick={() => syncMutation.mutate()}
@@ -121,6 +123,7 @@ export function Skills() {
                 <RefreshCw className="w-4 h-4" />
                 Sync
               </Button>
+              */}
               <Button onClick={() => setShowCreate(true)}>
                 <Plus className="w-4 h-4" />
                 New Skill
@@ -181,7 +184,7 @@ export function Skills() {
                         onChange={(e) =>
                           updateStatusMutation.mutate({
                             id: skill.id,
-                            status: e.target.value,
+                            status: e.target.value as 'active' | 'inactive' | 'deprecated',
                           })
                         }
                         options={statusOptions}

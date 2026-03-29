@@ -158,6 +158,7 @@ export class ActionExecutor {
     try {
       // Generate the agent
       const result = await agentGenerator.generate({
+        type: 'agent',
         name,
         description,
         prompt: `Create an agent that can handle: ${missingReport.missingCapabilities.join(', ')}`,
@@ -257,6 +258,7 @@ export class ActionExecutor {
     try {
       // Generate the skill (source: orchestrator)
       const result = await skillGenerator.generate({
+        type: 'skill',
         name,
         description,
         prompt: `Create a skill for: ${missingReport.missingCapabilities.join(', ')}`,
@@ -355,6 +357,7 @@ export class ActionExecutor {
     try {
       // Generate the tool (source: orchestrator)
       const result = await toolGenerator.generate({
+        type: 'tool',
         name,
         description,
         prompt: `Create a tool for: ${missingReport.missingCapabilities.join(', ')}`,

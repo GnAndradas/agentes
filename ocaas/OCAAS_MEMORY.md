@@ -393,38 +393,47 @@ useQuery({
 
 ## 10. Integración OpenClaw
 
-### 10.1 API Webhook (v2026+)
+### 10.1 API de Sesiones (v2026+)
 
-OCAAS usa la **Webhook API** de OpenClaw, NO REST tradicional.
-
-**Documentación oficial**: https://docs.openclaw.ai/automation/webhook
+OCAAS usa la **Sessions API** de OpenClaw.
 
 **Endpoints utilizados**:
 - `GET /health` - Health check
-- `POST /hooks/agent` - Envío de mensajes al agente
-- `POST /hooks/wake` - Eventos de sistema (wake)
+- `POST /api/v1/sessions` - Crear sesión
+- `POST /api/v1/sessions/{id}/messages` - Enviar mensaje
+- `DELETE /api/v1/sessions/{id}` - Terminar sesión
+- `GET /api/v1/sessions` - Listar sesiones
+- `GET /api/v1/models` - Listar modelos
 
 **Autenticación**:
 ```
 Authorization: Bearer <OPENCLAW_API_KEY>
+x-openclaw-token: <OPENCLAW_API_KEY>
 ```
 
-**Ejemplo de request a /hooks/agent**:
+**Ejemplo de crear sesión**:
 ```json
+POST /api/v1/sessions
 {
-  "message": "Genera un agente de coding",
-  "wakeMode": "now",
-  "deliver": false,
-  "model": "claude-sonnet-4-20250514",
-  "timeoutSeconds": 120
+  "agentId": "coding-agent",
+  "prompt": "You are a coding assistant",
+  "model": "claude-sonnet-4-20250514"
+}
+```
+
+**Ejemplo de enviar mensaje**:
+```json
+POST /api/v1/sessions/{id}/messages
+{
+  "message": "Genera un componente React"
 }
 ```
 
 ### 10.2 Funcionalidades
 
-- **Sesiones de agente**: Gestionadas localmente con sessionKey
+- **Sesiones de agente**: Gestionadas via API `/api/v1/sessions`
 - **Workspace**: Leer/escribir skills y tools en `~/.openclaw/workspace/`
-- **LLM via Webhook**: Todas las llamadas pasan por `/hooks/agent`
+- **LLM via Sessions**: Todas las llamadas pasan por sesiones
 
 ### 10.3 Modo Offline
 

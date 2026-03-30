@@ -20,7 +20,8 @@
       "Bash(where:*)",
       "Bash(npx openclaw:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nfeat(gateway): add WebSocket RPC client for OpenClaw integration\n\n- Add WebSocket client with Protocol v3 handshake (connect.challenge)\n- Implement RPC methods: sessions.list, chat.abort, sessions.patch, cron.list, cron.patch\n- Add auto-reconnect and ping/keepalive for connection stability\n- Update session.ts to use new OpenClawSession[] type\n- Update OCAAS_MEMORY.md with WebSocket RPC documentation\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat(gateway): add WebSocket RPC client for OpenClaw integration\n\n- Add WebSocket client with Protocol v3 handshake (connect.challenge)\n- Implement RPC methods: sessions.list, chat.abort, sessions.patch, cron.list, cron.patch\n- Add auto-reconnect and ping/keepalive for connection stability\n- Update session.ts to use new OpenClawSession[] type\n- Update OCAAS_MEMORY.md with WebSocket RPC documentation\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

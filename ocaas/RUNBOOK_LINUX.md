@@ -1,6 +1,8 @@
 # OCAAS - Runbook Linux/macOS
 
-Guía operativa para despliegue y ejecución en Linux/macOS.
+> Guía operativa para despliegue y ejecución. Actualizado: 2026-03-30
+
+---
 
 ## Prerequisitos
 
@@ -11,6 +13,7 @@ Guía operativa para despliegue y ejecución en Linux/macOS.
 | Git | 2.x | `git --version` |
 | build-essential | - | `gcc --version` (para better-sqlite3) |
 | Python | 3.x | `python3 --version` (para node-gyp) |
+| OpenClaw | - | `openclaw --version` |
 
 ### Instalar prerequisitos (Ubuntu/Debian)
 
@@ -21,6 +24,8 @@ sudo apt-get install -y nodejs
 
 # Build tools para módulos nativos
 sudo apt-get install -y build-essential python3
+
+# OpenClaw CLI (ver docs.openclaw.ai para instalación)
 ```
 
 ### Instalar prerequisitos (macOS)
@@ -31,6 +36,18 @@ xcode-select --install
 
 # Node.js via Homebrew
 brew install node@20
+
+# OpenClaw CLI (ver docs.openclaw.ai para instalación)
+```
+
+### Instalar prerequisitos (Windows con Git Bash)
+
+```bash
+# Node.js: Descargar de nodejs.org
+# Python: Descargar de python.org (necesario para node-gyp)
+# Visual Studio Build Tools: npm install -g windows-build-tools
+
+# OpenClaw CLI (ver docs.openclaw.ai para instalación)
 ```
 
 ---
@@ -44,110 +61,108 @@ cd ocaas
 
 # Copiar configuración de entorno
 cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
 
 # Editar backend/.env con tus valores
-nano backend/.env
+nano backend/.env  # o code backend/.env en Windows
 ```
 
-### Variables de entorno críticas (backend/.env)
+### Variables de entorno (backend/.env)
 
 ```env
-# OBLIGATORIAS
+# Server
 PORT=3001
+HOST=0.0.0.0
+NODE_ENV=development
+
+# Database
 DATABASE_URL=./data/ocaas.db
 
-# OpenClaw Gateway (puerto por defecto: 18789)
+# OpenClaw Gateway
+# APIs usadas:
+#   - /v1/chat/completions (sync) - Generación IA
+#   - /hooks/agent (async) - Notificaciones
+# Docs: https://docs.openclaw.ai
 OPENCLAW_GATEWAY_URL=http://localhost:18789
-# Modelo por defecto para llamadas LLM
-OPENCLAW_DEFAULT_MODEL=claude-sonnet-4-20250514
+OPENCLAW_WORKSPACE_PATH=~/.openclaw/workspace
 
-# RECOMENDADAS
-API_SECRET_KEY=<generar-clave-segura-32-chars>
-AUTONOMY_LEVEL=supervised
+# API Key - obtener con: openclaw config get gateway.token
+OPENCLAW_API_KEY=tu-token-aqui
 
-# OPCIONALES (Telegram)
+# Security (mínimo 16 caracteres)
+API_SECRET_KEY=cambiar-en-produccion-min-32-chars
+
+# CORS
+CORS_ORIGIN=http://localhost:5173
+
+# Logging
+LOG_LEVEL=info
+
+# Telegram Notifications (opcional)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
+
+# Autonomy
+AUTONOMY_LEVEL=supervised
+AUTONOMY_HUMAN_TIMEOUT=300000
+AUTONOMY_FALLBACK=pause
 ```
 
-**Nota sobre OpenClaw Gateway:**
-- Puerto por defecto de OpenClaw: `18789` (no 3000)
-- OCAAS usa la API OpenAI-compatible (`/v1/chat/completions`)
-- Endpoint de salud: `/health`
+### Obtener API Key de OpenClaw
+
+```bash
+# El Gateway genera un token automáticamente
+openclaw config get gateway.token
+
+# Copiar el resultado a OPENCLAW_API_KEY en .env
+```
 
 ---
 
 ## 2. Instalar Dependencias
 
 ```bash
-# Backend (desde raíz del proyecto)
+# Desde la raíz del proyecto
 cd backend
 npm install
 
-# Frontend (desde raíz del proyecto)
 cd ../frontend
 npm install
 ```
 
-**Nota:** `better-sqlite3` compila código nativo. Si falla, verificar build-essential/Xcode.
+**Nota:** `better-sqlite3` compila código nativo. Si falla:
+- Linux: Verificar `build-essential`
+- macOS: Verificar Xcode Command Line Tools
+- Windows: Verificar Visual Studio Build Tools
 
 ### Errores comunes de instalación
 
 | Error | Solución |
 |-------|----------|
-| `gyp ERR! find Python` | Instalar Python 3: `sudo apt install python3` |
-| `node-pre-gyp ERR!` | Reinstalar: `npm rebuild better-sqlite3` |
-| `EACCES permission denied` | No usar sudo. Usar nvm o fix permisos npm |
+| `gyp ERR! find Python` | Instalar Python 3 |
+| `node-pre-gyp ERR!` | `npm rebuild better-sqlite3` |
+| `EACCES permission denied` | No usar sudo. Usar nvm |
 
 ---
 
 ## 3. Inicializar Base de Datos
 
-### Estructura de archivos de schema
-
-Los schemas de Drizzle están en `backend/src/db/schema/`:
-- `agents.ts`, `tasks.ts`, `skills.ts`, `tools.ts`
-- `permissions.ts`, `generations.ts`, `events.ts`
-- `system.ts`, `approvals.ts`, `feedback.ts`
-
-### Generar y aplicar migraciones
-
 ```bash
 cd backend
 
-# Opción 1: Push directo (desarrollo - recomendado)
-# Sincroniza schema con DB sin generar archivos de migración
+# Sincronizar schema con DB (desarrollo)
 npm run db:push
-```
-
-```bash
-# Opción 2: Generar migraciones (producción)
-# Genera archivos SQL en backend/drizzle/
-npm run db:generate
-
-# Luego aplicar migraciones
-npm run db:migrate
 ```
 
 ### Verificar
 
 ```bash
-# Debe existir el archivo de base de datos
+# Debe existir el archivo
 ls -la backend/data/ocaas.db
 
-# Verificar tablas creadas
+# Verificar tablas (Linux/macOS)
 sqlite3 backend/data/ocaas.db ".tables"
 # Debe mostrar: agents approvals events feedback generations ...
 ```
-
-### Troubleshooting DB
-
-| Error | Causa | Solución |
-|-------|-------|----------|
-| `Cannot find module './agents.js'` | drizzle-kit no resuelve imports | Usar glob `*.ts` en config (ya corregido) |
-| `SQLITE_ERROR: no such table` | DB no inicializada | `npm run db:push` |
-| `Error: database is locked` | Otro proceso usando DB | Cerrar otros procesos |
 
 ### Reiniciar DB desde cero
 
@@ -165,13 +180,11 @@ cd backend && npm run db:push
 ### Terminal 1: OpenClaw Gateway
 
 ```bash
-# Iniciar OpenClaw Gateway
+# Iniciar OpenClaw Gateway (puerto 18789 por defecto)
 openclaw gateway start
-# O si usas el comando directo:
-# openclaw gateway --port 18789
 
 # Verificar que está corriendo
-curl http://localhost:18789/health
+curl http://localhost:18789/v1/models
 ```
 
 ### Terminal 2: Backend OCAAS
@@ -194,6 +207,13 @@ npm run dev
 
 ## 5. Healthcheck
 
+### Verificar Gateway
+
+```bash
+# Listar modelos disponibles (health check)
+curl http://localhost:18789/v1/models
+```
+
 ### Verificar Backend
 
 ```bash
@@ -204,102 +224,46 @@ curl http://localhost:3001/health
 ```json
 {
   "status": "ok",
-  "timestamp": "...",
   "gateway": {
-    "connected": true,  // <-- CRÍTICO
-    "url": "http://localhost:18789"
+    "connected": true
   },
   "database": "connected",
   "orchestrator": {
-    "running": true,
-    "queueSize": 0
+    "running": true
   }
 }
 ```
 
-**Si `gateway.connected: false`:** El Gateway no está corriendo o la URL es incorrecta.
+**Si `gateway.connected: false`:**
+- Gateway no está corriendo
+- URL incorrecta en `OPENCLAW_GATEWAY_URL`
+- API Key inválida
 
 ### Verificar Frontend
 
 Abrir http://localhost:5173 en navegador.
 
-### Verificar Gateway
-
-```bash
-# OpenClaw Gateway health endpoint
-curl http://localhost:18789/health
-
-# Verificar modelos disponibles
-curl http://localhost:18789/v1/models
-```
-
 ---
 
-## 6. Tests Críticos de Validación
+## 6. APIs de OpenClaw usadas por OCAAS
 
-### Test 1: Conexión a Gateway
+> Verificado de docs.openclaw.ai y código fuente
 
-```bash
-curl http://localhost:3001/health | grep '"connected":true'
-```
-- **PASA:** Retorna `"connected":true`
-- **FALLA:** Retorna `"connected":false` o error
+### API REST (Síncrona)
 
-### Test 2: Ciclo Completo de Tarea
+| Método | Endpoint | Uso en OCAAS |
+|--------|----------|--------------|
+| `GET` | `/v1/models` | Health check |
+| `POST` | `/v1/chat/completions` | Generación IA (agentes, skills, tools) |
 
-```bash
-# Crear tarea
-TASK_ID=$(curl -s -X POST http://localhost:3001/api/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Test E2E","type":"test","priority":2}' | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+### Webhook API (Asíncrona)
 
-echo "Task ID: $TASK_ID"
+| Método | Endpoint | Uso en OCAAS |
+|--------|----------|--------------|
+| `POST` | `/hooks/agent` | Notificaciones (fire-and-forget) |
+| `POST` | `/hooks/wake` | Despertar agentes |
 
-# Esperar 5 segundos y verificar estado
-sleep 5
-curl http://localhost:3001/api/tasks/$TASK_ID
-```
-- **PASA:** `status` es `completed` o `in_progress`
-- **FALLA:** `status` es `pending` después de 30s, o error
-
-### Test 3: Loop Autónomo Básico
-
-```bash
-# Cambiar a modo autonomous
-curl -X PUT http://localhost:3001/api/system/autonomy \
-  -H "Content-Type: application/json" \
-  -d '{"level":"autonomous"}'
-
-# Crear tarea que requiere capacidad inexistente
-curl -X POST http://localhost:3001/api/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Test Loop","type":"blockchain-analysis","priority":2}'
-
-# Verificar que se creó una generation
-sleep 10
-curl http://localhost:3001/api/generations
-```
-- **PASA:** Aparece generation con `type: "agent"` o `"skill"`
-- **FALLA:** No hay generations
-
-### Test 4: Approval Flow
-
-```bash
-# Cambiar a modo supervised
-curl -X PUT http://localhost:3001/api/system/autonomy \
-  -H "Content-Type: application/json" \
-  -d '{"level":"supervised"}'
-
-# Crear tarea de alta prioridad
-curl -X POST http://localhost:3001/api/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Test Approval","type":"test","priority":4}'
-
-# Verificar approval pendiente
-curl http://localhost:3001/api/approvals
-```
-- **PASA:** Aparece approval con `status: "pending"`
-- **FALLA:** No hay approvals
+**Nota:** Los webhooks devuelven `200` inmediatamente. Los resultados van al canal configurado, NO se devuelven en la respuesta HTTP.
 
 ---
 
@@ -310,22 +274,19 @@ curl http://localhost:3001/api/approvals
 | Error | Causa | Solución |
 |-------|-------|----------|
 | `SQLITE_ERROR: no such table` | DB no inicializada | `npm run db:push` |
-| `ECONNREFUSED localhost:3000` | Gateway no corriendo | Iniciar Gateway primero |
-| `Cannot find module 'better-sqlite3'` | Compilación fallida | `npm rebuild better-sqlite3` |
-| `gateway.connected: false` | URL incorrecta | Verificar `OPENCLAW_GATEWAY_URL` |
-| `EADDRINUSE` | Puerto ocupado | `lsof -i :3001` y matar proceso |
+| `ECONNREFUSED localhost:18789` | Gateway no corriendo | Iniciar Gateway primero |
+| `gateway.connected: false` | URL incorrecta o sin API key | Verificar `.env` |
+| `EADDRINUSE` | Puerto ocupado | Matar proceso en ese puerto |
+| `401 Unauthorized` | API key inválida | `openclaw config get gateway.token` |
 
-### Dónde mirar logs
+### Logs
 
 ```bash
-# Backend logs (stdout)
-# Los logs de pino van a stdout en formato JSON
-
-# Para logs legibles:
+# Backend logs legibles
 cd backend
 npm run dev 2>&1 | npx pino-pretty
 
-# Logs de eventos en DB
+# Eventos en DB
 sqlite3 data/ocaas.db "SELECT * FROM events ORDER BY created_at DESC LIMIT 10;"
 ```
 
@@ -333,40 +294,30 @@ sqlite3 data/ocaas.db "SELECT * FROM events ORDER BY created_at DESC LIMIT 10;"
 
 | Endpoint | Propósito |
 |----------|-----------|
-| `GET /health` | Estado general del sistema |
-| `GET /api/system/stats` | Métricas detalladas |
-| `GET /api/system/autonomy` | Configuración de autonomía |
-| `GET /api/events?limit=20` | Últimos eventos |
+| `GET /health` | Estado general |
+| `GET /api/system/stats` | Métricas |
+| `GET /api/system/autonomy` | Config autonomía |
+| `GET /api/system/events` | Últimos eventos |
 | `GET /api/tasks?status=failed` | Tareas fallidas |
-
-### Distinguir origen de fallo
-
-1. **Backend no responde:** `curl localhost:3001/health` falla → Backend caído
-2. **Gateway no responde:** Backend OK pero `gateway.connected: false` → Gateway caído
-3. **DB corrupta:** Error `SQLITE_ERROR` en logs → Recrear DB
-4. **Frontend no carga:** Backend OK, UI blanca → Ver consola del navegador
 
 ---
 
 ## 8. Comandos Útiles
 
 ```bash
-# Reiniciar DB desde cero
-rm backend/data/ocaas.db
-cd backend && npm run db:push
-
 # Ver cola de tareas
 curl http://localhost:3001/api/system/stats | jq '.orchestrator'
 
-# Aprobar todas las pendientes
-curl http://localhost:3001/api/approvals | jq -r '.[] | select(.status=="pending") | .id' | \
-  xargs -I {} curl -X POST http://localhost:3001/api/approvals/{}/approve
+# Ver agentes activos
+curl http://localhost:3001/api/agents?status=active
+
+# Crear tarea de prueba
+curl -X POST http://localhost:3001/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test","type":"test","priority":2}'
 
 # Cancelar tarea
 curl -X POST http://localhost:3001/api/tasks/<id>/cancel
-
-# Ver agentes activos
-curl http://localhost:3001/api/agents?status=active
 ```
 
 ---
@@ -380,14 +331,14 @@ cd backend && npm run build
 cd ../frontend && npm run build
 ```
 
-### Ejecutar en producción
+### Ejecutar
 
 ```bash
 # Backend
 cd backend
 NODE_ENV=production node dist/index.js
 
-# Frontend (servir archivos estáticos)
+# Frontend (servir estáticos)
 npx serve frontend/dist -p 5173
 ```
 
@@ -416,13 +367,14 @@ WantedBy=multi-user.target
 ## Checklist de Despliegue
 
 - [ ] Node.js 20+ instalado
-- [ ] build-essential/Xcode instalado
+- [ ] build-essential/Xcode/VS Build Tools instalado
+- [ ] OpenClaw CLI instalado
 - [ ] Repositorio clonado
-- [ ] `.env` configurado en backend y frontend
+- [ ] `backend/.env` configurado
+- [ ] `OPENCLAW_API_KEY` obtenida y configurada
 - [ ] `npm install` exitoso en backend y frontend
 - [ ] `npm run db:push` ejecutado
-- [ ] Gateway corriendo en puerto 3000
+- [ ] Gateway corriendo en puerto **18789**
 - [ ] Backend corriendo en puerto 3001
 - [ ] `curl /health` muestra `gateway.connected: true`
 - [ ] Frontend accesible en puerto 5173
-- [ ] Test E2E básico pasado

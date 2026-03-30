@@ -1,6 +1,6 @@
 # OCAAS - Sistema de Memoria Completa
 
-> Documento de referencia para mantener contexto del sistema. Actualizado: 2026-03-29
+> Documento de referencia para mantener contexto del sistema. Actualizado: 2026-03-30
 
 ## 1. Visión General
 
@@ -393,55 +393,81 @@ useQuery({
 
 ## 10. Integración OpenClaw
 
-### 10.1 Webhook API
+> **Fuentes verificadas**: [docs.openclaw.ai](https://docs.openclaw.ai), código fuente GitHub openclaw/openclaw
 
-OCAAS usa la **Webhook API** de OpenClaw.
+### 10.1 APIs Disponibles (Puerto 18789)
 
-**Endpoints utilizados**:
-- `GET /health` - Health check
-- `POST /hooks/agent` - Enviar mensaje a agente (endpoint principal)
-- `POST /hooks/wake` - Despertar un agente
+OCAAS usa dos APIs de OpenClaw:
 
-**Autenticación**:
-```
-Authorization: Bearer <OPENCLAW_API_KEY>
-x-openclaw-token: <OPENCLAW_API_KEY>
-```
+#### API REST (Síncrona) - Para generación IA
 
-**Parámetro requerido**: `message`
+| Método | Endpoint | Propósito | Respuesta |
+|--------|----------|-----------|-----------|
+| `GET` | `/v1/models` | Health check / listar modelos | Lista modelos |
+| `POST` | `/v1/chat/completions` | **Generación IA** | Respuesta completa |
 
-**Ejemplo de enviar mensaje**:
+**Request `/v1/chat/completions`**:
 ```json
-POST /hooks/agent
 {
-  "message": "Genera un componente React",
-  "wakeMode": "now",
-  "deliver": true,
-  "timeoutSeconds": 120
+  "messages": [
+    {"role": "system", "content": "Eres un generador de código"},
+    {"role": "user", "content": "Genera un skill para..."}
+  ]
 }
 ```
 
-**Ejemplo de despertar agente**:
+**Response**:
 ```json
-POST /hooks/wake
 {
-  "agentId": "coding-agent",
+  "id": "chatcmpl_xxx",
+  "choices": [{
+    "message": {"role": "assistant", "content": "...código generado..."},
+    "finish_reason": "stop"
+  }]
+}
+```
+
+#### Webhook API (Asíncrona) - Para notificaciones
+
+| Método | Endpoint | Propósito | Respuesta |
+|--------|----------|-----------|-----------|
+| `POST` | `/hooks/agent` | Notificar/ejecutar en canal | `200` inmediato |
+| `POST` | `/hooks/wake` | Despertar agente | `200` inmediato |
+
+**IMPORTANTE**: `/hooks/agent` es **fire-and-forget**. Devuelve `200` inmediatamente. Los resultados van al canal configurado (`deliver: true`), NO se devuelven en la respuesta HTTP.
+
+**Request `/hooks/agent`**:
+```json
+{
+  "message": "Notifica: tarea completada",
+  "channel": "telegram",
+  "deliver": true,
   "wakeMode": "now"
 }
 ```
 
-### 10.2 Funcionalidades
+### 10.2 Autenticación
 
-- **Comunicación con agentes**: Via webhook `/hooks/agent`
-- **Workspace**: Leer/escribir skills y tools en `~/.openclaw/workspace/`
-- **LLM via webhook**: Todas las llamadas pasan por `/hooks/agent`
-- **Sesiones locales**: OCAAS gestiona sesiones localmente (webhook no soporta listing)
+```
+Authorization: Bearer <OPENCLAW_API_KEY>
+```
 
-### 10.3 Modo Offline
+Alternativa (webhooks): `x-openclaw-token: <OPENCLAW_API_KEY>`
+
+### 10.3 Uso en OCAAS
+
+| Función OCAAS | API OpenClaw | Tipo |
+|---------------|--------------|------|
+| Generar agentes/skills/tools | `/v1/chat/completions` | Síncrona |
+| Analizar tareas con IA | `/v1/chat/completions` | Síncrona |
+| Notificar humano | `/hooks/agent` | Asíncrona |
+| Health check | `/v1/models` | Síncrona |
+
+### 10.4 Modo Offline
 
 Si el Gateway no está disponible:
 - Generación AI deshabilitada
-- Ejecución de tareas deshabilitada
+- Ejecución de tareas con IA deshabilitada
 - CRUD de recursos sigue funcionando
 - Frontend muestra indicador de desconexión
 
@@ -482,8 +508,8 @@ NODE_ENV=development
 # Database
 DATABASE_URL=./data/ocaas.db
 
-# OpenClaw
-OPENCLAW_GATEWAY_URL=http://localhost:3000
+# OpenClaw (puerto 18789 por defecto)
+OPENCLAW_GATEWAY_URL=http://localhost:18789
 OPENCLAW_WORKSPACE_PATH=~/.openclaw/workspace
 OPENCLAW_API_KEY=
 
@@ -589,6 +615,28 @@ LOG_LEVEL=info
 | `pages/Tasks.tsx:188,190` | Prop `title` inválida en iconos Lucide | LOW |
 | `pages/Settings.tsx:2` | Import `SettingsIcon` no usado | LOW |
 | `pages/TaskDetail.tsx:212,216` | `undefined` vs `null` en fromTimestamp | LOW |
+
+---
+
+## 17. Historial de Cambios
+
+### 2026-03-30 - Corrección Gateway OpenClaw
+
+**Problema detectado**: El gateway usaba APIs incorrectas/inventadas:
+- Polling a `/api/runs/{runId}` (no existe en OpenClaw)
+- Webhooks para generación (webhooks son fire-and-forget, no devuelven respuesta)
+
+**Solución aplicada** en `backend/src/openclaw/gateway.ts`:
+- Reescritura completa usando APIs verificadas de documentación oficial
+- `/v1/chat/completions` para toda generación IA (síncrono, devuelve respuesta)
+- `/hooks/agent` solo para notificaciones (fire-and-forget)
+- `/v1/models` para health check
+
+**Verificación**: TypeScript compila sin errores.
+
+**Fuentes consultadas**:
+- https://docs.openclaw.ai/automation/webhook
+- GitHub openclaw/openclaw: `src/gateway/openai-http.ts`, `src/gateway/models-http.ts`
 
 ---
 

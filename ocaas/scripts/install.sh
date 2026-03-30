@@ -20,7 +20,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Configuración por defecto
 BACKEND_PORT=3001
 FRONTEND_PORT=5173
-OPENCLAW_DEFAULT_URL="http://localhost:3000"
+OPENCLAW_DEFAULT_URL="http://localhost:18789"
 
 echo -e "${CYAN}"
 echo "╔═══════════════════════════════════════════════════════════╗"

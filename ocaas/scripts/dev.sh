@@ -62,7 +62,7 @@ source backend/.env 2>/dev/null || true
 set +a
 
 BACKEND_PORT="${PORT:-3001}"
-OPENCLAW_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
+OPENCLAW_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:18789}"
 
 # Verificar/crear base de datos
 if [ ! -f "backend/data/ocaas.db" ]; then

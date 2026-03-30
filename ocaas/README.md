@@ -172,8 +172,8 @@ NODE_ENV=development
 # Database
 DATABASE_URL=./data/ocaas.db
 
-# OpenClaw Gateway (all LLM requests go through here)
-OPENCLAW_GATEWAY_URL=http://localhost:3000
+# OpenClaw Gateway (port 18789 by default)
+OPENCLAW_GATEWAY_URL=http://localhost:18789
 OPENCLAW_WORKSPACE_PATH=~/.openclaw/workspace
 OPENCLAW_API_KEY=
 

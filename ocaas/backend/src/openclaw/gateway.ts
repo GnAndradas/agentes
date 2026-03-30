@@ -1,12 +1,15 @@
 import { config } from '../config/index.js';
 import { createLogger } from '../utils/logger.js';
 import { OpenClawError } from '../utils/errors.js';
-import type { GatewayStatus, SpawnOptions, SpawnResult, ExecOptions, ExecResult, SendOptions, SendResult, GenerateOptions, GenerateResult } from './types.js';
+import type { GatewayStatus, SpawnOptions, SpawnResult, ExecOptions, ExecResult, SendOptions, SendResult, GenerateOptions, GenerateResult, OpenClawSession } from './types.js';
+import WebSocket from 'ws';
 
 const logger = createLogger('OpenClawGateway');
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const GENERATION_TIMEOUT = 120000; // 2 minutes for LLM generation
+const WS_RECONNECT_DELAY = 5000; // 5 seconds between reconnect attempts
+const WS_PING_INTERVAL = 30000; // 30 seconds ping interval
 
 /**
  * OpenAI-compatible chat completion response
@@ -48,10 +51,45 @@ interface ChatCompletionResponse {
  *
  * Authentication: Authorization: Bearer <token>
  */
+/**
+ * WebSocket RPC message types
+ * From: OpenClaw WebSocket Protocol v3
+ */
+interface WsRpcRequest {
+  id: string;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+interface WsRpcResponse {
+  id: string;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+interface WsConnectChallenge {
+  type: 'connect.challenge';
+  nonce: string;
+}
+
+interface WsConnectAck {
+  type: 'connect.ack';
+  sessionId: string;
+}
+
 export class OpenClawGateway {
   private baseUrl: string;
   private apiKey?: string;
   private connected = false;
+
+  // WebSocket RPC client
+  private ws: WebSocket | null = null;
+  private wsConnected = false;
+  private wsSessionId: string | null = null;
+  private pendingRpcCalls = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private rpcIdCounter = 0;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.baseUrl = config.openclaw.gatewayUrl;
@@ -262,6 +300,257 @@ export class OpenClawGateway {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  /**
+   * Check if WebSocket RPC is connected
+   */
+  isWsConnected(): boolean {
+    return this.wsConnected;
+  }
+
+  /**
+   * Connect to WebSocket RPC for real-time operations
+   * Uses OpenClaw Protocol v3 with connect.challenge handshake
+   */
+  async connectWebSocket(): Promise<boolean> {
+    if (this.wsConnected && this.ws?.readyState === WebSocket.OPEN) {
+      return true;
+    }
+
+    return new Promise((resolve) => {
+      try {
+        const wsUrl = this.baseUrl.replace(/^http/, 'ws');
+        logger.info({ wsUrl }, 'Connecting to WebSocket RPC');
+
+        this.ws = new WebSocket(wsUrl);
+
+        this.ws.on('open', () => {
+          logger.debug('WebSocket connection opened, waiting for challenge');
+        });
+
+        this.ws.on('message', (data) => {
+          this.handleWsMessage(data.toString(), resolve);
+        });
+
+        this.ws.on('close', (code, reason) => {
+          logger.warn({ code, reason: reason.toString() }, 'WebSocket closed');
+          this.wsConnected = false;
+          this.wsSessionId = null;
+          this.cleanupWs();
+          this.scheduleReconnect();
+        });
+
+        this.ws.on('error', (err) => {
+          logger.error({ err }, 'WebSocket error');
+          this.wsConnected = false;
+          resolve(false);
+        });
+
+        // Timeout for connection
+        setTimeout(() => {
+          if (!this.wsConnected) {
+            logger.warn('WebSocket connection timeout');
+            this.ws?.close();
+            resolve(false);
+          }
+        }, DEFAULT_TIMEOUT);
+
+      } catch (err) {
+        logger.error({ err }, 'Failed to create WebSocket connection');
+        resolve(false);
+      }
+    });
+  }
+
+  /**
+   * Handle incoming WebSocket messages
+   */
+  private handleWsMessage(data: string, connectResolve?: (value: boolean) => void): void {
+    try {
+      const message = JSON.parse(data);
+
+      // Handle connect.challenge (Protocol v3)
+      if (message.type === 'connect.challenge') {
+        const challenge = message as WsConnectChallenge;
+        this.sendWsHandshake(challenge.nonce);
+        return;
+      }
+
+      // Handle connect.ack
+      if (message.type === 'connect.ack') {
+        const ack = message as WsConnectAck;
+        this.wsSessionId = ack.sessionId;
+        this.wsConnected = true;
+        this.startPingInterval();
+        logger.info({ sessionId: ack.sessionId }, 'WebSocket RPC connected');
+        connectResolve?.(true);
+        return;
+      }
+
+      // Handle RPC responses
+      if (message.id && this.pendingRpcCalls.has(message.id)) {
+        const pending = this.pendingRpcCalls.get(message.id)!;
+        this.pendingRpcCalls.delete(message.id);
+
+        const response = message as WsRpcResponse;
+        if (response.error) {
+          pending.reject(new OpenClawError(response.error.message, { code: response.error.code }));
+        } else {
+          pending.resolve(response.result);
+        }
+        return;
+      }
+
+      // Handle server-initiated events
+      if (message.type) {
+        this.handleWsEvent(message);
+      }
+
+    } catch (err) {
+      logger.error({ err, data }, 'Failed to parse WebSocket message');
+    }
+  }
+
+  /**
+   * Send handshake response to connect.challenge
+   */
+  private sendWsHandshake(nonce: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    const handshake = {
+      type: 'connect.handshake',
+      nonce,
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        name: 'ocaas-gateway',
+        version: '1.0.0',
+      },
+      role: 'operator',
+      scopes: ['operator.read', 'operator.write'],
+      auth: {
+        token: this.apiKey || '',
+      },
+    };
+
+    this.ws.send(JSON.stringify(handshake));
+    logger.debug('Sent WebSocket handshake');
+  }
+
+  /**
+   * Handle server-initiated WebSocket events
+   */
+  private handleWsEvent(event: { type: string; [key: string]: unknown }): void {
+    logger.debug({ type: event.type }, 'Received WebSocket event');
+    // Events can be used for real-time monitoring
+    // Future: emit events to OCAAS event bus
+  }
+
+  /**
+   * Send RPC request over WebSocket
+   */
+  private async rpcCall<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+    if (!this.wsConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // Try to connect first
+      const connected = await this.connectWebSocket();
+      if (!connected) {
+        throw new OpenClawError('WebSocket not connected', { method });
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      const id = `rpc-${++this.rpcIdCounter}-${Date.now()}`;
+
+      const request: WsRpcRequest = {
+        id,
+        method,
+        params,
+      };
+
+      this.pendingRpcCalls.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
+
+      // Timeout for RPC call
+      setTimeout(() => {
+        if (this.pendingRpcCalls.has(id)) {
+          this.pendingRpcCalls.delete(id);
+          reject(new OpenClawError(`RPC call timed out: ${method}`, { method, timeout: DEFAULT_TIMEOUT }));
+        }
+      }, DEFAULT_TIMEOUT);
+
+      this.ws!.send(JSON.stringify(request));
+      logger.debug({ id, method }, 'Sent RPC request');
+    });
+  }
+
+  /**
+   * Start WebSocket ping interval to keep connection alive
+   */
+  private startPingInterval(): void {
+    this.stopPingInterval();
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.ping();
+      }
+    }, WS_PING_INTERVAL);
+  }
+
+  /**
+   * Stop ping interval
+   */
+  private stopPingInterval(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  /**
+   * Schedule WebSocket reconnection
+   */
+  private scheduleReconnect(): void {
+    if (this.reconnectTimeout) return;
+
+    this.reconnectTimeout = setTimeout(async () => {
+      this.reconnectTimeout = null;
+      if (!this.wsConnected && this.connected) {
+        logger.info('Attempting WebSocket reconnection');
+        await this.connectWebSocket();
+      }
+    }, WS_RECONNECT_DELAY);
+  }
+
+  /**
+   * Cleanup WebSocket resources
+   */
+  private cleanupWs(): void {
+    this.stopPingInterval();
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    // Reject all pending RPC calls
+    for (const [id, pending] of this.pendingRpcCalls) {
+      pending.reject(new OpenClawError('WebSocket disconnected'));
+      this.pendingRpcCalls.delete(id);
+    }
+  }
+
+  /**
+   * Disconnect WebSocket
+   */
+  disconnectWebSocket(): void {
+    this.cleanupWs();
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.wsConnected = false;
+    this.wsSessionId = null;
+    logger.info('WebSocket disconnected');
   }
 
   /**
@@ -517,12 +806,116 @@ export class OpenClawGateway {
   }
 
   /**
-   * List active sessions
-   *
-   * Note: Sessions are tracked locally in OCAAS, not in OpenClaw
+   * List active sessions via WebSocket RPC
+   * Uses: sessions.list method
    */
-  async listSessions(): Promise<string[]> {
-    return [];
+  async listSessions(): Promise<OpenClawSession[]> {
+    if (!this.wsConnected) {
+      logger.debug('WebSocket not connected, returning empty sessions');
+      return [];
+    }
+
+    try {
+      const result = await this.rpcCall<{ sessions: Array<{ id: string; status: string; createdAt: number }> }>('sessions.list');
+
+      return (result.sessions || []).map(s => ({
+        id: s.id,
+        agentId: s.id.split('-')[1] || 'unknown',
+        status: s.status as 'active' | 'inactive' | 'error',
+        createdAt: s.createdAt,
+      }));
+    } catch (err) {
+      logger.error({ err }, 'Failed to list sessions');
+      return [];
+    }
+  }
+
+  /**
+   * Abort/cancel a running chat session via WebSocket RPC
+   * Uses: chat.abort method
+   */
+  async abortSession(sessionId: string): Promise<boolean> {
+    if (!this.wsConnected) {
+      logger.warn('WebSocket not connected, cannot abort session');
+      return false;
+    }
+
+    try {
+      await this.rpcCall('chat.abort', { sessionId });
+      logger.info({ sessionId }, 'Session aborted');
+      return true;
+    } catch (err) {
+      logger.error({ err, sessionId }, 'Failed to abort session');
+      return false;
+    }
+  }
+
+  /**
+   * Patch/update a session via WebSocket RPC
+   * Uses: sessions.patch method
+   */
+  async patchSession(sessionId: string, patch: Record<string, unknown>): Promise<boolean> {
+    if (!this.wsConnected) {
+      logger.warn('WebSocket not connected, cannot patch session');
+      return false;
+    }
+
+    try {
+      await this.rpcCall('sessions.patch', { sessionId, ...patch });
+      logger.info({ sessionId }, 'Session patched');
+      return true;
+    } catch (err) {
+      logger.error({ err, sessionId }, 'Failed to patch session');
+      return false;
+    }
+  }
+
+  /**
+   * List cron jobs via WebSocket RPC
+   * Uses: cron.list method
+   */
+  async listCronJobs(): Promise<Array<{ id: string; schedule: string; enabled: boolean }>> {
+    if (!this.wsConnected) {
+      logger.debug('WebSocket not connected, returning empty cron jobs');
+      return [];
+    }
+
+    try {
+      const result = await this.rpcCall<{ jobs: Array<{ id: string; schedule: string; enabled: boolean }> }>('cron.list');
+      return result.jobs || [];
+    } catch (err) {
+      logger.error({ err }, 'Failed to list cron jobs');
+      return [];
+    }
+  }
+
+  /**
+   * Enable/disable a cron job via WebSocket RPC
+   * Uses: cron.patch method
+   */
+  async setCronJobEnabled(jobId: string, enabled: boolean): Promise<boolean> {
+    if (!this.wsConnected) {
+      logger.warn('WebSocket not connected, cannot update cron job');
+      return false;
+    }
+
+    try {
+      await this.rpcCall('cron.patch', { id: jobId, enabled });
+      logger.info({ jobId, enabled }, 'Cron job updated');
+      return true;
+    } catch (err) {
+      logger.error({ err, jobId }, 'Failed to update cron job');
+      return false;
+    }
+  }
+
+  /**
+   * Clean shutdown - disconnect all connections
+   */
+  async shutdown(): Promise<void> {
+    this.disconnectWebSocket();
+    this.connected = false;
+    logger.info('Gateway shutdown complete');
   }
 }
 

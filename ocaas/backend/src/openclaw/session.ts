@@ -99,9 +99,12 @@ export class SessionManager {
     const remoteSessions = await gateway.listSessions();
     const agents = await agentService.getActive();
 
+    // Create a set of active session IDs for fast lookup
+    const remoteSessionIds = new Set(remoteSessions.map(s => s.id));
+
     // Deactivate agents without remote sessions
     for (const agent of agents) {
-      if (agent.sessionId && !remoteSessions.includes(agent.sessionId)) {
+      if (agent.sessionId && !remoteSessionIds.has(agent.sessionId)) {
         logger.warn({ agentId: agent.id }, 'Session lost, deactivating agent');
         await agentService.deactivate(agent.id);
         this.activeSessions.delete(agent.id);
@@ -110,7 +113,7 @@ export class SessionManager {
 
     // Update local session map
     for (const agent of agents) {
-      if (agent.sessionId && remoteSessions.includes(agent.sessionId)) {
+      if (agent.sessionId && remoteSessionIds.has(agent.sessionId)) {
         this.activeSessions.set(agent.id, agent.sessionId);
       }
     }

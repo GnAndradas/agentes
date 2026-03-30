@@ -456,12 +456,24 @@ Alternativa (webhooks): `x-openclaw-token: <OPENCLAW_API_KEY>`
 
 ### 10.3 Uso en OCAAS
 
+#### API REST (HTTP)
 | Función OCAAS | API OpenClaw | Tipo |
 |---------------|--------------|------|
 | Generar agentes/skills/tools | `/v1/chat/completions` | Síncrona |
 | Analizar tareas con IA | `/v1/chat/completions` | Síncrona |
 | Notificar humano | `/hooks/agent` | Asíncrona |
 | Health check | `/v1/models` | Síncrona |
+
+#### WebSocket RPC (ws://localhost:18789)
+| Función OCAAS | Método RPC | Descripción |
+|---------------|------------|-------------|
+| Listar sesiones activas | `sessions.list` | Obtener sesiones en ejecución |
+| Cancelar tarea | `chat.abort` | Abortar una sesión activa |
+| Modificar sesión | `sessions.patch` | Actualizar estado de sesión |
+| Listar cron jobs | `cron.list` | Obtener trabajos programados |
+| Habilitar/deshabilitar cron | `cron.patch` | Modificar estado de cron job |
+
+**Protocolo**: WebSocket v3 con handshake `connect.challenge` / `connect.handshake`
 
 ### 10.4 Modo Offline
 

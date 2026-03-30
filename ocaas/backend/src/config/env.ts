@@ -10,7 +10,6 @@ const envSchema = z.object({
   OPENCLAW_GATEWAY_URL: z.string().url().default('http://localhost:18789'),
   OPENCLAW_WORKSPACE_PATH: z.string().default('~/.openclaw/workspace'),
   OPENCLAW_API_KEY: z.string().optional(),
-  OPENCLAW_DEFAULT_MODEL: z.string().default('claude-sonnet-4-20250514'),
 
   API_SECRET_KEY: z.string().min(16).default('dev-secret-key-min-16'),
 

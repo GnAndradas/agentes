@@ -393,17 +393,14 @@ useQuery({
 
 ## 10. Integración OpenClaw
 
-### 10.1 API de Sesiones (v2026+)
+### 10.1 Webhook API
 
-OCAAS usa la **Sessions API** de OpenClaw.
+OCAAS usa la **Webhook API** de OpenClaw.
 
 **Endpoints utilizados**:
 - `GET /health` - Health check
-- `POST /api/v1/sessions` - Crear sesión
-- `POST /api/v1/sessions/{id}/messages` - Enviar mensaje
-- `DELETE /api/v1/sessions/{id}` - Terminar sesión
-- `GET /api/v1/sessions` - Listar sesiones
-- `GET /api/v1/models` - Listar modelos
+- `POST /hooks/agent` - Enviar mensaje a agente (endpoint principal)
+- `POST /hooks/wake` - Despertar un agente
 
 **Autenticación**:
 ```
@@ -411,29 +408,34 @@ Authorization: Bearer <OPENCLAW_API_KEY>
 x-openclaw-token: <OPENCLAW_API_KEY>
 ```
 
-**Ejemplo de crear sesión**:
-```json
-POST /api/v1/sessions
-{
-  "agentId": "coding-agent",
-  "prompt": "You are a coding assistant",
-  "model": "claude-sonnet-4-20250514"
-}
-```
+**Parámetro requerido**: `message`
 
 **Ejemplo de enviar mensaje**:
 ```json
-POST /api/v1/sessions/{id}/messages
+POST /hooks/agent
 {
-  "message": "Genera un componente React"
+  "message": "Genera un componente React",
+  "wakeMode": "now",
+  "deliver": true,
+  "timeoutSeconds": 120
+}
+```
+
+**Ejemplo de despertar agente**:
+```json
+POST /hooks/wake
+{
+  "agentId": "coding-agent",
+  "wakeMode": "now"
 }
 ```
 
 ### 10.2 Funcionalidades
 
-- **Sesiones de agente**: Gestionadas via API `/api/v1/sessions`
+- **Comunicación con agentes**: Via webhook `/hooks/agent`
 - **Workspace**: Leer/escribir skills y tools en `~/.openclaw/workspace/`
-- **LLM via Sessions**: Todas las llamadas pasan por sesiones
+- **LLM via webhook**: Todas las llamadas pasan por `/hooks/agent`
+- **Sesiones locales**: OCAAS gestiona sesiones localmente (webhook no soporta listing)
 
 ### 10.3 Modo Offline
 

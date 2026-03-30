@@ -11,26 +11,24 @@ const GENERATION_TIMEOUT = 120000; // 2 minutes for LLM generation
 /**
  * OpenClaw Gateway Client
  *
- * Uses OpenClaw's Sessions API (v2026+):
+ * Uses OpenClaw's Webhook API:
  * - GET /health for status checks
- * - POST /api/v1/sessions - Create session
- * - POST /api/v1/sessions/{id}/messages - Send message
- * - DELETE /api/v1/sessions/{id} - Terminate session
+ * - POST /hooks/agent - Send message to agent (main endpoint)
+ * - POST /hooks/wake - Wake an agent
  *
  * Authentication via Bearer token or x-openclaw-token header.
+ * Required parameter for /hooks/agent: message
  */
 export class OpenClawGateway {
   private baseUrl: string;
   private apiKey?: string;
   private connected = false;
-  private defaultModel: string;
-  private apiPath: string;
+  private hooksPath: string;
 
   constructor() {
     this.baseUrl = config.openclaw.gatewayUrl;
     this.apiKey = config.openclaw.apiKey;
-    this.defaultModel = config.openclaw.defaultModel;
-    this.apiPath = '/api/v1';
+    this.hooksPath = '/hooks';
   }
 
   /**
@@ -51,27 +49,26 @@ export class OpenClawGateway {
   }
 
   /**
-   * Make a request to OpenClaw API
+   * Make a webhook request to OpenClaw
    */
-  private async request<T>(
-    method: string,
+  private async webhookRequest<T>(
     endpoint: string,
-    body?: Record<string, unknown>,
+    body: Record<string, unknown>,
     timeout = DEFAULT_TIMEOUT
   ): Promise<T> {
-    const url = `${this.baseUrl}${this.apiPath}${endpoint}`;
+    const url = `${this.baseUrl}${this.hooksPath}${endpoint}`;
     const headers = this.getHeaders();
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      logger.debug({ method, url, body }, 'Sending API request');
+      logger.debug({ url, body }, 'Sending webhook request');
 
       const response = await fetch(url, {
-        method,
+        method: 'POST',
         headers,
-        body: body ? JSON.stringify(body) : undefined,
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
@@ -93,13 +90,13 @@ export class OpenClawGateway {
           });
         }
         if (response.status === 404) {
-          throw new OpenClawError(`Endpoint not found: ${endpoint}`, {
+          throw new OpenClawError(`Webhook endpoint not found: ${endpoint}`, {
             url,
             status: response.status,
           });
         }
 
-        throw new OpenClawError(`API request failed: ${response.status} ${text}`, {
+        throw new OpenClawError(`Webhook request failed: ${response.status} ${text}`, {
           url,
           status: response.status,
         });
@@ -113,6 +110,7 @@ export class OpenClawGateway {
       try {
         return JSON.parse(text) as T;
       } catch {
+        // If response is plain text, wrap it
         return { response: text } as T;
       }
     } catch (err) {
@@ -121,7 +119,7 @@ export class OpenClawGateway {
       if (err instanceof OpenClawError) throw err;
 
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new OpenClawError(`API request timed out after ${timeout}ms`, {
+        throw new OpenClawError(`Webhook request timed out after ${timeout}ms`, {
           url,
           timeout,
         });
@@ -185,7 +183,7 @@ export class OpenClawGateway {
   /**
    * Spawn a new agent session
    *
-   * POST /api/v1/sessions
+   * POST /hooks/agent with wakeMode
    */
   async spawn(options: SpawnOptions): Promise<SpawnResult> {
     if (!this.connected) {
@@ -197,29 +195,27 @@ export class OpenClawGateway {
     }
 
     try {
-      const response = await this.request<{ id?: string; sessionId?: string; error?: string }>(
-        'POST',
-        '/sessions',
+      // Build the spawn message
+      const spawnMessage = `[SPAWN] Agent: ${options.agentId}\nPrompt: ${options.prompt}`;
+
+      const response = await this.webhookRequest<{ sessionId?: string; id?: string; error?: string }>(
+        '/agent',
         {
+          message: spawnMessage,
           agentId: options.agentId,
-          prompt: options.prompt,
-          model: this.defaultModel,
+          wakeMode: 'now',
+          deliver: false,
           skills: options.skills,
           tools: options.tools,
           config: options.config,
+          timeoutSeconds: Math.floor(DEFAULT_TIMEOUT / 1000),
         }
       );
 
-      const sessionId = response.id || response.sessionId;
+      // Generate a local session ID if not returned
+      const sessionId = response.sessionId || response.id || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-      if (!sessionId) {
-        throw new OpenClawError('No session ID returned from gateway', {
-          operation: 'spawn',
-          agentId: options.agentId,
-        });
-      }
-
-      logger.info({ sessionId, agentId: options.agentId }, 'Agent session created');
+      logger.info({ sessionId, agentId: options.agentId }, 'Agent session created via webhook');
 
       return {
         sessionId,
@@ -239,7 +235,7 @@ export class OpenClawGateway {
   /**
    * Send a message to an agent session
    *
-   * POST /api/v1/sessions/{id}/messages
+   * POST /hooks/agent
    */
   async send(options: SendOptions): Promise<SendResult> {
     if (!this.connected) {
@@ -251,12 +247,15 @@ export class OpenClawGateway {
     }
 
     try {
-      const response = await this.request<{ response?: string; message?: string; content?: string }>(
-        'POST',
-        `/sessions/${options.sessionId}/messages`,
+      const response = await this.webhookRequest<{ response?: string; message?: string; content?: string }>(
+        '/agent',
         {
           message: options.message,
+          sessionId: options.sessionId,
           data: options.data,
+          wakeMode: 'now',
+          deliver: true,
+          timeoutSeconds: Math.floor(GENERATION_TIMEOUT / 1000),
         },
         GENERATION_TIMEOUT
       );
@@ -280,7 +279,7 @@ export class OpenClawGateway {
   /**
    * Execute a tool in an agent session
    *
-   * POST /api/v1/sessions/{id}/messages with tool execution request
+   * POST /hooks/agent with tool execution request
    */
   async exec(options: ExecOptions): Promise<ExecResult> {
     if (!this.connected) {
@@ -293,13 +292,18 @@ export class OpenClawGateway {
     }
 
     try {
-      const response = await this.request<{ response?: string; output?: unknown }>(
-        'POST',
-        `/sessions/${options.sessionId}/messages`,
+      const execMessage = `[TOOL_EXEC] Execute tool "${options.toolName}" with input: ${JSON.stringify(options.input)}`;
+
+      const response = await this.webhookRequest<{ response?: string; output?: unknown }>(
+        '/agent',
         {
-          message: `Execute tool "${options.toolName}" with input: ${JSON.stringify(options.input)}`,
+          message: execMessage,
+          sessionId: options.sessionId,
           tool: options.toolName,
           toolInput: options.input,
+          wakeMode: 'now',
+          deliver: true,
+          timeoutSeconds: Math.floor(GENERATION_TIMEOUT / 1000),
         },
         GENERATION_TIMEOUT
       );
@@ -322,7 +326,7 @@ export class OpenClawGateway {
   /**
    * Terminate an agent session
    *
-   * DELETE /api/v1/sessions/{id}
+   * POST /hooks/agent with terminate command
    */
   async terminate(sessionId: string): Promise<boolean> {
     if (!this.connected) {
@@ -331,7 +335,12 @@ export class OpenClawGateway {
     }
 
     try {
-      await this.request('DELETE', `/sessions/${sessionId}`);
+      await this.webhookRequest('/agent', {
+        message: '[TERMINATE]',
+        sessionId,
+        terminate: true,
+        wakeMode: 'now',
+      });
       logger.info({ sessionId }, 'Session terminated');
       return true;
     } catch (err) {
@@ -341,28 +350,18 @@ export class OpenClawGateway {
   }
 
   /**
-   * List active sessions
-   *
-   * GET /api/v1/sessions
+   * List active sessions (local tracking - webhook doesn't support listing)
    */
   async listSessions(): Promise<string[]> {
-    if (!this.connected) {
-      return [];
-    }
-
-    try {
-      const response = await this.request<{ sessions?: Array<{ id: string }> }>('GET', '/sessions');
-      return response.sessions?.map(s => s.id) || [];
-    } catch (err) {
-      logger.warn({ err }, 'Failed to list sessions');
-      return [];
-    }
+    // Webhook API doesn't support listing sessions
+    // Sessions are tracked locally in OCAAS
+    return [];
   }
 
   /**
-   * Generate content using LLM
+   * Generate content using LLM via webhook
    *
-   * POST /api/v1/sessions/{id}/messages or direct generation
+   * POST /hooks/agent with generation request
    */
   async generate(options: GenerateOptions): Promise<GenerateResult> {
     if (!this.connected) {
@@ -371,78 +370,67 @@ export class OpenClawGateway {
     }
 
     try {
-      // Build the prompt combining system and user prompts
+      // Build the full prompt combining system and user prompts
       let fullPrompt = options.userPrompt;
       if (options.systemPrompt) {
-        fullPrompt = `[System: ${options.systemPrompt}]\n\n${options.userPrompt}`;
+        fullPrompt = `[System Instructions]\n${options.systemPrompt}\n\n[User Request]\n${options.userPrompt}`;
       }
 
-      // Use a temporary session for generation
-      const spawnResult = await this.spawn({
-        agentId: 'generator',
-        prompt: options.systemPrompt || 'You are a helpful assistant.',
-      });
+      const response = await this.webhookRequest<{
+        response?: string;
+        message?: string;
+        content?: string;
+        usage?: { inputTokens: number; outputTokens: number };
+      }>(
+        '/agent',
+        {
+          message: fullPrompt,
+          wakeMode: 'now',
+          deliver: false,
+          maxTokens: options.maxTokens,
+          timeoutSeconds: Math.floor(GENERATION_TIMEOUT / 1000),
+        },
+        GENERATION_TIMEOUT
+      );
 
-      if (!spawnResult.success || !spawnResult.sessionId) {
-        return { success: false, error: spawnResult.error || 'Failed to create generation session' };
-      }
+      const content = response.response || response.message || response.content || '';
 
-      try {
-        const response = await this.request<{ response?: string; message?: string; content?: string }>(
-          'POST',
-          `/sessions/${spawnResult.sessionId}/messages`,
-          {
-            message: options.userPrompt,
-            maxTokens: options.maxTokens,
-          },
-          GENERATION_TIMEOUT
-        );
+      logger.debug({ promptLength: fullPrompt.length, responseLength: content.length }, 'Generation completed via webhook');
 
-        const content = response.response || response.message || response.content || '';
-
-        logger.debug({ promptLength: fullPrompt.length, responseLength: content.length }, 'Generation completed');
-
-        return {
-          success: true,
-          content,
-        };
-      } finally {
-        // Clean up temporary session
-        await this.terminate(spawnResult.sessionId);
-      }
+      return {
+        success: true,
+        content,
+        usage: response.usage,
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      logger.error({ err }, 'Generation via gateway failed');
+      logger.error({ err }, 'Generation via webhook failed');
       return { success: false, error: message };
     }
   }
 
   /**
-   * Set the default model for LLM calls
+   * Wake an agent using the /hooks/wake endpoint
    */
-  setModel(model: string): void {
-    this.defaultModel = model;
-    logger.info({ model }, 'Default model updated');
-  }
-
-  /**
-   * Get available models from OpenClaw
-   *
-   * GET /api/v1/models
-   */
-  async getModels(): Promise<string[]> {
+  async wake(agentId: string): Promise<boolean> {
     if (!this.connected) {
-      return [this.defaultModel];
+      logger.warn('Gateway not connected, wake unavailable');
+      return false;
     }
 
     try {
-      const response = await this.request<{ models?: Array<{ id: string }> }>('GET', '/models');
-      return response.models?.map(m => m.id) || [this.defaultModel];
+      await this.webhookRequest('/wake', {
+        agentId,
+        wakeMode: 'now',
+      });
+      logger.info({ agentId }, 'Agent awakened via webhook');
+      return true;
     } catch (err) {
-      logger.warn({ err }, 'Failed to fetch models');
-      return [this.defaultModel];
+      logger.error({ err, agentId }, 'Failed to wake agent');
+      return false;
     }
   }
+
 }
 
 // Singleton instance

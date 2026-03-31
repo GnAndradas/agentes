@@ -1,4 +1,4 @@
-import { createLogger } from '../utils/logger.js';
+import { orchestratorLogger } from '../utils/logger.js';
 import { getServices } from '../services/index.js';
 import {
   getAutonomyConfig,
@@ -21,7 +21,7 @@ import type {
   SuggestedAction,
 } from './types.js';
 
-const logger = createLogger('DecisionEngine');
+const logger = orchestratorLogger.child({ component: 'DecisionEngine' });
 
 export class DecisionEngine {
   // ============================================

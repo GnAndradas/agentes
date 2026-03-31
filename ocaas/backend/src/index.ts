@@ -1,11 +1,13 @@
 import { config } from './config/index.js';
+import { EVENT_TYPE } from './config/constants.js';
 import { loadAutonomyConfig } from './config/autonomy.js';
 import { initDatabase } from './db/index.js';
-import { initServices } from './services/index.js';
+import { initServices, getServices } from './services/index.js';
 import { initOpenClaw } from './openclaw/index.js';
 import { initOrchestrator, shutdownOrchestrator } from './orchestrator/index.js';
 import { initGenerator } from './generator/index.js';
 import { initWebSocket, shutdownWebSocket } from './websocket/index.js';
+import { initChannelBridge, shutdownChannelBridge } from './services/ChannelBridge.js';
 import { createApp } from './app.js';
 import { createLogger } from './utils/logger.js';
 
@@ -44,12 +46,29 @@ async function main() {
     // Initialize orchestrator
     await initOrchestrator();
 
+    // Initialize channel bridge (routes responses back to external channels)
+    const { eventService } = getServices();
+    initChannelBridge(eventService);
+
+    // Emit system started event
+    eventService.emit({
+      type: EVENT_TYPE.SYSTEM_STARTED,
+      category: 'system',
+      message: 'OCAAS system started',
+      data: {
+        port: config.server.port,
+        host: config.server.host,
+        timestamp: Date.now(),
+      },
+    });
+
     logger.info(`Server running at http://${config.server.host}:${config.server.port}`);
 
     // Graceful shutdown
     const shutdown = async () => {
       logger.info('Shutting down...');
-      shutdownOrchestrator();
+      shutdownChannelBridge();
+      await shutdownOrchestrator();
       shutdownWebSocket();
       await app.close();
       process.exit(0);

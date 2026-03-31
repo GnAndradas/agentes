@@ -46,10 +46,34 @@ draft → generated → pending_approval → approved → active
                      rejected
 ```
 
+### Manual Resources (ManualResourceService)
+```
+draft → pending_approval → approved → active
+             ↓                  ↘ deactivated
+          rejected
+```
+
 ### Tareas
 ```
 pending → queued → assigned → running → completed
                                     ↘ failed/cancelled
+```
+
+### Task ↔ Resource Retry Loop
+```
+Task (queued) → missing_resource detected
+                        ↓
+ResourceRetryService.handleMissingResource()
+                        ↓
+ManualResourceService.createDraft() → [autonomy flow]
+                        ↓
+    MANUAL: draft stays, human does everything
+    SUPERVISED: auto-submit, human approves
+    AUTONOMOUS: auto-approve, auto-activate
+                        ↓
+On activate → onResourceActivated callback
+                        ↓
+TaskRouter.retryTask() → Task re-processed
 ```
 
 ## 4. Componentes Clave
@@ -58,9 +82,16 @@ pending → queued → assigned → running → completed
 |------------|---------|---------|
 | TaskRouter | `orchestrator/TaskRouter.ts` | Procesa cola, coordina decisiones |
 | DecisionEngine | `orchestrator/DecisionEngine.ts` | Scoring y asignación de agentes |
+| ResourceRetryService | `orchestrator/ResourceRetryService.ts` | Loop Task↔ManualResource con hardening |
+| ManualResourceService | `services/ManualResourceService.ts` | FSM de drafts manuales (agent/skill/tool) |
 | AIClient | `generator/AIClient.ts` | Interface con OpenClaw para generación |
 | ActivationWorkflow | `services/ActivationWorkflowService.ts` | FSM de aprobación |
-| Gateway | `openclaw/gateway.ts` | Cliente REST + WebSocket RPC |
+| **OpenClawAdapter** | `integrations/openclaw/OpenClawAdapter.ts` | **Punto único de entrada a OpenClaw** |
+| Gateway | `openclaw/gateway.ts` | Cliente REST + WebSocket RPC (interno) |
+| ChannelService | `services/ChannelService.ts` | Ingesta de mensajes de canales externos |
+| ChannelBridge | `services/ChannelBridge.ts` | Bridge para enviar respuestas a canales |
+| OrganizationalPolicyService | `organization/OrganizationalPolicyService.ts` | Motor de decisiones organizacionales |
+| **SystemDiagnosticsService** | `system/SystemDiagnosticsService.ts` | **Diagnóstico integral del sistema** |
 
 ## 5. Variables de Entorno Críticas
 
@@ -68,6 +99,7 @@ pending → queued → assigned → running → completed
 OPENCLAW_GATEWAY_URL=http://localhost:18789
 OPENCLAW_API_KEY=<token>
 API_SECRET_KEY=<min 16 chars>
+CHANNEL_SECRET_KEY=<min 16 chars, opcional - usa API_SECRET_KEY si no está>
 TELEGRAM_BOT_TOKEN=<opcional>
 TELEGRAM_WEBHOOK_SECRET=<opcional>
 TELEGRAM_ALLOWED_USER_IDS=<opcional>
@@ -95,13 +127,40 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 
 ### Tests
 ```
-✅ validator.test.ts       - 15 tests
-✅ workflow.test.ts        - 36 tests
-✅ telegram-security.test.ts - 10 tests
-✅ utils.test.ts           - 13 tests
+✅ validator.test.ts              - 15 tests
+✅ workflow.test.ts               - 36 tests
+✅ telegram-security.test.ts      - 10 tests
+✅ utils.test.ts                  - 13 tests
+✅ manualResources.api.test.ts    - 16 tests
+✅ resourceRetry.test.ts          - 10 tests
+✅ resourceRetryHardening.test.ts - 14 tests
+✅ channelIngest.test.ts          - 13 tests
+✅ openclawAdapter.test.ts        - 26 tests
+✅ organization.test.ts           - 33 tests
+✅ resilience.test.ts             - 45 tests
+✅ logger.test.ts                 - 20 tests
+✅ systemDiagnostics.test.ts      - 26 tests
+
+TOTAL: 277+ tests passing
 ```
 
-## 7. Riesgos de Producción
+## 7. ResourceRetryService Hardening
+
+Protecciones implementadas para producción:
+
+| Protección | Descripción |
+|------------|-------------|
+| **Anti-loop** | MAX_RESOURCE_RETRIES=3 por task |
+| **Deduplicación** | Hash de (resourceType + slug + intent) evita duplicados |
+| **Locking por taskId** | Previene handleMissingResource concurrente |
+| **Locking por resourceKey** | Previene creación paralela del mismo recurso |
+| **Retry único** | retriedTasksForDraft evita doble retry por activación |
+| **Visibilidad** | getTaskRetryInfo() expone retryCount, lastRetryAt, pendingResources |
+| **Telemetría** | Eventos task.missing_resource, task.retrying, task.retry_failed, task.retry_exhausted |
+| **Recovery** | recoverState() reconstruye desde DB al reiniciar |
+| **Cleanup** | cleanupOld() elimina entries >1 hora |
+
+## 8. Riesgos de Producción
 
 | Riesgo | Severidad | Mitigación |
 |--------|-----------|------------|
@@ -109,12 +168,242 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 | Sin rate limiting | Medio | Agregar @fastify/rate-limit |
 | Secrets en .env | Medio | Usar secrets manager |
 
-## 8. Próximos Pasos
+## 9. API Routes
 
-1. Test integración end-to-end
-2. PostgreSQL si producción real
-3. Rate limiting
-4. Probar Telegram real
+### Manual Resources (`/api/manual/resources`)
+```
+POST   /                    - Crear draft
+GET    /                    - Listar drafts
+GET    /:id                 - Obtener draft
+PUT    /:id                 - Actualizar draft (solo status=draft)
+DELETE /:id                 - Eliminar draft (solo status=draft)
+POST   /:id/submit          - Submit para aprobación
+POST   /:id/approve         - Aprobar
+POST   /:id/reject          - Rechazar
+POST   /:id/activate        - Activar (crea recurso real)
+POST   /:id/deactivate      - Desactivar
+```
+
+### Channel Bridge (`/api/channels`)
+```
+POST   /ingest                              - Ingestar mensaje de canal externo
+GET    /:channel/users/:userId/tasks        - Obtener tareas de un usuario
+
+Headers requeridos:
+  X-CHANNEL-SECRET: <CHANNEL_SECRET_KEY o API_SECRET_KEY>
+```
+
+## 10. Channel Bridge (Canales Externos)
+
+Bridge bidireccional entre canales externos (Telegram, WhatsApp, etc.) y OCAAS.
+
+### Flujo Entrada (Canal → OCAAS)
+```
+OpenClaw (Telegram/WhatsApp/etc.)
+         │
+         ▼
+POST /api/channels/ingest
+  Headers: X-CHANNEL-SECRET
+  Body: { channel, userId, message, metadata? }
+         │
+         ▼
+ChannelService.ingest()
+  - Normaliza input
+  - Detecta prioridad (urgente/importante/normal)
+  - Crea Task con metadata.source='channel'
+         │
+         ▼
+Task procesado por Orchestrator
+```
+
+### Flujo Salida (OCAAS → Canal)
+```
+Task completa/falla/cancela
+         │
+         ▼
+ChannelBridge detecta (EVENT_TYPE.TASK_COMPLETED/FAILED/CANCELLED)
+  - Verifica si metadata.source === 'channel'
+         │
+         ▼
+ChannelService.emitResponseReady(task)
+  - Construye respuesta
+  - Emite EVENT_TYPE.CHANNEL_RESPONSE_READY
+         │
+         ▼
+ChannelBridge.handleResponseReady()
+  - Envía vía OpenClaw gateway.notify()
+         │
+         ▼
+OpenClaw entrega a canal original (Telegram, etc.)
+```
+
+### Canales Soportados
+| Canal | Estado |
+|-------|--------|
+| telegram | ✅ Funcional |
+| whatsapp | 🔧 Pendiente OpenClaw |
+| web | 🔧 Pendiente implementar |
+| api | 🔧 Pendiente implementar |
+| slack | 🔧 Pendiente OpenClaw |
+| discord | 🔧 Pendiente OpenClaw |
+
+## 11. OpenClawAdapter (Integración Centralizada)
+
+**REGLA: Ningún archivo fuera de `integrations/openclaw/` puede llamar directamente al gateway.**
+
+### Uso Correcto
+```typescript
+import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
+const adapter = getOpenClawAdapter();
+const result = await adapter.generate({ systemPrompt, userPrompt });
+```
+
+### Uso Prohibido
+```typescript
+import { getGateway } from '../openclaw/gateway.js';  // ❌
+const gateway = getGateway();                          // ❌
+await gateway.generate({ ... });                       // ❌
+```
+
+### Métodos Disponibles
+| Método | Descripción |
+|--------|-------------|
+| `generate()` | Generación de texto con LLM |
+| `executeAgent()` | Spawn session + enviar prompt |
+| `sendTask()` | Enviar mensaje a sesión existente |
+| `executeTool()` | Ejecutar tool en sesión |
+| `notifyChannel()` | Enviar notificación a canal |
+| `getStatus()` | Estado rápido del gateway |
+| `testConnection()` | Test con latencia |
+| `listSessions()` | Listar sesiones activas |
+| `abortSession()` | Abortar sesión |
+| `terminateSession()` | Terminar sesión |
+| `initialize()` | Inicializar conexión |
+
+### Error Codes Normalizados
+| Código | Descripción |
+|--------|-------------|
+| `connection_error` | ECONNREFUSED, network issues |
+| `execution_error` | Errores de ejecución |
+| `timeout` | Request timeout |
+| `auth_error` | 401, 403 |
+| `rate_limited` | 429 Too Many Requests |
+| `not_configured` | API key missing |
+| `invalid_response` | Respuesta malformada |
+
+## 12. Organizational Layer
+
+Capa organizacional formal para agentes.
+
+### Roles
+| Rol | Jerarquía | Permisos |
+|-----|-----------|----------|
+| `ceo` | 1 | Todo: delegar, crear recursos, aprobar subordinados |
+| `manager` | 2 | Delegar, crear recursos, aprobar subordinados |
+| `supervisor` | 3 | Delegar, dividir tareas |
+| `specialist` | 4 | Alta complejidad, sin delegación |
+| `worker` | 5 | Tareas simples, escalar a supervisor |
+
+### Work Profiles (Presets)
+| Perfil | Descripción |
+|--------|-------------|
+| `conservative` | Mínima autonomía, aprobación humana para casi todo |
+| `balanced` | Equilibrio automático/humano |
+| `aggressive` | Máxima autonomía, humano solo para crítico |
+| `human_first` | Todo requiere aprobación humana |
+| `autonomous_first` | Autonomía total |
+
+### API Organizacional (`/api/org/*`)
+```
+GET    /profiles                     - Listar work profiles
+GET    /profiles/:id                 - Obtener profile
+POST   /profiles                     - Crear custom profile
+PUT    /profiles/:id                 - Actualizar profile
+DELETE /profiles/:id                 - Eliminar custom profile
+
+GET    /hierarchy                    - Listar org profiles de agentes
+GET    /hierarchy/tree               - Árbol jerárquico
+GET    /hierarchy/:agentId           - Profile de agente
+PUT    /hierarchy/:agentId           - Crear/actualizar profile de agente
+DELETE /hierarchy/:agentId           - Eliminar profile de agente
+GET    /hierarchy/:agentId/escalation-chain  - Cadena de escalación
+GET    /hierarchy/:agentId/subordinates      - Subordinados
+
+POST   /policies/decisions           - Consultar decisiones de política
+GET    /policies/agent/:agentId      - Políticas efectivas del agente
+```
+
+### Eventos Organizacionales
+| Evento | Descripción |
+|--------|-------------|
+| `org.task_delegated` | Tarea delegada a subordinado |
+| `org.task_split` | Tarea dividida en subtareas |
+| `org.task_escalated` | Tarea escalada a supervisor/humano |
+| `org.human_notified` | Humano notificado |
+| `org.policy_applied` | Política aplicada |
+
+### Componentes
+| Componente | Archivo | Función |
+|------------|---------|---------|
+| WorkProfileStore | `organization/WorkProfileStore.ts` | Gestión de work profiles |
+| AgentHierarchyStore | `organization/AgentHierarchyStore.ts` | Jerarquía de agentes |
+| TaskMemoryStore | `organization/TaskMemoryStore.ts` | Memoria de tareas |
+| OrganizationalPolicyService | `organization/OrganizationalPolicyService.ts` | Motor de decisiones |
+
+## 13. SystemDiagnosticsService
+
+Servicio de diagnóstico integral del sistema.
+
+### Archivo
+`src/system/SystemDiagnosticsService.ts`
+
+### Métodos Públicos
+| Método | Descripción |
+|--------|-------------|
+| `getSystemHealth()` | Reporte completo con score 0-100, checks, issues, warnings |
+| `getReadinessReport()` | Checklist de producción: OpenClaw, DB, circuits, etc. |
+| `getCriticalIssues()` | Solo issues críticos |
+| `getWarnings()` | Solo warnings |
+| `getMetrics()` | Snapshot de métricas (tasks, agents, resources, resilience, openclaw) |
+
+### Checks Realizados
+| Categoría | Peso | Checks |
+|-----------|------|--------|
+| openclaw | 20 | Conexión, configuración |
+| gateway | 15 | Status, latencia |
+| tasks | 20 | Stuck tasks, retry loops, orphans |
+| resilience | 15 | Leases, circuit breakers, orphan executions |
+| resources | 10 | Pending drafts, approved not activated |
+| channels | 5 | Channel bridge status |
+| logging | 5 | Sistema de logs operacional |
+| database | 10 | Conexión, latencia |
+
+### Status
+| Estado | Condición |
+|--------|-----------|
+| `healthy` | Score ≥ 80 y 0 critical issues |
+| `degraded` | Score < 80 o warnings |
+| `critical` | Score < 50 o critical issues > 0 |
+
+### API Endpoints
+```
+GET /api/system/diagnostics  - Reporte completo de salud
+GET /api/system/readiness    - Checklist de producción
+GET /api/system/issues       - Issues críticos
+GET /api/system/metrics      - Snapshot de métricas
+```
+
+### Tests
+- `tests/systemDiagnostics.test.ts` - 26 tests
+
+## 15. Próximos Pasos
+
+1. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
+2. Test integración end-to-end
+3. PostgreSQL si producción real
+4. Rate limiting
+5. Probar Telegram real
+6. Implementar canales adicionales (web, api)
 
 ---
 

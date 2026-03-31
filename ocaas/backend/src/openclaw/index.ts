@@ -1,9 +1,11 @@
 export * from './types.js';
+// NOTE: Gateway export kept for backwards compatibility and for getDiagnostic()
+// New code should use getOpenClawAdapter() from integrations/openclaw
 export { OpenClawGateway, getGateway } from './gateway.js';
 export { SessionManager, getSessionManager } from './session.js';
 export { WorkspaceSync, getWorkspaceSync } from './sync.js';
 
-import { getGateway } from './gateway.js';
+import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
 import { getSessionManager } from './session.js';
 import { getWorkspaceSync } from './sync.js';
 import { createLogger } from '../utils/logger.js';
@@ -11,11 +13,11 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('openclaw');
 
 export async function initOpenClaw(): Promise<boolean> {
-  const gateway = getGateway();
+  const adapter = getOpenClawAdapter();
   const sync = getWorkspaceSync();
 
-  // Try to connect to gateway
-  const connected = await gateway.connect();
+  // Try to connect via adapter
+  const connected = await adapter.initialize();
 
   // Sync workspace regardless of gateway status
   try {

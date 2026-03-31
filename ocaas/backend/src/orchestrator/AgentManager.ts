@@ -1,10 +1,10 @@
-import { createLogger } from '../utils/logger.js';
+import { orchestratorLogger } from '../utils/logger.js';
 import { getServices } from '../services/index.js';
 import { getSessionManager } from '../openclaw/index.js';
 import { AGENT_STATUS } from '../config/constants.js';
 import type { AgentDTO } from '../types/domain.js';
 
-const logger = createLogger('AgentManager');
+const logger = orchestratorLogger.child({ component: 'AgentManager' });
 
 export class AgentManager {
   async spawnAgent(agentId: string, initialPrompt?: string): Promise<boolean> {

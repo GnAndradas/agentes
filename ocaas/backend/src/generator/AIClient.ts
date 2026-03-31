@@ -1,4 +1,4 @@
-import { getGateway } from '../openclaw/gateway.js';
+import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
 import { createLogger } from '../utils/logger.js';
 import { GenerationError } from '../utils/errors.js';
 import { parseJsonFromLLM } from '../utils/helpers.js';
@@ -49,7 +49,7 @@ export class AIClient {
    */
   async isAvailable(): Promise<boolean> {
     try {
-      const status = await getGateway().getQuickStatus();
+      const status = await getOpenClawAdapter().getStatus();
       return status.rest.reachable && status.rest.authenticated;
     } catch {
       return false;
@@ -61,7 +61,7 @@ export class AIClient {
    * Does NOT guarantee connectivity - use isAvailable() for real check.
    */
   isConfigured(): boolean {
-    return getGateway().isConfigured();
+    return getOpenClawAdapter().isConfigured();
   }
 
   /**
@@ -74,20 +74,20 @@ export class AIClient {
    * if the gateway is available. This avoids blocking on stale cached state.
    */
   async generate<T>(request: AIGenerationRequest): Promise<AIGenerationResponse<T>> {
-    const gateway = getGateway();
+    const adapter = getOpenClawAdapter();
 
     // No precheck - let the actual request determine connectivity
     const systemPrompt = this.buildSystemPrompt(request.type);
     const userPrompt = this.buildUserPrompt(request);
 
-    const result = await gateway.generate({
+    const result = await adapter.generate({
       systemPrompt,
       userPrompt,
       maxTokens: 8192, // Increased for larger generations
     });
 
     if (!result.success || !result.content) {
-      throw new GenerationError(`Generation failed: ${result.error ?? 'No content returned'}`);
+      throw new GenerationError(`Generation failed: ${result.error?.message ?? 'No content returned'}`);
     }
 
     // Parse JSON from LLM response (handles markdown fences, etc.)

@@ -133,31 +133,22 @@ export class AgentGenerator {
 
       await generationService.markGenerated(generation.id, generatedContent, `agents/${request.name}`);
 
-      // Respect approval policy based on source
-      if (this.requiresApproval(source)) {
-        await generationService.markPendingApproval(generation.id, {
-          valid: true,
-          warnings: validation.warnings,
-          type: agentType,
-          capabilitiesCount: capabilities.length,
-          generatedBy,
-        });
-        logger.info({
-          generationId: generation.id,
-          name: request.name,
-          type: agentType,
-          generatedBy,
-        }, 'Agent generation completed - pending approval');
-      } else {
-        // API source (human) - auto-approve
-        await generationService.approve(generation.id, 'api-auto');
-        logger.info({
-          generationId: generation.id,
-          name: request.name,
-          type: agentType,
-          generatedBy,
-        }, 'Agent generation completed - auto-approved (human source)');
-      }
+      // Always go to pending_approval first (required by FSM)
+      await generationService.markPendingApproval(generation.id, {
+        valid: true,
+        warnings: validation.warnings,
+        type: agentType,
+        capabilitiesCount: capabilities.length,
+        generatedBy,
+      });
+
+      logger.info({
+        generationId: generation.id,
+        name: request.name,
+        type: agentType,
+        generatedBy,
+        requiresApproval: this.requiresApproval(source),
+      }, 'Agent generation completed');
 
       return {
         files: [],

@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import { createLogger } from '../utils/logger.js';
+import { orchestratorLogger } from '../utils/logger.js';
 import { getServices } from '../services/index.js';
 import { getTaskAnalyzer } from './TaskAnalyzer.js';
 import { getAutonomyConfig } from '../config/autonomy.js';
@@ -7,7 +7,7 @@ import { EVENT_TYPE } from '../config/constants.js';
 import type { TaskDTO } from '../types/domain.js';
 import type { TaskAnalysis, SubtaskSuggestion } from './types.js';
 
-const logger = createLogger('TaskDecomposer');
+const logger = orchestratorLogger.child({ component: 'TaskDecomposer' });
 
 // Configuration
 const MIN_CONFIDENCE_FOR_DECOMPOSITION = 0.6;

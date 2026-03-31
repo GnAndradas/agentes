@@ -1,25 +1,24 @@
-import { createLogger } from '../utils/logger.js';
-import { getGateway } from './gateway.js';
+import { integrationLogger, logError } from '../utils/logger.js';
+import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
 import { getServices } from '../services/index.js';
 import { getFeedbackService, type FeedbackType } from '../orchestrator/feedback/index.js';
 import { AGENT_STATUS } from '../config/constants.js';
-import type { SpawnOptions, SendOptions } from './types.js';
 
-const logger = createLogger('SessionManager');
+const logger = integrationLogger.child({ component: 'SessionManager' });
 
 export class SessionManager {
   private activeSessions = new Map<string, string>(); // agentId -> sessionId
 
-  async spawnAgent(agentId: string, prompt: string, options?: Partial<SpawnOptions>): Promise<string | null> {
+  async spawnAgent(agentId: string, prompt: string, options?: Partial<{ taskId?: string; tools?: string[]; skills?: string[]; config?: Record<string, unknown> }>): Promise<string | null> {
     const { agentService, skillService, toolService } = getServices();
-    const gateway = getGateway();
+    const adapter = getOpenClawAdapter();
 
     try {
       const agent = await agentService.getById(agentId);
       const skills = await skillService.getAgentSkills(agentId);
       const tools = await toolService.getAgentTools(agentId);
 
-      const result = await gateway.spawn({
+      const result = await adapter.executeAgent({
         agentId,
         prompt,
         skills: skills.map(s => s.name),
@@ -50,8 +49,8 @@ export class SessionManager {
       return null;
     }
 
-    const gateway = getGateway();
-    const result = await gateway.send({
+    const adapter = getOpenClawAdapter();
+    const result = await adapter.sendTask({
       sessionId,
       message,
       data,
@@ -71,8 +70,8 @@ export class SessionManager {
       return true;
     }
 
-    const gateway = getGateway();
-    const success = await gateway.terminate(sessionId);
+    const adapter = getOpenClawAdapter();
+    const success = await adapter.terminateSession(sessionId);
 
     if (success) {
       this.activeSessions.delete(agentId);
@@ -92,11 +91,19 @@ export class SessionManager {
     return this.activeSessions.has(agentId);
   }
 
+  /**
+   * Get count of active sessions
+   */
+  getActiveSessionCount(): number {
+    return this.activeSessions.size;
+  }
+
   async syncSessions(): Promise<void> {
-    const gateway = getGateway();
+    const adapter = getOpenClawAdapter();
     const { agentService } = getServices();
 
-    const remoteSessions = await gateway.listSessions();
+    const result = await adapter.listSessions();
+    const remoteSessions = result.sessions;
     const agents = await agentService.getActive();
 
     // Create a set of active session IDs for fast lookup

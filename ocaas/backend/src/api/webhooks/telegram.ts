@@ -178,7 +178,7 @@ async function handleGenerationApproval(
     logger.info({ generationId, type: result.generation?.type, respondedBy }, 'Generation approved and activated via Telegram');
     await answerCallback(callbackQueryId, `${result.generation?.type ?? 'recurso'} aprobado y activado`);
   } else if (action === 'reject') {
-    const result = await activationWorkflow.rejectGeneration(generationId, respondedBy, 'Rejected via Telegram');
+    const result = await activationWorkflow.rejectGeneration(generationId, `Rejected via Telegram by ${respondedBy}`);
 
     if (!result.success) {
       logger.warn({ generationId, error: result.error }, 'Generation rejection failed via Telegram');

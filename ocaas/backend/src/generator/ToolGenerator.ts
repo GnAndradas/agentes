@@ -128,30 +128,21 @@ export class ToolGenerator {
       const targetPath = `tools/${request.name}.${toolType}`;
       await generationService.markGenerated(generation.id, generatedContent, targetPath);
 
-      // Respect approval policy based on source
-      if (this.requiresApproval(source)) {
-        await generationService.markPendingApproval(generation.id, {
-          valid: true,
-          warnings: validation.warnings,
-          type: toolType,
-          generatedBy,
-        });
-        logger.info({
-          generationId: generation.id,
-          name: request.name,
-          type: toolType,
-          generatedBy,
-        }, 'Tool generation completed - pending approval');
-      } else {
-        // API source (human) - auto-approve
-        await generationService.approve(generation.id, 'api-auto');
-        logger.info({
-          generationId: generation.id,
-          name: request.name,
-          type: toolType,
-          generatedBy,
-        }, 'Tool generation completed - auto-approved (human source)');
-      }
+      // Always go to pending_approval first (required by FSM)
+      await generationService.markPendingApproval(generation.id, {
+        valid: true,
+        warnings: validation.warnings,
+        type: toolType,
+        generatedBy,
+      });
+
+      logger.info({
+        generationId: generation.id,
+        name: request.name,
+        type: toolType,
+        generatedBy,
+        requiresApproval: this.requiresApproval(source),
+      }, 'Tool generation completed');
 
       return {
         files: [{ path: `${request.name}.${toolType}`, content }],

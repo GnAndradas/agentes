@@ -133,30 +133,21 @@ export class SkillGenerator {
       const targetPath = `skills/${request.name}`;
       await generationService.markGenerated(generation.id, generatedContent, targetPath);
 
-      // Respect approval policy based on source
-      if (this.requiresApproval(source)) {
-        await generationService.markPendingApproval(generation.id, {
-          valid: true,
-          warnings: validation.warnings,
-          filesCount: files.length,
-          generatedBy,
-        });
-        logger.info({
-          generationId: generation.id,
-          name: request.name,
-          fileCount: files.length,
-          generatedBy,
-        }, 'Skill generation completed - pending approval');
-      } else {
-        // API source (human) - auto-approve
-        await generationService.approve(generation.id, 'api-auto');
-        logger.info({
-          generationId: generation.id,
-          name: request.name,
-          fileCount: files.length,
-          generatedBy,
-        }, 'Skill generation completed - auto-approved (human source)');
-      }
+      // Always go to pending_approval first (required by FSM)
+      await generationService.markPendingApproval(generation.id, {
+        valid: true,
+        warnings: validation.warnings,
+        filesCount: files.length,
+        generatedBy,
+      });
+
+      logger.info({
+        generationId: generation.id,
+        name: request.name,
+        fileCount: files.length,
+        generatedBy,
+        requiresApproval: this.requiresApproval(source),
+      }, 'Skill generation completed');
 
       return {
         files,

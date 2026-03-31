@@ -1,5 +1,5 @@
 import { config } from '../config/index.js';
-import { createLogger } from '../utils/logger.js';
+import { integrationLogger, logError } from '../utils/logger.js';
 import { OpenClawError } from '../utils/errors.js';
 import type {
   GatewayStatus,
@@ -15,7 +15,7 @@ import type {
 } from './types.js';
 import WebSocket from 'ws';
 
-const logger = createLogger('OpenClawGateway');
+const logger = integrationLogger.child({ component: 'OpenClawGateway' });
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const GENERATION_TIMEOUT = 120000; // 2 minutes for LLM generation

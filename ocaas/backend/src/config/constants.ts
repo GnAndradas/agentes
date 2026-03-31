@@ -136,6 +136,40 @@ export const EVENT_TYPE = {
   MANUAL_RESOURCE_ACTIVATED: 'manual_resource.activated',
   MANUAL_RESOURCE_DEACTIVATED: 'manual_resource.deactivated',
   MANUAL_RESOURCE_FAILED: 'manual_resource.failed',
+
+  // Task retry loop events (resource creation → task retry)
+  TASK_MISSING_RESOURCE: 'task.missing_resource',
+  TASK_RETRYING: 'task.retrying',
+  TASK_RETRY_FAILED: 'task.retry_failed',
+  TASK_RETRY_EXHAUSTED: 'task.retry_exhausted',
+
+  // Channel bridge events (external channels → OCAAS)
+  CHANNEL_INGEST: 'channel.ingest',
+  CHANNEL_RESPONSE_READY: 'channel.response_ready',
+
+  // Organizational events (hierarchy, delegation, escalation)
+  ORG_TASK_DELEGATED: 'org.task_delegated',
+  ORG_TASK_SPLIT: 'org.task_split',
+  ORG_TASK_ESCALATED: 'org.task_escalated',
+  ORG_HUMAN_NOTIFIED: 'org.human_notified',
+  ORG_POLICY_APPLIED: 'org.policy_applied',
+
+  // Resilience events (fault tolerance, recovery, checkpoints)
+  EXECUTION_CHECKPOINTED: 'resilience.execution_checkpointed',
+  EXECUTION_LEASE_ACQUIRED: 'resilience.lease_acquired',
+  EXECUTION_LEASE_RELEASED: 'resilience.lease_released',
+  EXECUTION_LEASE_EXPIRED: 'resilience.lease_expired',
+  TASK_PAUSED: 'resilience.task_paused',
+  TASK_RESUMED: 'resilience.task_resumed',
+  TASK_RECOVERY_STARTED: 'resilience.recovery_started',
+  TASK_RECOVERY_COMPLETED: 'resilience.recovery_completed',
+  TASK_RECOVERY_FAILED: 'resilience.recovery_failed',
+  ORPHAN_EXECUTION_DETECTED: 'resilience.orphan_detected',
+  CIRCUIT_BREAKER_OPENED: 'resilience.circuit_opened',
+  CIRCUIT_BREAKER_CLOSED: 'resilience.circuit_closed',
+  HEALTH_STATUS_CHANGED: 'resilience.health_changed',
+  SYSTEM_DEGRADED: 'resilience.system_degraded',
+  SYSTEM_RECOVERED: 'resilience.system_recovered',
 } as const;
 
 export type EventType = typeof EVENT_TYPE[keyof typeof EVENT_TYPE];

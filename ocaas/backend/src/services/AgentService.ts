@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { createLogger } from '../utils/logger.js';
+import { systemLogger, logAuditEvent } from '../utils/logger.js';
 import { NotFoundError, ForbiddenError } from '../utils/errors.js';
 import { nowTimestamp, parseJsonSafe } from '../utils/helpers.js';
 import { EVENT_TYPE, AGENT_STATUS } from '../config/constants.js';
@@ -9,7 +9,7 @@ import { canCreateAgentAutonomously, requiresApprovalForAgentCreation } from '..
 import type { EventService } from './EventService.js';
 import type { AgentDTO, AgentStatus, AgentType } from '../types/domain.js';
 
-const logger = createLogger('AgentService');
+const logger = systemLogger.child({ component: 'AgentService' });
 
 export type AgentCreationSource = 'api' | 'system' | 'generation';
 
@@ -87,6 +87,16 @@ export class AgentService {
 
     logger.info({ id, name: input.name, source }, 'Agent created');
 
+    // Audit log for agent creation
+    logAuditEvent({
+      action: 'agent.create',
+      actor: source === 'api' ? 'user' : 'system',
+      resourceType: 'agent',
+      resourceId: id,
+      outcome: 'success',
+      details: { name: input.name, type: input.type ?? 'general', source },
+    });
+
     await this.eventService.emit({
       type: EVENT_TYPE.AGENT_CREATED,
       category: 'agent',
@@ -132,6 +142,16 @@ export class AgentService {
   async delete(id: string): Promise<void> {
     const existing = await this.getById(id);
     await db.delete(schema.agents).where(eq(schema.agents.id, id));
+
+    // Audit log for agent deletion
+    logAuditEvent({
+      action: 'agent.delete',
+      actor: 'user',
+      resourceType: 'agent',
+      resourceId: id,
+      outcome: 'success',
+      details: { name: existing.name },
+    });
 
     await this.eventService.emit({
       type: EVENT_TYPE.AGENT_DELETED,

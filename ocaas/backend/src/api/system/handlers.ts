@@ -8,6 +8,10 @@ import {
   loadAutonomyConfig,
 } from '../../config/autonomy.js';
 import { getTaskRouter, getFeedbackService } from '../../orchestrator/index.js';
+import { getOpenClawAdapter } from '../../integrations/openclaw/index.js';
+import { getSystemDiagnosticsService } from '../../system/index.js';
+// NOTE: Gateway import kept ONLY for getDiagnostic() which needs full diagnostic object
+// All other methods use the adapter
 import { getGateway } from '../../openclaw/gateway.js';
 
 /**
@@ -38,13 +42,13 @@ export async function gatewayDiagnostic(_req: FastifyRequest, reply: FastifyRepl
 /**
  * Quick gateway status - for StatusBar polling
  *
- * HONEST: Uses getQuickStatus() which makes REAL requests.
+ * HONEST: Uses getStatus() which makes REAL requests.
  * Does NOT use cached state like the old isConnected().
  */
 export async function gatewayStatus(_req: FastifyRequest, reply: FastifyReply) {
   try {
-    const gateway = getGateway();
-    const status = await gateway.getQuickStatus();
+    const adapter = getOpenClawAdapter();
+    const status = await adapter.getStatus();
 
     return reply.send({
       data: status,
@@ -129,8 +133,8 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
     const taskRouter = getTaskRouter();
     const orchestratorStatus = taskRouter.getStatus();
 
-    // Get gateway status
-    const gateway = getGateway();
+    // Get gateway status via adapter
+    const adapter = getOpenClawAdapter();
 
     return reply.send({
       agents: agentStats,
@@ -145,8 +149,8 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
         sequentialMode: orchestratorStatus.sequentialMode,
       },
       gateway: {
-        restConnected: gateway.isConnected(),
-        wsConnected: gateway.isWsConnected(),
+        restConnected: adapter.isConnected(),
+        wsConnected: adapter.isWsConnected(),
       },
       system: {
         uptime: process.uptime() * 1000,
@@ -245,6 +249,80 @@ export async function getOrchestratorStatus(_req: FastifyRequest, reply: Fastify
         autonomyLevel: autonomy.level,
       },
     });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// =============================================================================
+// SYSTEM DIAGNOSTICS
+// =============================================================================
+
+/**
+ * GET /api/system/diagnostics
+ * Full system health diagnostics
+ */
+export async function systemDiagnostics(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const diagnostics = getSystemDiagnosticsService();
+    const result = await diagnostics.getSystemHealth();
+    return reply.send({ data: result });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/readiness
+ * Production readiness report
+ */
+export async function systemReadiness(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const diagnostics = getSystemDiagnosticsService();
+    const result = await diagnostics.getReadinessReport();
+    return reply.send({ data: result });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/issues
+ * Get only critical issues and warnings
+ */
+export async function systemIssues(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const diagnostics = getSystemDiagnosticsService();
+    const [critical, warnings] = await Promise.all([
+      diagnostics.getCriticalIssues(),
+      diagnostics.getWarnings(),
+    ]);
+    return reply.send({
+      data: {
+        critical,
+        warnings,
+        totalCritical: critical.length,
+        totalWarnings: warnings.length,
+      },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/metrics
+ * Current system metrics snapshot
+ */
+export async function systemMetrics(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const diagnostics = getSystemDiagnosticsService();
+    const result = await diagnostics.getMetrics();
+    return reply.send({ data: result });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
     return reply.status(statusCode).send(body);

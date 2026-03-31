@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import { createLogger } from '../utils/logger.js';
+import { orchestratorLogger, logError } from '../utils/logger.js';
 import { getServices } from '../services/index.js';
 import { getAgentGenerator } from '../generator/AgentGenerator.js';
 import { getSkillGenerator } from '../generator/SkillGenerator.js';
@@ -13,7 +13,7 @@ import {
 import { EVENT_TYPE } from '../config/constants.js';
 import type { SuggestedAction, MissingCapabilityReport, CapabilitySuggestion } from './types.js';
 
-const logger = createLogger('ActionExecutor');
+const logger = orchestratorLogger.child({ component: 'ActionExecutor' });
 
 // Maximum retries for a task waiting for resource generation
 const MAX_GENERATION_RETRIES = 3;

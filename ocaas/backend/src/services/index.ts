@@ -5,6 +5,8 @@ import { SkillService } from './SkillService.js';
 import { ToolService } from './ToolService.js';
 import { PermissionService } from './PermissionService.js';
 import { GenerationService } from './GenerationService.js';
+import { ManualResourceService } from './ManualResourceService.js';
+import { ChannelService } from './ChannelService.js';
 import { ApprovalService } from '../approval/ApprovalService.js';
 import { NotificationService } from '../notifications/NotificationService.js';
 import {
@@ -24,6 +26,8 @@ export interface Services {
   toolService: ToolService;
   permissionService: PermissionService;
   generationService: GenerationService;
+  manualResourceService: ManualResourceService;
+  channelService: ChannelService;
   approvalService: ApprovalService;
   notificationService: NotificationService;
   activationWorkflow: ActivationWorkflowService;
@@ -41,6 +45,13 @@ export function initServices(): Services {
   const toolService = new ToolService(eventService);
   const permissionService = new PermissionService();
   const generationService = new GenerationService(eventService);
+  const manualResourceService = new ManualResourceService(
+    eventService,
+    agentService,
+    skillService,
+    toolService
+  );
+  const channelService = new ChannelService(taskService, eventService);
   const approvalService = new ApprovalService(eventService);
   const notificationService = new NotificationService(
     eventService,
@@ -80,6 +91,8 @@ export function initServices(): Services {
     toolService,
     permissionService,
     generationService,
+    manualResourceService,
+    channelService,
     approvalService,
     notificationService,
     activationWorkflow,
@@ -101,6 +114,8 @@ export {
   ToolService,
   PermissionService,
   GenerationService,
+  ManualResourceService,
+  ChannelService,
   ApprovalService,
   NotificationService,
   ActivationWorkflowService,

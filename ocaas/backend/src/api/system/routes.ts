@@ -20,4 +20,10 @@ export async function systemRoutes(fastify: FastifyInstance) {
   fastify.get('/system/autonomy', h.getAutonomy);
   fastify.put('/system/autonomy', h.updateAutonomy);
   fastify.get('/system/orchestrator', h.getOrchestratorStatus);
+
+  // System diagnostics
+  fastify.get('/system/diagnostics', h.systemDiagnostics);
+  fastify.get('/system/readiness', h.systemReadiness);
+  fastify.get('/system/issues', h.systemIssues);
+  fastify.get('/system/metrics', h.systemMetrics);
 }

@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 import { eq, and, lt, isNotNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { createLogger } from '../utils/logger.js';
+import { auditLogger, logAuditEvent } from '../utils/logger.js';
 import { nowTimestamp, parseJsonSafe } from '../utils/helpers.js';
 import { NotFoundError } from '../utils/errors.js';
 import { getAutonomyConfig } from '../config/autonomy.js';
@@ -15,7 +15,7 @@ import type {
   ApprovalResponse,
 } from './types.js';
 
-const logger = createLogger('ApprovalService');
+const logger = auditLogger.child({ component: 'ApprovalService' });
 
 function rowToDTO(row: typeof schema.approvals.$inferSelect): ApprovalDTO {
   return {
@@ -154,6 +154,17 @@ export class ApprovalService {
 
     logger.info({ id, respondedBy }, 'Approval approved');
 
+    // Audit log for approval
+    logAuditEvent({
+      action: 'approval.approve',
+      actor: 'user',
+      actorId: respondedBy,
+      resourceType: 'approval',
+      resourceId: id,
+      outcome: 'success',
+      details: { type: approval.type, targetResourceId: approval.resourceId },
+    });
+
     await this.eventService.emit({
       type: EVENT_TYPE.SYSTEM_INFO,
       category: 'approval',
@@ -192,6 +203,18 @@ export class ApprovalService {
     const approval = await this.getById(id);
 
     logger.info({ id, respondedBy, reason }, 'Approval rejected');
+
+    // Audit log for rejection
+    logAuditEvent({
+      action: 'approval.reject',
+      actor: 'user',
+      actorId: respondedBy,
+      resourceType: 'approval',
+      resourceId: id,
+      outcome: 'success',
+      reason,
+      details: { type: approval.type, targetResourceId: approval.resourceId },
+    });
 
     await this.eventService.emit({
       type: EVENT_TYPE.SYSTEM_INFO,

@@ -1,11 +1,11 @@
-import { createLogger } from '../utils/logger.js';
-import { getGateway } from '../openclaw/index.js';
+import { orchestratorLogger } from '../utils/logger.js';
+import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
 import { getServices } from '../services/index.js';
 import { EVENT_TYPE } from '../config/constants.js';
 import type { TaskDTO } from '../types/domain.js';
 import type { TaskAnalysis, SubtaskSuggestion } from './types.js';
 
-const logger = createLogger('TaskAnalyzer');
+const logger = orchestratorLogger.child({ component: 'TaskAnalyzer' });
 
 const ANALYSIS_SYSTEM_PROMPT = `You are an expert task analysis assistant for an AI agent orchestration system.
 Your job is to deeply analyze tasks and provide structured information that helps:
@@ -78,10 +78,10 @@ export class TaskAnalyzer {
       return cached;
     }
 
-    const gateway = getGateway();
+    const adapter = getOpenClawAdapter();
     const { eventService } = getServices();
 
-    if (!gateway.isConnected()) {
+    if (!adapter.isConnected()) {
       logger.warn({ taskId: task.id }, 'Gateway not connected, cannot analyze task');
       await eventService.emit({
         type: EVENT_TYPE.TASK_ANALYSIS_FAILED,
@@ -108,19 +108,20 @@ export class TaskAnalyzer {
     const userPrompt = this.buildAnalysisPrompt(task);
 
     try {
-      const result = await gateway.generate({
+      const result = await adapter.generate({
         systemPrompt: ANALYSIS_SYSTEM_PROMPT,
         userPrompt,
         maxTokens: 1024,
       });
 
       if (!result.success || !result.content) {
+        const errorMsg = result.error?.message || 'No content returned';
         logger.warn({ taskId: task.id, error: result.error }, 'AI analysis failed');
         await eventService.emit({
           type: EVENT_TYPE.TASK_ANALYSIS_FAILED,
           category: 'orchestrator',
           severity: 'warning',
-          message: `Task analysis failed: ${result.error || 'No content returned'}`,
+          message: `Task analysis failed: ${errorMsg}`,
           resourceType: 'task',
           resourceId: task.id,
           data: { error: result.error },

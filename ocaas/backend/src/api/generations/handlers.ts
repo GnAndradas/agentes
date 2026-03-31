@@ -160,7 +160,6 @@ export async function reject(req: FastifyRequest<IdParam>, reply: FastifyReply) 
 
     const result = await activationWorkflow.rejectGeneration(
       generationId,
-      parsed.data.rejectedBy,
       parsed.data.reason
     );
 

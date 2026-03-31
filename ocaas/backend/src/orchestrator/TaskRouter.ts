@@ -1,11 +1,13 @@
 import { nanoid } from 'nanoid';
-import { createLogger } from '../utils/logger.js';
+import { orchestratorLogger, createTaskLogger, logError } from '../utils/logger.js';
+import type { EnhancedLogger } from '../utils/logger.js';
 import { getServices } from '../services/index.js';
 import { getSessionManager } from '../openclaw/index.js';
 import { QueueManager } from './QueueManager.js';
 import { getDecisionEngine } from './DecisionEngine.js';
 import { getActionExecutor } from './ActionExecutor.js';
 import { getTaskDecomposer } from './TaskDecomposer.js';
+import { getResourceRetryService } from './ResourceRetryService.js';
 import { getFeedbackService } from './feedback/index.js';
 import { DEFAULT_ORCHESTRATOR_CONFIG } from './types.js';
 import {
@@ -17,7 +19,7 @@ import type { TaskDTO } from '../types/domain.js';
 import type { OrchestratorConfig } from './types.js';
 import type { CreateTaskInput } from '../services/TaskService.js';
 
-const logger = createLogger('TaskRouter');
+const logger = orchestratorLogger.child({ component: 'TaskRouter' });
 
 export class TaskRouter {
   private queue: QueueManager;
@@ -103,6 +105,9 @@ export class TaskRouter {
 
     // Get fresh task data
     const task = await taskService.getById(queued.task.id);
+
+    // Create task-scoped logger for correlation
+    const taskLog = createTaskLogger('TaskRouter', task.id);
 
     // Check if dependencies are met
     const canRun = await taskService.areDependenciesMet(task);
@@ -223,10 +228,11 @@ export class TaskRouter {
     if (!assignment) {
       // No agent found - check if we should execute suggested actions
       const actionExecutor = getActionExecutor();
+      const resourceRetryService = getResourceRetryService();
 
-      // Check if there's already a pending generation for this task
-      if (actionExecutor.hasPendingGeneration(task.id)) {
-        logger.debug({ taskId: task.id }, 'Task has pending generation, waiting');
+      // Check if there's already a pending generation or resource creation for this task
+      if (actionExecutor.hasPendingGeneration(task.id) || resourceRetryService.hasPendingResource(task.id)) {
+        logger.debug({ taskId: task.id }, 'Task has pending resource creation, waiting');
         return false;
       }
 
@@ -256,7 +262,24 @@ export class TaskRouter {
           },
         });
 
-        // Execute suggested actions (manual mode already returned early)
+        // Try ResourceRetryService first (creates drafts via ManualResourceService)
+        const { draftIds, requiresHuman } = await resourceRetryService.handleMissingResource(
+          task.id,
+          decision.missingReport
+        );
+
+        if (draftIds.length > 0) {
+          logger.info({
+            taskId: task.id,
+            draftIds,
+            requiresHuman,
+          }, 'Resource drafts created for task');
+
+          // Task stays queued waiting for resource activation
+          return false;
+        }
+
+        // Fallback: Try AI generation via ActionExecutor (legacy path)
         {
           const results = await actionExecutor.executeActions(
             task.id,
@@ -357,8 +380,9 @@ export class TaskRouter {
         // Task completed
         await taskService.complete(task.id, { response });
         this.queue.markDone(task.id);
-        // Clear any feedback for this task
+        // Clear any feedback and pending retries for this task
         await getFeedbackService().clearForTask(task.id);
+        getResourceRetryService().clearForTask(task.id);
 
         // Check if this is a subtask and parent needs to be completed
         if (task.parentTaskId) {
@@ -373,7 +397,12 @@ export class TaskRouter {
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      logger.error({ err, taskId: task.id }, 'Task processing failed');
+      logError(taskLog, err, {
+        taskId: task.id,
+        errorType: 'task_processing_failed',
+        recoverable: task.retryCount < task.maxRetries,
+        suggestedAction: task.retryCount < task.maxRetries ? 'retry' : 'fail',
+      });
 
       // Use task's own retry settings
       if (task.retryCount < task.maxRetries) {
@@ -387,8 +416,9 @@ export class TaskRouter {
       } else {
         await taskService.fail(task.id, message);
         this.queue.markDone(task.id);
-        // Clear any feedback for this task
+        // Clear any feedback and pending retries for this task
         await getFeedbackService().clearForTask(task.id);
+        getResourceRetryService().clearForTask(task.id);
 
         // Check if this is a subtask and parent needs to be marked as failed
         if (task.parentTaskId) {

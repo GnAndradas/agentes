@@ -77,6 +77,7 @@ export const EVENT_TYPE = {
 
   GENERATION_STARTED: 'generation.started',
   GENERATION_COMPLETED: 'generation.completed',
+  GENERATION_PENDING_APPROVAL: 'generation.pending_approval',
   GENERATION_FAILED: 'generation.failed',
   GENERATION_APPROVED: 'generation.approved',
   GENERATION_REJECTED: 'generation.rejected',
@@ -118,6 +119,23 @@ export const EVENT_TYPE = {
   SUBTASK_STARTED: 'task.subtask_started',
   SUBTASK_COMPLETED: 'task.subtask_completed',
   PARENT_TASK_COMPLETED: 'task.parent_completed',
+
+  // Workflow events (approval → generation → activation)
+  WORKFLOW_STARTED: 'workflow.started',
+  WORKFLOW_APPROVED: 'workflow.approved',
+  WORKFLOW_ACTIVATED: 'workflow.activated',
+  WORKFLOW_REJECTED: 'workflow.rejected',
+  WORKFLOW_FAILED: 'workflow.failed',
+
+  // Manual resource events
+  MANUAL_RESOURCE_CREATED: 'manual_resource.created',
+  MANUAL_RESOURCE_UPDATED: 'manual_resource.updated',
+  MANUAL_RESOURCE_SUBMITTED: 'manual_resource.submitted',
+  MANUAL_RESOURCE_APPROVED: 'manual_resource.approved',
+  MANUAL_RESOURCE_REJECTED: 'manual_resource.rejected',
+  MANUAL_RESOURCE_ACTIVATED: 'manual_resource.activated',
+  MANUAL_RESOURCE_DEACTIVATED: 'manual_resource.deactivated',
+  MANUAL_RESOURCE_FAILED: 'manual_resource.failed',
 } as const;
 
 export type EventType = typeof EVENT_TYPE[keyof typeof EVENT_TYPE];

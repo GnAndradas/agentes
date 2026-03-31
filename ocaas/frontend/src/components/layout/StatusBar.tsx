@@ -13,6 +13,10 @@ import {
   Trash2,
   Cpu,
   Terminal,
+  Zap,
+  Link,
+  Link2Off,
+  HelpCircle,
 } from 'lucide-react';
 import { systemApi } from '../../lib/api';
 import { useAppStore, type StatusActivity } from '../../stores/app';
@@ -60,7 +64,6 @@ function ActivityItem({ activity }: { activity: StatusActivity }) {
 export function StatusBar() {
   const {
     connected,
-    gatewayConnected,
     statusBarVisible,
     toggleStatusBar,
     activities,
@@ -70,14 +73,30 @@ export function StatusBar() {
     setMonitorOpen,
   } = useAppStore();
 
-  // Check gateway health periodically
-  useQuery({
+  // Check backend health periodically (OCAAS server)
+  const { data: backendHealthy } = useQuery({
     queryKey: ['system', 'health'],
     queryFn: async () => {
       try {
-        const result = await systemApi.health();
-        setGatewayConnected(true);
-        return result;
+        await systemApi.health();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    refetchInterval: 10000, // Every 10 seconds
+    retry: false,
+  });
+
+  // Check gateway status (OpenClaw) - HONEST: makes real requests
+  const { data: gatewayStatus } = useQuery({
+    queryKey: ['system', 'gateway'],
+    queryFn: async () => {
+      try {
+        const status = await systemApi.gatewayStatus();
+        // Update store with REST connection status
+        setGatewayConnected(status.rest.reachable && status.rest.authenticated);
+        return status;
       } catch {
         setGatewayConnected(false);
         return null;
@@ -86,6 +105,14 @@ export function StatusBar() {
     refetchInterval: 10000, // Every 10 seconds
     retry: false,
   });
+
+  // Derive status indicators from QuickStatus
+  const restOk = gatewayStatus?.rest.reachable && gatewayStatus?.rest.authenticated;
+  const hooksConfigured = gatewayStatus?.hooks.configured;
+  const hooksProbed = gatewayStatus?.hooks.probed;
+  const probeEnabled = gatewayStatus?.probe.enabled;
+  const probeTested = gatewayStatus?.probe.tested;
+  // OpenClaw WS status available via gatewayStatus?.websocket.connected if needed
 
   // Get orchestrator status
   const { data: orchestratorData } = useQuery({
@@ -130,35 +157,126 @@ export function StatusBar() {
       {/* Status bar */}
       <div className="flex items-center justify-between px-3 py-1 text-xs">
         <div className="flex items-center gap-4">
-          {/* WebSocket connection */}
-          <div className="flex items-center gap-1.5" title="WebSocket connection">
+          {/* WebSocket connection (OCAAS real-time) */}
+          <div className="flex items-center gap-1.5" title="WebSocket connection to OCAAS">
             {connected ? (
               <>
                 <Wifi className="w-3.5 h-3.5 text-green-400" />
-                <span className="text-dark-400">WS Connected</span>
+                <span className="text-dark-400">WS</span>
               </>
             ) : (
               <>
                 <WifiOff className="w-3.5 h-3.5 text-red-400" />
-                <span className="text-red-400">WS Disconnected</span>
+                <span className="text-red-400">WS Off</span>
               </>
             )}
           </div>
 
-          {/* Gateway connection */}
-          <div className="flex items-center gap-1.5" title="OpenClaw Gateway">
-            {gatewayConnected ? (
+          {/* Backend health (OCAAS server) */}
+          <div className="flex items-center gap-1.5" title="OCAAS Backend">
+            {backendHealthy ? (
               <>
-                <Server className="w-3.5 h-3.5 text-green-400" />
-                <span className="text-dark-400">Gateway OK</span>
+                <Zap className="w-3.5 h-3.5 text-green-400" />
+                <span className="text-dark-400">Backend</span>
               </>
             ) : (
               <>
-                <ServerOff className="w-3.5 h-3.5 text-yellow-400" />
-                <span className="text-yellow-400">Gateway Offline</span>
+                <Zap className="w-3.5 h-3.5 text-red-400" />
+                <span className="text-red-400">Backend Off</span>
               </>
             )}
           </div>
+
+          {/* OpenClaw REST API */}
+          <div
+            className="flex items-center gap-1.5"
+            title={
+              restOk
+                ? `OpenClaw REST OK (${gatewayStatus?.rest.latencyMs}ms)`
+                : gatewayStatus?.rest.error || 'OpenClaw REST disconnected'
+            }
+          >
+            {restOk ? (
+              <>
+                <Server className="w-3.5 h-3.5 text-green-400" />
+                <span className="text-dark-400">REST</span>
+              </>
+            ) : (
+              <>
+                <ServerOff className="w-3.5 h-3.5 text-red-400" />
+                <span className="text-red-400">REST Off</span>
+              </>
+            )}
+          </div>
+
+          {/* Hooks status - HONEST: shows configured vs probed */}
+          <div
+            className="flex items-center gap-1.5"
+            title={
+              hooksProbed
+                ? (gatewayStatus?.hooks.working ? 'Hooks working' : 'Hooks failed')
+                : hooksConfigured
+                  ? 'Hooks configured (not probed)'
+                  : 'Hooks not configured'
+            }
+          >
+            {hooksConfigured ? (
+              hooksProbed ? (
+                gatewayStatus?.hooks.working ? (
+                  <>
+                    <Link className="w-3.5 h-3.5 text-green-400" />
+                    <span className="text-dark-400">Hooks</span>
+                  </>
+                ) : (
+                  <>
+                    <Link2Off className="w-3.5 h-3.5 text-red-400" />
+                    <span className="text-red-400">Hooks Err</span>
+                  </>
+                )
+              ) : (
+                <>
+                  <HelpCircle className="w-3.5 h-3.5 text-yellow-400" />
+                  <span className="text-yellow-400">Hooks ?</span>
+                </>
+              )
+            ) : (
+              <>
+                <Link2Off className="w-3.5 h-3.5 text-dark-500" />
+                <span className="text-dark-500">No Hooks</span>
+              </>
+            )}
+          </div>
+
+          {/* Probe status - HONEST: shows if enabled and tested */}
+          {probeEnabled && (
+            <div
+              className="flex items-center gap-1.5"
+              title={
+                probeTested
+                  ? (gatewayStatus?.probe.working ? 'Generation probe OK' : `Probe failed: ${gatewayStatus?.probe.error}`)
+                  : 'Probe enabled (run diagnostic for full test)'
+              }
+            >
+              {probeTested ? (
+                gatewayStatus?.probe.working ? (
+                  <>
+                    <Cpu className="w-3.5 h-3.5 text-green-400" />
+                    <span className="text-dark-400">Probe</span>
+                  </>
+                ) : (
+                  <>
+                    <Cpu className="w-3.5 h-3.5 text-red-400" />
+                    <span className="text-red-400">Probe Err</span>
+                  </>
+                )
+              ) : (
+                <>
+                  <Cpu className="w-3.5 h-3.5 text-yellow-400" />
+                  <span className="text-yellow-400">Probe ?</span>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Orchestrator status */}
           {orchestratorData && (

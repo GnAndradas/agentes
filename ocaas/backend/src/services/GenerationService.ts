@@ -141,10 +141,32 @@ export class GenerationService {
       updatedAt: now,
     }).where(eq(schema.generations.id, id));
 
-    return this.getById(id);
+    const gen = await this.getById(id);
+
+    await this.eventService.emit({
+      type: EVENT_TYPE.GENERATION_PENDING_APPROVAL,
+      category: 'generation',
+      severity: 'warning',
+      message: `Generation '${gen.name}' awaiting approval`,
+      resourceType: 'generation',
+      resourceId: id,
+      data: { type: gen.type },
+    });
+
+    return gen;
   }
 
   async approve(id: string, approvedBy: string): Promise<GenerationDTO> {
+    // FSM check: can only approve from pending_approval
+    const current = await this.getById(id);
+    if (current.status !== GENERATION_STATUS.PENDING_APPROVAL) {
+      if (current.status === GENERATION_STATUS.APPROVED || current.status === GENERATION_STATUS.ACTIVE) {
+        logger.info({ id, status: current.status }, 'Generation already approved/active (idempotent)');
+        return current;
+      }
+      throw new ValidationError(`Cannot approve generation in status '${current.status}'. Expected 'pending_approval'.`);
+    }
+
     const now = nowTimestamp();
 
     await db.update(schema.generations).set({
@@ -170,6 +192,17 @@ export class GenerationService {
   }
 
   async reject(id: string, reason: string): Promise<GenerationDTO> {
+    // FSM check: can only reject from pending_approval or generated
+    const current = await this.getById(id);
+    const rejectableStatuses = [GENERATION_STATUS.PENDING_APPROVAL, GENERATION_STATUS.GENERATED];
+    if (!rejectableStatuses.includes(current.status as typeof rejectableStatuses[number])) {
+      if (current.status === GENERATION_STATUS.REJECTED) {
+        logger.info({ id }, 'Generation already rejected (idempotent)');
+        return current;
+      }
+      throw new ValidationError(`Cannot reject generation in status '${current.status}'.`);
+    }
+
     const now = nowTimestamp();
 
     await db.update(schema.generations).set({
@@ -196,8 +229,13 @@ export class GenerationService {
   async activate(id: string): Promise<GenerationDTO> {
     const gen = await this.getById(id);
 
+    // FSM check: can only activate from approved
     if (gen.status !== GENERATION_STATUS.APPROVED) {
-      throw new ValidationError('Can only activate approved generations');
+      if (gen.status === GENERATION_STATUS.ACTIVE) {
+        logger.info({ id }, 'Generation already active (idempotent)');
+        return gen;
+      }
+      throw new ValidationError(`Cannot activate generation in status '${gen.status}'. Expected 'approved'.`);
     }
 
     const now = nowTimestamp();
@@ -231,6 +269,21 @@ export class GenerationService {
   }
 
   async markFailed(id: string, errorMessage: string): Promise<GenerationDTO> {
+    // FSM guard: cannot mark terminal states as failed
+    const current = await this.getById(id);
+    const terminalStatuses = [GENERATION_STATUS.ACTIVE, GENERATION_STATUS.REJECTED, GENERATION_STATUS.FAILED];
+
+    if (terminalStatuses.includes(current.status as typeof terminalStatuses[number])) {
+      // Already in terminal state - idempotent for failed, skip for others
+      if (current.status === GENERATION_STATUS.FAILED) {
+        logger.debug({ id }, 'Generation already failed (idempotent)');
+        return current;
+      }
+      // Don't overwrite active or rejected with failed
+      logger.warn({ id, currentStatus: current.status }, 'Cannot mark terminal generation as failed');
+      return current;
+    }
+
     const now = nowTimestamp();
 
     await db.update(schema.generations).set({
@@ -241,7 +294,7 @@ export class GenerationService {
 
     const gen = await this.getById(id);
 
-    logger.error({ id, errorMessage }, 'Generation failed');
+    logger.error({ id, errorMessage, previousStatus: current.status }, 'Generation marked as failed');
 
     await this.eventService.emit({
       type: EVENT_TYPE.GENERATION_FAILED,
@@ -250,7 +303,7 @@ export class GenerationService {
       message: `Generation '${gen.name}' failed: ${errorMessage}`,
       resourceType: 'generation',
       resourceId: id,
-      data: { error: errorMessage },
+      data: { error: errorMessage, previousStatus: current.status },
     });
 
     return gen;

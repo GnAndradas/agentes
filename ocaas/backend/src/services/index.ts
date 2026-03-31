@@ -7,6 +7,14 @@ import { PermissionService } from './PermissionService.js';
 import { GenerationService } from './GenerationService.js';
 import { ApprovalService } from '../approval/ApprovalService.js';
 import { NotificationService } from '../notifications/NotificationService.js';
+import {
+  ActivationWorkflowService,
+  initActivationWorkflow,
+} from './ActivationWorkflowService.js';
+import { getAgentGenerator } from '../generator/AgentGenerator.js';
+import { getSkillGenerator } from '../generator/SkillGenerator.js';
+import { getToolGenerator } from '../generator/ToolGenerator.js';
+import type { GenerationType } from '../types/domain.js';
 
 export interface Services {
   eventService: EventService;
@@ -18,6 +26,7 @@ export interface Services {
   generationService: GenerationService;
   approvalService: ApprovalService;
   notificationService: NotificationService;
+  activationWorkflow: ActivationWorkflowService;
 }
 
 let instance: Services | null = null;
@@ -39,6 +48,30 @@ export function initServices(): Services {
     process.env.TELEGRAM_CHAT_ID
   );
 
+  // Central workflow service for approvals and activations
+  const activationWorkflow = initActivationWorkflow(
+    eventService,
+    generationService,
+    approvalService
+  );
+
+  // Configure the activation callback to dispatch to generators
+  activationWorkflow.setActivateCallback(async (generationId: string, type: GenerationType) => {
+    switch (type) {
+      case 'agent':
+        await getAgentGenerator().activate(generationId);
+        break;
+      case 'skill':
+        await getSkillGenerator().activate(generationId);
+        break;
+      case 'tool':
+        await getToolGenerator().activate(generationId);
+        break;
+      default:
+        throw new Error(`Unknown generation type: ${type}`);
+    }
+  });
+
   instance = {
     eventService,
     agentService,
@@ -49,6 +82,7 @@ export function initServices(): Services {
     generationService,
     approvalService,
     notificationService,
+    activationWorkflow,
   };
 
   return instance;
@@ -69,4 +103,5 @@ export {
   GenerationService,
   ApprovalService,
   NotificationService,
+  ActivationWorkflowService,
 };

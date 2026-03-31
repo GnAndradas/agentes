@@ -108,35 +108,32 @@ export async function remove(req: FastifyRequest<IdParam>, reply: FastifyReply) 
   }
 }
 
+/**
+ * Approve a generation using the central workflow service
+ * This ensures FSM enforcement and consistent activation
+ */
 export async function approve(req: FastifyRequest<IdParam>, reply: FastifyReply) {
   try {
     const parsed = ApproveSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Validation failed', details: parsed.error.flatten() });
     }
-    const { generationService } = getServices();
+
+    const { activationWorkflow, generationService } = getServices();
     const generationId = req.params.id;
 
-    // First approve the generation
-    const generation = await generationService.approve(generationId, parsed.data.approvedBy);
+    const result = await activationWorkflow.approveGeneration(generationId, parsed.data.approvedBy);
 
-    // Then automatically activate it (create the resource)
-    try {
-      switch (generation.type) {
-        case 'agent':
-          await getAgentGenerator().activate(generationId);
-          break;
-        case 'skill':
-          await getSkillGenerator().activate(generationId);
-          break;
-        case 'tool':
-          await getToolGenerator().activate(generationId);
-          break;
-      }
-      logger.info({ generationId, type: generation.type }, 'Generation approved and activated');
-    } catch (activationErr) {
-      // Log activation error but don't fail the approval
-      logger.error({ err: activationErr, generationId }, 'Failed to activate after approval');
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
+    }
+
+    if (result.alreadyProcessed) {
+      logger.info({ generationId }, 'Generation approve was idempotent (already processed)');
+    }
+
+    if (result.error) {
+      logger.warn({ generationId, error: result.error }, 'Generation approved but activation had issues');
     }
 
     // Return updated generation
@@ -148,14 +145,30 @@ export async function approve(req: FastifyRequest<IdParam>, reply: FastifyReply)
   }
 }
 
+/**
+ * Reject a generation using the central workflow service
+ */
 export async function reject(req: FastifyRequest<IdParam>, reply: FastifyReply) {
   try {
     const parsed = RejectSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Validation failed', details: parsed.error.flatten() });
     }
-    const { generationService } = getServices();
-    const data = await generationService.reject(req.params.id, parsed.data.reason);
+
+    const { activationWorkflow, generationService } = getServices();
+    const generationId = req.params.id;
+
+    const result = await activationWorkflow.rejectGeneration(
+      generationId,
+      parsed.data.rejectedBy,
+      parsed.data.reason
+    );
+
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
+    }
+
+    const data = await generationService.getById(generationId);
     return reply.send({ data });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
@@ -163,10 +176,26 @@ export async function reject(req: FastifyRequest<IdParam>, reply: FastifyReply) 
   }
 }
 
+/**
+ * Activate an approved generation using the central workflow service
+ */
 export async function activate(req: FastifyRequest<IdParam>, reply: FastifyReply) {
   try {
-    const { generationService } = getServices();
-    const data = await generationService.activate(req.params.id);
+    const { activationWorkflow, generationService } = getServices();
+    const generationId = req.params.id;
+
+    const result = await activationWorkflow.activateGeneration(generationId);
+
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
+    }
+
+    if (result.alreadyProcessed) {
+      logger.info({ generationId }, 'Generation activation was idempotent (already active)');
+    }
+
+    const data = await generationService.getById(generationId);
+    logger.info({ generationId, type: data.type }, 'Generation activated via API');
     return reply.send({ data });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);

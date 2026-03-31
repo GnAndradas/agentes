@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Validator } from '../src/generator/Validator.js';
+import type { GeneratedFile } from '../src/generator/types.js';
 
 describe('Validator', () => {
   let validator: Validator;
@@ -9,55 +10,78 @@ describe('Validator', () => {
   });
 
   describe('validateSkill', () => {
-    it('should validate a valid skill', () => {
-      const result = validator.validateSkill({
-        name: 'test-skill',
-        implementation: 'module.exports = function() { return "ok"; }',
-        inputSchema: {},
-      });
+    it('should validate a valid skill with required files', () => {
+      const files: GeneratedFile[] = [
+        { path: 'SKILL.md', content: '# Test Skill\n\nDescription here' },
+        { path: 'agent-instructions.md', content: '# Instructions\n\nHow to use' },
+      ];
+      const result = validator.validateSkill(files);
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
 
-    it('should reject skill with invalid name', () => {
-      const result = validator.validateSkill({
-        name: '',
-        implementation: 'code',
-        inputSchema: {},
-      });
+    it('should reject skill missing required files', () => {
+      const files: GeneratedFile[] = [
+        { path: 'SKILL.md', content: '# Test Skill' },
+        // Missing agent-instructions.md
+      ];
+      const result = validator.validateSkill(files);
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Skill name is required');
+      expect(result.errors.some(e => e.includes('agent-instructions.md'))).toBe(true);
     });
 
-    it('should detect forbidden patterns', () => {
-      const result = validator.validateSkill({
-        name: 'dangerous-skill',
-        implementation: 'rm -rf /',
-        inputSchema: {},
-      });
+    it('should detect forbidden patterns in skill files', () => {
+      const files: GeneratedFile[] = [
+        { path: 'SKILL.md', content: '# Dangerous\n\nRun: rm -rf /' },
+        { path: 'agent-instructions.md', content: '# Instructions' },
+      ];
+      const result = validator.validateSkill(files);
       expect(result.valid).toBe(false);
       expect(result.errors.some(e => e.includes('Forbidden pattern'))).toBe(true);
+    });
+
+    it('should warn about empty files', () => {
+      const files: GeneratedFile[] = [
+        { path: 'SKILL.md', content: '# Test Skill' },
+        { path: 'agent-instructions.md', content: '' },
+      ];
+      const result = validator.validateSkill(files);
+      expect(result.warnings.some(w => w.includes('empty'))).toBe(true);
     });
   });
 
   describe('validateTool', () => {
     it('should validate a valid shell tool', () => {
-      const result = validator.validateTool({
-        name: 'list-files',
-        type: 'shell',
-        command: 'ls -la',
-      });
+      const content = '#!/bin/bash\nset -euo pipefail\nls -la';
+      const result = validator.validateTool(content, 'sh');
       expect(result.valid).toBe(true);
     });
 
-    it('should reject tool without command', () => {
-      const result = validator.validateTool({
-        name: 'empty-tool',
-        type: 'shell',
-        command: '',
-      });
+    it('should validate a valid Python tool', () => {
+      const content = '#!/usr/bin/env python3\nimport sys\nif __name__ == "__main__":\n    print("ok")';
+      const result = validator.validateTool(content, 'py');
+      expect(result.valid).toBe(true);
+    });
+
+    it('should warn if shell script missing shebang', () => {
+      const content = 'ls -la';
+      const result = validator.validateTool(content, 'sh');
+      expect(result.valid).toBe(true); // Still valid, just a warning
+      expect(result.warnings.some(w => w.includes('shebang'))).toBe(true);
+    });
+
+    it('should detect forbidden patterns in tools', () => {
+      const content = '#!/bin/bash\nrm -rf /';
+      const result = validator.validateTool(content, 'sh');
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Tool command/script is required');
+      expect(result.errors.some(e => e.includes('Forbidden pattern'))).toBe(true);
+    });
+
+    it('should reject oversized content', () => {
+      const content = 'x'.repeat(200 * 1024); // 200KB
+      const result = validator.validateTool(content, 'sh');
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('size'))).toBe(true);
     });
   });
 
@@ -70,17 +94,54 @@ describe('Validator', () => {
         config: {},
       });
       expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should validate specialist agent', () => {
+      const result = validator.validateAgent({
+        name: 'specialist-agent',
+        type: 'specialist',
+        capabilities: ['analysis'],
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it('should validate orchestrator agent', () => {
+      const result = validator.validateAgent({
+        name: 'orchestrator',
+        type: 'orchestrator',
+        capabilities: ['coordination'],
+      });
+      expect(result.valid).toBe(true);
     });
 
     it('should reject agent with invalid type', () => {
       const result = validator.validateAgent({
         name: 'test-agent',
-        type: 'invalid' as any,
+        type: 'invalid',
         capabilities: [],
-        config: {},
       });
       expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('Invalid agent type'))).toBe(true);
+      expect(result.errors.some(e => e.includes('valid type'))).toBe(true);
+    });
+
+    it('should reject agent without name', () => {
+      const result = validator.validateAgent({
+        name: '',
+        type: 'general',
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('name'))).toBe(true);
+    });
+
+    it('should reject agent with non-array capabilities', () => {
+      const result = validator.validateAgent({
+        name: 'test',
+        type: 'general',
+        capabilities: 'not-an-array' as unknown,
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('array'))).toBe(true);
     });
   });
 });

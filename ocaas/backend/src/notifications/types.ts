@@ -8,6 +8,7 @@ export interface NotificationMessage {
   priority: NotificationPriority;
   actions?: NotificationAction[];
   approvalId?: string;
+  generationId?: string; // For direct generation approval flow
   resourceType?: string;
   resourceId?: string;
   data?: Record<string, unknown>;
@@ -26,5 +27,6 @@ export interface TelegramConfig {
 
 export interface TelegramCallbackData {
   action: NotificationAction;
-  approvalId: string;
+  approvalId?: string;
+  generationId?: string;
 }

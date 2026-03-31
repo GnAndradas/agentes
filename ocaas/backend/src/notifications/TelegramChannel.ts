@@ -103,17 +103,30 @@ export class TelegramChannel implements NotificationChannel {
   }
 
   private buildInlineKeyboard(message: NotificationMessage): Array<Array<{ text: string; callback_data: string }>> {
-    if (!message.actions || message.actions.length === 0 || !message.approvalId) {
+    if (!message.actions || message.actions.length === 0) {
       return [];
     }
 
-    const buttons = message.actions.map((action) => ({
-      text: this.getActionLabel(action),
-      callback_data: JSON.stringify({
-        action,
-        approvalId: message.approvalId,
-      }),
-    }));
+    // Need either approvalId or generationId for callbacks
+    if (!message.approvalId && !message.generationId) {
+      return [];
+    }
+
+    const buttons = message.actions.map((action) => {
+      const callbackData: Record<string, string> = { action };
+
+      // Prefer generationId for direct generation approval flow
+      if (message.generationId) {
+        callbackData.generationId = message.generationId;
+      } else if (message.approvalId) {
+        callbackData.approvalId = message.approvalId;
+      }
+
+      return {
+        text: this.getActionLabel(action),
+        callback_data: JSON.stringify(callbackData),
+      };
+    });
 
     return [buttons];
   }
@@ -141,10 +154,10 @@ export class TelegramChannel implements NotificationChannel {
   }
 
   // Parse callback data from Telegram webhook
-  static parseCallbackData(data: string): { action: NotificationAction; approvalId: string } | null {
+  static parseCallbackData(data: string): { action: NotificationAction; approvalId?: string; generationId?: string } | null {
     try {
       const parsed = JSON.parse(data);
-      if (parsed.action && parsed.approvalId) {
+      if (parsed.action && (parsed.approvalId || parsed.generationId)) {
         return parsed;
       }
       return null;

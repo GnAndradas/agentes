@@ -1,7 +1,6 @@
 export * from './types.js';
 export { OpenClawGateway, getGateway } from './gateway.js';
 export { SessionManager, getSessionManager } from './session.js';
-export { ExecHandler, getExecHandler } from './exec.js';
 export { WorkspaceSync, getWorkspaceSync } from './sync.js';
 
 import { getGateway } from './gateway.js';

@@ -159,9 +159,86 @@ export const generationApi = {
   activate: (id: string) => api.post(`/generations/${id}/activate`),
 };
 
+// Gateway diagnostic types (full, slower)
+export interface GatewayDiagnostic {
+  timestamp: number;
+  checkedAt: number;
+  rest: {
+    reachable: boolean;
+    authenticated: boolean;
+    latencyMs: number;
+    error?: string;
+    models?: string[];
+  };
+  hooks: {
+    configured: boolean;
+    probed: boolean; // true if actually tested
+    reachable: boolean;
+    authenticated: boolean;
+    latencyMs: number;
+    error?: string;
+  };
+  generation?: {
+    enabled: boolean;
+    working: boolean;
+    latencyMs: number;
+    error?: string;
+  };
+  websocket: {
+    connected: boolean;
+    sessionId?: string;
+  };
+  overall: {
+    healthy: boolean;
+    message: string;
+  };
+  lastError?: string;
+}
+
+// Quick status for StatusBar polling (fast, real probe)
+export interface QuickStatus {
+  timestamp: number;
+  backend: boolean; // Always true if response arrives
+  rest: {
+    reachable: boolean;
+    authenticated: boolean;
+    latencyMs: number;
+    error?: string;
+  };
+  hooks: {
+    configured: boolean;
+    probed: boolean; // false = not tested, just config check
+    working: boolean;
+    error?: string;
+  };
+  probe: {
+    enabled: boolean;
+    tested: boolean; // false = not run on quick status
+    working: boolean;
+    error?: string;
+  };
+  websocket: {
+    connected: boolean;
+  };
+}
+
 // System API
 export const systemApi = {
+  // Backend health (OCAAS server)
   health: () => api.get<{ status: string; timestamp: number }>('/system/health'),
+
+  // Quick gateway status (for polling) - HONEST: makes real requests
+  gatewayStatus: async () => {
+    const res = await api.get<DataResponse<QuickStatus>>('/system/gateway');
+    return res.data;
+  },
+
+  // Full gateway diagnostic (slower, runs generation probe if enabled)
+  gatewayDiagnostic: async () => {
+    const res = await api.get<DataResponse<GatewayDiagnostic>>('/system/gateway/diagnostic');
+    return res.data;
+  },
+
   stats: () => api.get<import('../types').SystemStats>('/system/stats'),
   getAutonomy: async () => {
     const res = await api.get<DataResponse<import('../types').AutonomyConfig>>('/system/autonomy');

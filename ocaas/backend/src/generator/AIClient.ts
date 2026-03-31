@@ -1,6 +1,7 @@
 import { getGateway } from '../openclaw/gateway.js';
 import { createLogger } from '../utils/logger.js';
 import { GenerationError } from '../utils/errors.js';
+import { parseJsonFromLLM } from '../utils/helpers.js';
 
 const logger = createLogger('AIClient');
 
@@ -8,40 +9,95 @@ export interface AIGenerationRequest {
   type: 'skill' | 'tool' | 'agent';
   name: string;
   description: string;
+  prompt: string; // User-provided prompt - primary source for generation
   requirements?: string[];
 }
 
-export interface AIGenerationResponse {
-  content: string;
+export interface AIGenerationResponse<T = unknown> {
+  content: string; // Raw LLM response
+  parsed: T; // Parsed JSON object
   usage?: {
     inputTokens: number;
     outputTokens: number;
   };
 }
 
+// Response structures for each type
+export interface SkillAIResponse {
+  files: Record<string, string>;
+  capabilities: string[];
+}
+
+export interface ToolAIResponse {
+  type: 'sh' | 'py';
+  content: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+}
+
+export interface AgentAIResponse {
+  type: 'general' | 'specialist' | 'orchestrator';
+  capabilities: string[];
+  config: Record<string, unknown>;
+}
+
 export class AIClient {
-  isAvailable(): boolean {
-    return getGateway().isConnected();
+  /**
+   * Check if AI generation is available.
+   * This performs a REAL async check - not cached state.
+   * For sync checks, use isConfigured() instead.
+   */
+  async isAvailable(): Promise<boolean> {
+    try {
+      const status = await getGateway().getQuickStatus();
+      return status.rest.reachable && status.rest.authenticated;
+    } catch {
+      return false;
+    }
   }
 
-  async generate(request: AIGenerationRequest): Promise<AIGenerationResponse> {
+  /**
+   * Sync check if gateway is configured (has API key).
+   * Does NOT guarantee connectivity - use isAvailable() for real check.
+   */
+  isConfigured(): boolean {
+    return getGateway().isConfigured();
+  }
+
+  /**
+   * Generate content using OpenClaw LLM
+   *
+   * Uses request.prompt as the primary input (user-provided)
+   * Adds structured system prompt based on type to ensure JSON output
+   *
+   * IMPORTANT: No precheck of connectivity. The real request determines
+   * if the gateway is available. This avoids blocking on stale cached state.
+   */
+  async generate<T>(request: AIGenerationRequest): Promise<AIGenerationResponse<T>> {
     const gateway = getGateway();
 
-    if (!gateway.isConnected()) {
-      throw new GenerationError('OpenClaw Gateway not connected. Cannot generate.');
-    }
-
+    // No precheck - let the actual request determine connectivity
     const systemPrompt = this.buildSystemPrompt(request.type);
     const userPrompt = this.buildUserPrompt(request);
 
     const result = await gateway.generate({
       systemPrompt,
       userPrompt,
-      maxTokens: 4096,
+      maxTokens: 8192, // Increased for larger generations
     });
 
     if (!result.success || !result.content) {
       throw new GenerationError(`Generation failed: ${result.error ?? 'No content returned'}`);
+    }
+
+    // Parse JSON from LLM response (handles markdown fences, etc.)
+    let parsed: T;
+    try {
+      parsed = parseJsonFromLLM<T>(result.content);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'JSON parse error';
+      logger.error({ content: result.content.slice(0, 500) }, `Failed to parse LLM response: ${message}`);
+      throw new GenerationError(`Invalid LLM response: ${message}`);
     }
 
     logger.info({
@@ -53,6 +109,7 @@ export class AIClient {
 
     return {
       content: result.content,
+      parsed,
       usage: result.usage,
     };
   }
@@ -60,51 +117,89 @@ export class AIClient {
   private buildSystemPrompt(type: 'skill' | 'tool' | 'agent'): string {
     const base = `You are an expert at generating OpenClaw artifacts. Generate clean, production-ready code following best practices.
 
-Output ONLY the requested content in the exact format specified. Do not include explanations or markdown code blocks.`;
+IMPORTANT: Output ONLY valid JSON in the exact structure specified below. No markdown, no explanations, just the JSON object.`;
 
     switch (type) {
       case 'skill':
         return `${base}
 
-For skills, generate a JSON object with this structure:
+Generate a JSON object with this exact structure:
 {
   "files": {
-    "SKILL.md": "markdown content",
-    "agent-instructions.md": "markdown content"
+    "SKILL.md": "# Skill Name\\n\\nComplete markdown documentation for the skill...",
+    "agent-instructions.md": "# Instructions\\n\\nDetailed instructions for how an agent should use this skill..."
   },
-  "capabilities": ["cap1", "cap2"]
-}`;
+  "capabilities": ["capability1", "capability2"]
+}
+
+The files object must contain at least SKILL.md and agent-instructions.md with real, useful content.
+Capabilities should be specific, actionable strings describing what this skill enables.`;
 
       case 'tool':
         return `${base}
 
-For tools, generate a JSON object with this structure:
+Generate a JSON object with this exact structure:
 {
   "type": "sh" or "py",
-  "content": "script content with proper shebang",
-  "inputSchema": { JSON schema for inputs },
-  "outputSchema": { JSON schema for outputs }
-}`;
+  "content": "#!/bin/bash\\n\\n# Complete script content with proper error handling...",
+  "inputSchema": {
+    "type": "object",
+    "properties": { ... },
+    "required": [...]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": { ... }
+  }
+}
+
+The content must be a complete, executable script with proper shebang.
+Use "py" for Python scripts (#!/usr/bin/env python3) or "sh" for shell scripts.
+Include proper error handling and input validation in the script.`;
 
       case 'agent':
         return `${base}
 
-For agents, generate a JSON object with this structure:
+Generate a JSON object with this exact structure:
 {
   "type": "general" | "specialist" | "orchestrator",
-  "capabilities": ["cap1", "cap2"],
-  "config": { configuration object }
-}`;
+  "capabilities": ["capability1", "capability2"],
+  "config": {
+    "model": "claude-3-sonnet",
+    "temperature": 0.7,
+    "maxTokens": 4096,
+    ... other configuration
+  }
+}
+
+Type should be:
+- "general" for versatile agents handling varied tasks
+- "specialist" for agents focused on specific domains
+- "orchestrator" for agents that coordinate other agents
+
+Capabilities should describe specific abilities.
+Config should include model settings and any agent-specific parameters.`;
     }
   }
 
   private buildUserPrompt(request: AIGenerationRequest): string {
-    let prompt = `Generate a ${request.type} named "${request.name}".
+    // Use the user-provided prompt as primary content
+    let prompt = request.prompt;
 
-Description: ${request.description}`;
+    // Append context if not already in prompt
+    if (!prompt.includes(request.name)) {
+      prompt = `Name: ${request.name}\n\n${prompt}`;
+    }
+
+    if (request.description && !prompt.includes(request.description)) {
+      prompt = `Description: ${request.description}\n\n${prompt}`;
+    }
 
     if (request.requirements && request.requirements.length > 0) {
-      prompt += `\n\nRequirements:\n${request.requirements.map(r => `- ${r}`).join('\n')}`;
+      const reqText = request.requirements.map(r => `- ${r}`).join('\n');
+      if (!prompt.includes(reqText)) {
+        prompt += `\n\nAdditional Requirements:\n${reqText}`;
+      }
     }
 
     return prompt;

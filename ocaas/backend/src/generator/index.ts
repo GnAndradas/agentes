@@ -11,12 +11,20 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('generator');
 
-export function initGenerator(): void {
+export async function initGenerator(): Promise<void> {
   const aiClient = getAIClient();
 
-  if (aiClient.isAvailable()) {
+  // Check if gateway is configured (has API key)
+  if (!aiClient.isConfigured()) {
+    logger.warn('AI Generator running in template-only mode (OPENCLAW_API_KEY not configured)');
+    return;
+  }
+
+  // Check actual connectivity
+  const available = await aiClient.isAvailable();
+  if (available) {
     logger.info('AI Generator initialized via OpenClaw Gateway');
   } else {
-    logger.warn('AI Generator running in template-only mode (gateway not connected)');
+    logger.warn('AI Generator: Gateway configured but not reachable. Will retry on each generation.');
   }
 }

@@ -7,9 +7,15 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().default('./data/ocaas.db'),
 
+  // OpenClaw REST API (synchronous - for AI generation)
   OPENCLAW_GATEWAY_URL: z.string().url().default('http://localhost:18789'),
   OPENCLAW_WORKSPACE_PATH: z.string().default('~/.openclaw/workspace'),
+  // Token for REST API (/v1/chat/completions, /v1/models)
   OPENCLAW_API_KEY: z.string().optional(),
+  // Token for Webhooks (/hooks/agent, /hooks/wake) - defaults to API_KEY if not set
+  OPENCLAW_HOOKS_TOKEN: z.string().optional(),
+  // Enable generation probe during diagnostics (tests actual AI generation)
+  OPENCLAW_ENABLE_GENERATION_PROBE: z.coerce.boolean().default(false),
 
   API_SECRET_KEY: z.string().min(16).default('dev-secret-key-min-16'),
 
@@ -18,6 +24,10 @@ const envSchema = z.object({
   // Telegram notifications (optional)
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
+  // Comma-separated list of allowed Telegram user IDs for approval actions
+  TELEGRAM_ALLOWED_USER_IDS: z.string().optional(),
+  // Secret for webhook validation
+  TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
 
   // Autonomy defaults
   AUTONOMY_LEVEL: z.enum(['manual', 'supervised', 'autonomous']).default('supervised'),
@@ -33,5 +43,15 @@ export function loadEnv(): Env {
     console.error('Invalid environment variables:', result.error.format());
     process.exit(1);
   }
-  return result.data;
+
+  const env = result.data;
+
+  // SECURITY: Warn about insecure defaults in production
+  if (env.NODE_ENV === 'production') {
+    if (env.API_SECRET_KEY === 'dev-secret-key-min-16') {
+      console.error('SECURITY WARNING: API_SECRET_KEY is using default value. Set a secure random value for production.');
+    }
+  }
+
+  return env;
 }

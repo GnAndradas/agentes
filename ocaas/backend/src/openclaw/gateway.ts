@@ -1,13 +1,25 @@
 import { config } from '../config/index.js';
 import { createLogger } from '../utils/logger.js';
 import { OpenClawError } from '../utils/errors.js';
-import type { GatewayStatus, SpawnOptions, SpawnResult, ExecOptions, ExecResult, SendOptions, SendResult, GenerateOptions, GenerateResult, OpenClawSession } from './types.js';
+import type {
+  GatewayStatus,
+  SpawnOptions,
+  SpawnResult,
+  ExecOptions,
+  ExecResult,
+  SendOptions,
+  SendResult,
+  GenerateOptions,
+  GenerateResult,
+  OpenClawSession,
+} from './types.js';
 import WebSocket from 'ws';
 
 const logger = createLogger('OpenClawGateway');
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const GENERATION_TIMEOUT = 120000; // 2 minutes for LLM generation
+const STALE_CHECK_INTERVAL = 60000; // 1 minute
 const WS_RECONNECT_DELAY = 5000; // 5 seconds between reconnect attempts
 const WS_PING_INTERVAL = 30000; // 30 seconds ping interval
 
@@ -37,20 +49,73 @@ interface ChatCompletionResponse {
 }
 
 /**
- * OpenClaw Gateway Client
- *
- * Uses two OpenClaw APIs (verified from docs.openclaw.ai):
- *
- * 1. REST API (Synchronous) - For AI generation:
- *    - GET  /v1/models           - Health check / list models
- *    - POST /v1/chat/completions - Chat completion (OpenAI-compatible)
- *
- * 2. Webhook API (Asynchronous) - For notifications:
- *    - POST /hooks/agent - Fire-and-forget, results go to channel
- *    - POST /hooks/wake  - Wake an agent
- *
- * Authentication: Authorization: Bearer <token>
+ * Diagnostic result for OpenClaw connectivity (full, slower)
  */
+export interface GatewayDiagnostic {
+  timestamp: number;
+  checkedAt: number;
+  rest: {
+    reachable: boolean;
+    authenticated: boolean;
+    latencyMs: number;
+    error?: string;
+    models?: string[];
+  };
+  hooks: {
+    configured: boolean;
+    probed: boolean; // true if we actually tested (not just assumed)
+    reachable: boolean;
+    authenticated: boolean;
+    latencyMs: number;
+    error?: string;
+  };
+  generation?: {
+    enabled: boolean;
+    working: boolean;
+    latencyMs: number;
+    error?: string;
+  };
+  websocket: {
+    connected: boolean;
+    sessionId?: string;
+  };
+  overall: {
+    healthy: boolean;
+    message: string;
+  };
+  lastError?: string;
+}
+
+/**
+ * Quick status for StatusBar polling (fast, real probe)
+ * Does NOT use cached state - makes actual requests
+ */
+export interface QuickStatus {
+  timestamp: number;
+  backend: boolean; // Always true if this response arrives
+  rest: {
+    reachable: boolean;
+    authenticated: boolean;
+    latencyMs: number;
+    error?: string;
+  };
+  hooks: {
+    configured: boolean;
+    probed: boolean; // true if we actually tested (false = just checked config)
+    working: boolean;
+    error?: string;
+  };
+  probe: {
+    enabled: boolean;
+    tested: boolean; // true if we actually ran probe
+    working: boolean;
+    error?: string;
+  };
+  websocket: {
+    connected: boolean;
+  };
+}
+
 /**
  * WebSocket RPC message types
  * From: OpenClaw WebSocket Protocol v3
@@ -77,10 +142,32 @@ interface WsConnectAck {
   sessionId: string;
 }
 
+/**
+ * OpenClaw Gateway Client
+ *
+ * Uses two OpenClaw APIs (verified from docs.openclaw.ai):
+ *
+ * 1. REST API (Synchronous) - For AI generation:
+ *    - GET  /v1/models           - Health check / list models
+ *    - POST /v1/chat/completions - Chat completion (OpenAI-compatible)
+ *    Authentication: Authorization: Bearer <OPENCLAW_API_KEY>
+ *
+ * 2. Webhook API (Asynchronous) - For notifications:
+ *    - POST /hooks/agent - Fire-and-forget, results go to channel
+ *    - POST /hooks/wake  - Wake an agent
+ *    Authentication: x-openclaw-token: <OPENCLAW_HOOKS_TOKEN>
+ */
 export class OpenClawGateway {
   private baseUrl: string;
   private apiKey?: string;
-  private connected = false;
+  private hooksToken?: string;
+  private enableGenerationProbe: boolean;
+
+  // Connection state
+  private restConnected = false;
+  private hooksConnected = false;
+  private lastCheckTime = 0;
+  private lastError?: string;
 
   // WebSocket RPC client
   private ws: WebSocket | null = null;
@@ -94,12 +181,14 @@ export class OpenClawGateway {
   constructor() {
     this.baseUrl = config.openclaw.gatewayUrl;
     this.apiKey = config.openclaw.apiKey;
+    this.hooksToken = config.openclaw.hooksToken;
+    this.enableGenerationProbe = config.openclaw.enableGenerationProbe;
   }
 
   /**
-   * Build headers for OpenClaw API requests
+   * Build headers for REST API requests (Authorization: Bearer)
    */
-  private getHeaders(): Record<string, string> {
+  private getApiHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -109,6 +198,28 @@ export class OpenClawGateway {
     }
 
     return headers;
+  }
+
+  /**
+   * Build headers for Webhook requests (x-openclaw-token)
+   */
+  private getWebhookHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.hooksToken) {
+      headers['x-openclaw-token'] = this.hooksToken;
+    }
+
+    return headers;
+  }
+
+  /**
+   * Check if connection state is stale and needs revalidation
+   */
+  private isConnectionStale(): boolean {
+    return Date.now() - this.lastCheckTime > STALE_CHECK_INTERVAL;
   }
 
   /**
@@ -122,13 +233,13 @@ export class OpenClawGateway {
     timeout = DEFAULT_TIMEOUT
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const headers = this.getHeaders();
+    const headers = this.getApiHeaders();
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      logger.debug({ method, url }, 'Sending API request');
+      logger.debug({ method, path }, 'Sending REST API request');
 
       const response = await fetch(url, {
         method,
@@ -143,22 +254,16 @@ export class OpenClawGateway {
         const text = await response.text();
 
         if (response.status === 401) {
-          throw new OpenClawError('Authentication failed - check OPENCLAW_API_KEY', {
-            url,
-            status: response.status,
-          });
+          this.lastError = 'Authentication failed - check OPENCLAW_API_KEY';
+          throw new OpenClawError(this.lastError, { path, status: response.status });
         }
         if (response.status === 429) {
-          throw new OpenClawError('Rate limited - too many requests', {
-            url,
-            status: response.status,
-          });
+          this.lastError = 'Rate limited - too many requests';
+          throw new OpenClawError(this.lastError, { path, status: response.status });
         }
 
-        throw new OpenClawError(`API request failed: ${response.status} ${text}`, {
-          url,
-          status: response.status,
-        });
+        this.lastError = `API request failed: ${response.status}`;
+        throw new OpenClawError(`${this.lastError} ${text}`, { path, status: response.status });
       }
 
       const text = await response.text();
@@ -173,14 +278,13 @@ export class OpenClawGateway {
       if (err instanceof OpenClawError) throw err;
 
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new OpenClawError(`API request timed out after ${timeout}ms`, {
-          url,
-          timeout,
-        });
+        this.lastError = `Request timed out after ${timeout}ms`;
+        throw new OpenClawError(this.lastError, { path, timeout });
       }
 
       const message = err instanceof Error ? err.message : 'Unknown error';
-      throw new OpenClawError(`Gateway connection failed: ${message}`, { url });
+      this.lastError = `Connection failed: ${message}`;
+      throw new OpenClawError(this.lastError, { path });
     }
   }
 
@@ -195,17 +299,13 @@ export class OpenClawGateway {
     timeout = DEFAULT_TIMEOUT
   ): Promise<void> {
     const url = `${this.baseUrl}/hooks${endpoint}`;
-    const headers = this.getHeaders();
-    // Webhooks also accept x-openclaw-token
-    if (this.apiKey) {
-      headers['x-openclaw-token'] = this.apiKey;
-    }
+    const headers = this.getWebhookHeaders();
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      logger.debug({ url, body }, 'Sending webhook request (fire-and-forget)');
+      logger.debug({ endpoint }, 'Sending webhook request (fire-and-forget)');
 
       const response = await fetch(url, {
         method: 'POST',
@@ -220,34 +320,30 @@ export class OpenClawGateway {
         const text = await response.text();
 
         if (response.status === 401) {
-          throw new OpenClawError('Webhook auth failed - check OPENCLAW_API_KEY', {
-            url,
+          throw new OpenClawError('Webhook auth failed - check OPENCLAW_HOOKS_TOKEN', {
+            endpoint,
             status: response.status,
           });
         }
 
         throw new OpenClawError(`Webhook request failed: ${response.status} ${text}`, {
-          url,
+          endpoint,
           status: response.status,
         });
       }
 
-      // Webhook returns 200 immediately, no meaningful response body
-      logger.debug({ url }, 'Webhook accepted');
+      logger.debug({ endpoint }, 'Webhook accepted');
     } catch (err) {
       clearTimeout(timeoutId);
 
       if (err instanceof OpenClawError) throw err;
 
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new OpenClawError(`Webhook request timed out after ${timeout}ms`, {
-          url,
-          timeout,
-        });
+        throw new OpenClawError(`Webhook request timed out after ${timeout}ms`, { endpoint, timeout });
       }
 
       const message = err instanceof Error ? err.message : 'Unknown error';
-      throw new OpenClawError(`Webhook connection failed: ${message}`, { url });
+      throw new OpenClawError(`Webhook connection failed: ${message}`, { endpoint });
     }
   }
 
@@ -257,14 +353,228 @@ export class OpenClawGateway {
    */
   async connect(): Promise<boolean> {
     try {
-      const status = await this.getStatus();
-      this.connected = status.connected;
-      logger.info({ connected: this.connected, url: this.baseUrl }, 'Gateway connection check complete');
-      return this.connected;
+      const diagnostic = await this.getDiagnostic();
+      this.restConnected = diagnostic.rest.reachable && diagnostic.rest.authenticated;
+      this.hooksConnected = diagnostic.hooks.reachable;
+      this.lastCheckTime = Date.now();
+
+      logger.info({
+        restConnected: this.restConnected,
+        hooksConnected: this.hooksConnected,
+        url: this.baseUrl,
+      }, 'Gateway connection check complete');
+
+      return this.restConnected;
     } catch (err) {
       logger.warn({ err, url: this.baseUrl }, 'Gateway connection failed, running in offline mode');
-      this.connected = false;
+      this.restConnected = false;
+      this.hooksConnected = false;
       return false;
+    }
+  }
+
+  /**
+   * Full diagnostic of OpenClaw connectivity
+   * Tests REST API, Webhooks, and optionally generation
+   *
+   * HONEST: Each indicator is independent and reports what was actually tested.
+   */
+  async getDiagnostic(): Promise<GatewayDiagnostic> {
+    const timestamp = Date.now();
+
+    // Test REST API (/v1/models) - REAL PROBE
+    const restResult = await this.testRestApi();
+
+    // Test Webhooks - HONEST: cannot probe without side effects
+    const hooksResult = await this.testWebhooks();
+
+    // Test generation if enabled AND REST is working
+    let generationResult: GatewayDiagnostic['generation'] | undefined;
+    if (this.enableGenerationProbe) {
+      if (restResult.reachable && restResult.authenticated) {
+        const genTest = await this.testGeneration();
+        generationResult = {
+          enabled: true,
+          working: genTest.working,
+          latencyMs: genTest.latencyMs,
+          error: genTest.error,
+        };
+      } else {
+        // Probe enabled but REST not working - can't test
+        generationResult = {
+          enabled: true,
+          working: false,
+          latencyMs: 0,
+          error: 'Cannot probe: REST API not available',
+        };
+      }
+    } else {
+      generationResult = {
+        enabled: false,
+        working: false,
+        latencyMs: 0,
+        error: 'Probe disabled (OPENCLAW_ENABLE_GENERATION_PROBE=false)',
+      };
+    }
+
+    // Update cached state (for methods that still use it)
+    this.restConnected = restResult.reachable && restResult.authenticated;
+    this.hooksConnected = hooksResult.configured; // Only know if configured
+    this.lastCheckTime = timestamp;
+
+    // Determine overall health
+    const healthy = this.restConnected;
+    let message = '';
+
+    if (!restResult.reachable) {
+      message = 'OpenClaw Gateway unreachable';
+    } else if (!restResult.authenticated) {
+      message = 'REST API authentication failed';
+    } else if (generationResult.enabled && !generationResult.working) {
+      message = `Generation probe failed: ${generationResult.error || 'unknown'}`;
+    } else if (!hooksResult.configured) {
+      message = 'REST OK, but hooks not configured';
+    } else {
+      message = 'REST API operational (hooks not probed)';
+    }
+
+    return {
+      timestamp,
+      checkedAt: Date.now(),
+      rest: restResult,
+      hooks: hooksResult,
+      generation: generationResult,
+      websocket: {
+        connected: this.wsConnected,
+        sessionId: this.wsSessionId || undefined,
+      },
+      overall: {
+        healthy,
+        message,
+      },
+      lastError: this.lastError,
+    };
+  }
+
+  /**
+   * Test REST API connectivity
+   */
+  private async testRestApi(): Promise<GatewayDiagnostic['rest']> {
+    const startTime = Date.now();
+
+    try {
+      const headers = this.getApiHeaders();
+
+      const response = await fetch(`${this.baseUrl}/v1/models`, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(5000),
+      });
+
+      const latencyMs = Date.now() - startTime;
+
+      if (response.status === 401) {
+        return {
+          reachable: true,
+          authenticated: false,
+          latencyMs,
+          error: 'Authentication failed',
+        };
+      }
+
+      if (response.ok) {
+        const data = await response.json().catch(() => ({})) as { data?: Array<{ id: string }> };
+        return {
+          reachable: true,
+          authenticated: true,
+          latencyMs,
+          models: data.data?.map(m => m.id),
+        };
+      }
+
+      return {
+        reachable: true,
+        authenticated: false,
+        latencyMs,
+        error: `HTTP ${response.status}`,
+      };
+    } catch (err) {
+      return {
+        reachable: false,
+        authenticated: false,
+        latencyMs: Date.now() - startTime,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * Test Webhooks connectivity
+   * HONEST: We cannot probe webhooks without triggering them,
+   * so we only report what we can actually verify.
+   */
+  private async testWebhooks(): Promise<GatewayDiagnostic['hooks']> {
+    const startTime = Date.now();
+
+    // Check if token is configured
+    if (!this.hooksToken) {
+      return {
+        configured: false,
+        probed: false,
+        reachable: false,
+        authenticated: false,
+        latencyMs: 0,
+        error: 'OPENCLAW_HOOKS_TOKEN not configured',
+      };
+    }
+
+    // HONEST: We have a token but cannot verify it works without triggering a hook.
+    // We report configured=true, probed=false to indicate we didn't actually test.
+    // The UI should interpret this as "unknown" not "working".
+    return {
+      configured: true,
+      probed: false, // IMPORTANT: false means "not tested"
+      reachable: false, // Unknown - we didn't probe
+      authenticated: false, // Unknown - we didn't probe
+      latencyMs: Date.now() - startTime,
+      error: 'Hooks cannot be probed without triggering side effects',
+    };
+  }
+
+  /**
+   * Test generation with a simple probe prompt
+   * Returns partial result without `enabled` (caller adds that)
+   */
+  private async testGeneration(): Promise<{ working: boolean; latencyMs: number; error?: string }> {
+    const startTime = Date.now();
+
+    try {
+      const result = await this.generate({
+        systemPrompt: 'You are a test probe. Respond with exactly: OK',
+        userPrompt: 'Respond with exactly one word: OK',
+        maxTokens: 10,
+      });
+
+      const latencyMs = Date.now() - startTime;
+
+      if (!result.success) {
+        return {
+          working: false,
+          latencyMs,
+          error: result.error,
+        };
+      }
+
+      return {
+        working: true,
+        latencyMs,
+      };
+    } catch (err) {
+      return {
+        working: false,
+        latencyMs: Date.now() - startTime,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
     }
   }
 
@@ -273,7 +583,7 @@ export class OpenClawGateway {
    */
   async getStatus(): Promise<GatewayStatus> {
     try {
-      const headers = this.getHeaders();
+      const headers = this.getApiHeaders();
 
       const response = await fetch(`${this.baseUrl}/v1/models`, {
         method: 'GET',
@@ -283,6 +593,9 @@ export class OpenClawGateway {
 
       if (response.ok) {
         const data = await response.json().catch(() => ({})) as { data?: Array<{ id: string }> };
+        this.restConnected = true;
+        this.lastCheckTime = Date.now();
+
         return {
           connected: true,
           version: 'openclaw',
@@ -291,15 +604,35 @@ export class OpenClawGateway {
         };
       }
 
+      this.restConnected = false;
       return { connected: false, sessions: 0 };
     } catch (err) {
       logger.debug({ err }, 'Health check failed');
+      this.restConnected = false;
       return { connected: false, sessions: 0 };
     }
   }
 
+  /**
+   * Check if REST API is connected (cached state)
+   * Revalidates if connection state is stale
+   *
+   * NOTE: This uses cached state. For real connectivity check, use getQuickStatus()
+   */
   isConnected(): boolean {
-    return this.connected;
+    if (this.isConnectionStale()) {
+      // Don't block, just schedule a revalidation
+      this.connect().catch(() => {});
+    }
+    return this.restConnected;
+  }
+
+  /**
+   * Sync check if gateway is configured (has API key)
+   * Does NOT guarantee connectivity - use getQuickStatus() or isConnected() for that
+   */
+  isConfigured(): boolean {
+    return !!this.apiKey;
   }
 
   /**
@@ -307,6 +640,64 @@ export class OpenClawGateway {
    */
   isWsConnected(): boolean {
     return this.wsConnected;
+  }
+
+  /**
+   * Get last error message
+   */
+  getLastError(): string | undefined {
+    return this.lastError;
+  }
+
+  /**
+   * Quick status for StatusBar polling
+   *
+   * HONEST: Does NOT use cached state. Makes real requests to verify connectivity.
+   * Faster than getDiagnostic() but still truthful.
+   */
+  async getQuickStatus(): Promise<QuickStatus> {
+    const timestamp = Date.now();
+
+    // Test REST API - REAL PROBE (fast, ~100-500ms)
+    const restResult = await this.testRestApi();
+
+    // Update cached state
+    this.restConnected = restResult.reachable && restResult.authenticated;
+    this.lastCheckTime = timestamp;
+
+    // Hooks: only report configuration status (cannot probe without side effects)
+    const hooksConfigured = !!this.hooksToken;
+
+    // Probe: report if enabled and what we know
+    // NOTE: We don't run the probe on quick status to keep it fast
+    // The full diagnostic runs the actual generation probe
+    const probeEnabled = this.enableGenerationProbe;
+
+    return {
+      timestamp,
+      backend: true, // If we're responding, backend is up
+      rest: {
+        reachable: restResult.reachable,
+        authenticated: restResult.authenticated,
+        latencyMs: restResult.latencyMs,
+        error: restResult.error,
+      },
+      hooks: {
+        configured: hooksConfigured,
+        probed: false, // Quick status never probes hooks
+        working: false, // Unknown - not probed
+        error: hooksConfigured ? 'Not probed (use diagnostic for full test)' : 'OPENCLAW_HOOKS_TOKEN not configured',
+      },
+      probe: {
+        enabled: probeEnabled,
+        tested: false, // Quick status doesn't run generation probe
+        working: false, // Unknown - not tested
+        error: probeEnabled ? 'Not tested (use diagnostic for full test)' : 'Probe disabled',
+      },
+      websocket: {
+        connected: this.wsConnected,
+      },
+    };
   }
 
   /**
@@ -408,7 +799,7 @@ export class OpenClawGateway {
       }
 
     } catch (err) {
-      logger.error({ err, data }, 'Failed to parse WebSocket message');
+      logger.error({ err }, 'Failed to parse WebSocket message');
     }
   }
 
@@ -516,7 +907,7 @@ export class OpenClawGateway {
 
     this.reconnectTimeout = setTimeout(async () => {
       this.reconnectTimeout = null;
-      if (!this.wsConnected && this.connected) {
+      if (!this.wsConnected && this.restConnected) {
         logger.info('Attempting WebSocket reconnection');
         await this.connectWebSocket();
       }
@@ -560,7 +951,12 @@ export class OpenClawGateway {
    * Used by: AgentGenerator, SkillGenerator, ToolGenerator, TaskAnalyzer
    */
   async generate(options: GenerateOptions): Promise<GenerateResult> {
-    if (!this.connected) {
+    // Revalidate connection if stale
+    if (this.isConnectionStale()) {
+      await this.connect();
+    }
+
+    if (!this.restConnected) {
       logger.warn('Gateway not connected, generation unavailable');
       return { success: false, error: 'Gateway not connected' };
     }
@@ -575,10 +971,16 @@ export class OpenClawGateway {
 
       messages.push({ role: 'user', content: options.userPrompt });
 
+      // Build request body
+      const requestBody: Record<string, unknown> = { messages };
+      if (options.maxTokens) {
+        requestBody.max_tokens = options.maxTokens;
+      }
+
       const response = await this.apiRequest<ChatCompletionResponse>(
         'POST',
         '/v1/chat/completions',
-        { messages },
+        requestBody,
         GENERATION_TIMEOUT
       );
 
@@ -617,8 +1019,8 @@ export class OpenClawGateway {
    * Results go to configured channel (Telegram, etc.), NOT returned here
    */
   async notify(message: string, channel?: string): Promise<boolean> {
-    if (!this.connected) {
-      logger.warn('Gateway not connected, notification unavailable');
+    if (!this.hooksToken) {
+      logger.warn('Hooks token not configured, notification unavailable');
       return false;
     }
 
@@ -641,8 +1043,8 @@ export class OpenClawGateway {
    * Wake an agent using POST /hooks/wake
    */
   async wake(agentId: string): Promise<boolean> {
-    if (!this.connected) {
-      logger.warn('Gateway not connected, wake unavailable');
+    if (!this.hooksToken) {
+      logger.warn('Hooks token not configured, wake unavailable');
       return false;
     }
 
@@ -666,7 +1068,7 @@ export class OpenClawGateway {
    * session ID for OCAAS tracking and sends initialization via webhook.
    */
   async spawn(options: SpawnOptions): Promise<SpawnResult> {
-    if (!this.connected) {
+    if (!this.restConnected && !this.hooksConnected) {
       logger.error('Gateway not connected - cannot spawn agent session');
       throw new OpenClawError('Gateway not connected - cannot spawn agent session', {
         operation: 'spawn',
@@ -678,13 +1080,15 @@ export class OpenClawGateway {
       // Generate local session ID (OpenClaw manages its own sessions)
       const sessionId = `ocaas-${options.agentId}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-      // Send initialization notification
-      await this.webhookRequest('/agent', {
-        message: `[OCAAS] Agent ${options.agentId} initialized\nPrompt: ${options.prompt}`,
-        agentId: options.agentId,
-        deliver: false, // Don't deliver to channel, just initialize
-        wakeMode: 'now',
-      });
+      // Send initialization notification if hooks are available
+      if (this.hooksToken) {
+        await this.webhookRequest('/agent', {
+          message: `[OCAAS] Agent ${options.agentId} initialized\nPrompt: ${options.prompt}`,
+          agentId: options.agentId,
+          deliver: false, // Don't deliver to channel, just initialize
+          wakeMode: 'now',
+        });
+      }
 
       logger.info({ sessionId, agentId: options.agentId }, 'Agent session created');
 
@@ -709,7 +1113,7 @@ export class OpenClawGateway {
    * Uses /v1/chat/completions for synchronous response
    */
   async send(options: SendOptions): Promise<SendResult> {
-    if (!this.connected) {
+    if (!this.restConnected) {
       logger.error('Gateway not connected - cannot send message');
       throw new OpenClawError('Gateway not connected - cannot send message', {
         operation: 'send',
@@ -750,7 +1154,7 @@ export class OpenClawGateway {
    * Uses /v1/chat/completions with tool execution prompt
    */
   async exec(options: ExecOptions): Promise<ExecResult> {
-    if (!this.connected) {
+    if (!this.restConnected) {
       logger.error('Gateway not connected - cannot execute tool');
       throw new OpenClawError('Gateway not connected - cannot execute tool', {
         operation: 'exec',
@@ -914,7 +1318,8 @@ export class OpenClawGateway {
    */
   async shutdown(): Promise<void> {
     this.disconnectWebSocket();
-    this.connected = false;
+    this.restConnected = false;
+    this.hooksConnected = false;
     logger.info('Gateway shutdown complete');
   }
 }

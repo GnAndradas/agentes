@@ -6,12 +6,53 @@ import {
   getAutonomyConfig,
   saveAutonomyConfig,
   loadAutonomyConfig,
-  type AutonomyConfig,
 } from '../../config/autonomy.js';
 import { getTaskRouter, getFeedbackService } from '../../orchestrator/index.js';
+import { getGateway } from '../../openclaw/gateway.js';
 
+/**
+ * Backend health check - just checks if OCAAS backend is running
+ */
 export async function health(_req: FastifyRequest, reply: FastifyReply) {
   return reply.send({ status: 'ok', timestamp: Date.now() });
+}
+
+/**
+ * OpenClaw Gateway diagnostic - full connectivity test
+ * Returns detailed status of REST API, Webhooks, Generation, and WebSocket
+ */
+export async function gatewayDiagnostic(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const gateway = getGateway();
+    const diagnostic = await gateway.getDiagnostic();
+
+    return reply.send({
+      data: diagnostic,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * Quick gateway status - for StatusBar polling
+ *
+ * HONEST: Uses getQuickStatus() which makes REAL requests.
+ * Does NOT use cached state like the old isConnected().
+ */
+export async function gatewayStatus(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const gateway = getGateway();
+    const status = await gateway.getQuickStatus();
+
+    return reply.send({
+      data: status,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
 }
 
 export async function stats(_req: FastifyRequest, reply: FastifyReply) {
@@ -88,6 +129,9 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
     const taskRouter = getTaskRouter();
     const orchestratorStatus = taskRouter.getStatus();
 
+    // Get gateway status
+    const gateway = getGateway();
+
     return reply.send({
       agents: agentStats,
       tasks: taskStats,
@@ -99,6 +143,10 @@ export async function stats(_req: FastifyRequest, reply: FastifyReply) {
         queueSize: orchestratorStatus.queueSize,
         processing: orchestratorStatus.processing,
         sequentialMode: orchestratorStatus.sequentialMode,
+      },
+      gateway: {
+        restConnected: gateway.isConnected(),
+        wsConnected: gateway.isWsConnected(),
       },
       system: {
         uptime: process.uptime() * 1000,

@@ -129,6 +129,16 @@ export class ApprovalService {
   }
 
   async approve(id: string, respondedBy: string): Promise<ApprovalDTO> {
+    // FSM check: verify current status is pending
+    const current = await this.getById(id);
+    if (current.status !== 'pending') {
+      if (current.status === 'approved') {
+        logger.info({ id }, 'Approval already approved (idempotent)');
+        return current;
+      }
+      throw new Error(`Cannot approve approval in status '${current.status}'. Expected 'pending'.`);
+    }
+
     const now = nowTimestamp();
 
     await db
@@ -157,6 +167,16 @@ export class ApprovalService {
   }
 
   async reject(id: string, respondedBy: string, reason?: string): Promise<ApprovalDTO> {
+    // FSM check: verify current status is pending
+    const current = await this.getById(id);
+    if (current.status !== 'pending') {
+      if (current.status === 'rejected') {
+        logger.info({ id }, 'Approval already rejected (idempotent)');
+        return current;
+      }
+      throw new Error(`Cannot reject approval in status '${current.status}'. Expected 'pending'.`);
+    }
+
     const now = nowTimestamp();
 
     await db

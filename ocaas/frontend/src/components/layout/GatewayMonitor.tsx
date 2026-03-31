@@ -81,26 +81,36 @@ export function GatewayMonitor() {
     const handleEvent = (event: WSEvent) => {
       if (pausedRef.current) return;
 
-      // Safely extract data as record
-      const data = (event.payload?.data && typeof event.payload.data === 'object')
-        ? event.payload.data as Record<string, unknown>
-        : undefined;
+      // Extract payload - EventBridge puts flat fields in payload
+      const payload = event.payload as Record<string, unknown> | undefined;
+
+      // Category comes from: payload.category (canonical) > channel (fallback)
+      const category = (payload?.category as string) || event.channel;
 
       // Filter to relevant categories
-      const category = (data?.category as string) || event.channel;
-      if (!['gateway', 'generation', 'orchestrator', 'system', 'events'].includes(category) &&
-          !['gateway', 'generation', 'orchestrator', 'system', 'events'].includes(event.channel)) {
+      const relevantCategories = ['gateway', 'generation', 'orchestrator', 'system', 'events', 'workflow', 'approval'];
+      if (!relevantCategories.includes(category) && !relevantCategories.includes(event.channel)) {
         return;
       }
+
+      // Extract data object if present (nested payload data)
+      const data = (payload?.data && typeof payload.data === 'object')
+        ? payload.data as Record<string, unknown>
+        : undefined;
 
       const newEvent: MonitorEvent = {
         id: crypto.randomUUID(),
         timestamp: event.timestamp || Date.now(),
         type: event.type,
-        category: (data?.category as string) || event.channel,
-        message: (data?.message as string) || event.type,
-        severity: (data?.severity as 'info' | 'warning' | 'error') || 'info',
-        data,
+        // Use flat fields from payload (canonical) with fallbacks
+        category,
+        message: (payload?.message as string) || event.type,
+        severity: (payload?.severity as 'info' | 'warning' | 'error') || 'info',
+        data: {
+          ...data,
+          resourceId: payload?.resourceId as string | undefined,
+          resourceType: payload?.resourceType as string | undefined,
+        },
       };
 
       setEvents((prev) => [newEvent, ...prev.slice(0, 99)]); // Keep last 100

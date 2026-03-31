@@ -1,10 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { getServices } from '../../services/index.js';
-import { getAgentGenerator } from '../../generator/AgentGenerator.js';
-import { getSkillGenerator } from '../../generator/SkillGenerator.js';
-import { getToolGenerator } from '../../generator/ToolGenerator.js';
 import { createLogger } from '../../utils/logger.js';
-import { EVENT_TYPE } from '../../config/constants.js';
 import {
   CreateApprovalSchema,
   RespondApprovalSchema,
@@ -13,74 +9,6 @@ import {
 import { toErrorResponse } from '../../utils/errors.js';
 
 const logger = createLogger('approvals-handler');
-
-/**
- * After approving an approval, activate the associated generation if applicable
- * This completes the loop: human approves → generation activates → task retries
- */
-async function activateGenerationForApproval(approvalId: string): Promise<void> {
-  const { approvalService, generationService, eventService } = getServices();
-
-  const approval = await approvalService.getById(approvalId);
-
-  // Only process agent/skill/tool approvals with a resourceId (generationId)
-  if (!approval.resourceId) {
-    logger.debug({ approvalId }, 'Approval has no resourceId, skipping activation');
-    return;
-  }
-
-  if (!['agent', 'skill', 'tool'].includes(approval.type)) {
-    logger.debug({ approvalId, type: approval.type }, 'Approval type does not require generation activation');
-    return;
-  }
-
-  try {
-    // Emit ACTION_APPROVED event
-    await eventService.emit({
-      type: EVENT_TYPE.ACTION_APPROVED,
-      category: 'orchestrator',
-      severity: 'info',
-      message: `Action ${approval.type} approved by ${approval.respondedBy || 'human'}`,
-      resourceType: 'approval',
-      resourceId: approvalId,
-      data: {
-        type: approval.type,
-        generationId: approval.resourceId,
-        approvedBy: approval.respondedBy,
-      },
-    });
-
-    // First approve the generation (changes status to 'approved')
-    await generationService.approve(approval.resourceId, approval.respondedBy || 'human:panel');
-
-    // Then activate it (creates the resource and triggers callback)
-    switch (approval.type) {
-      case 'agent':
-        await getAgentGenerator().activate(approval.resourceId);
-        break;
-      case 'skill':
-        await getSkillGenerator().activate(approval.resourceId);
-        break;
-      case 'tool':
-        await getToolGenerator().activate(approval.resourceId);
-        break;
-    }
-
-    logger.info({
-      approvalId,
-      type: approval.type,
-      generationId: approval.resourceId
-    }, 'Generation activated after human approval');
-  } catch (err) {
-    // Log but don't fail the approval - the approval itself succeeded
-    logger.error({
-      err,
-      approvalId,
-      type: approval.type,
-      generationId: approval.resourceId
-    }, 'Failed to activate generation after approval');
-  }
-}
 
 type IdParam = { Params: { id: string } };
 type QueryParam = { Querystring: Record<string, string | undefined> };
@@ -137,39 +65,60 @@ export async function create(req: FastifyRequest, reply: FastifyReply) {
   }
 }
 
+/**
+ * Approve an approval using the central workflow service
+ * This ensures consistent behavior with Telegram and other entry points
+ */
 export async function approve(req: FastifyRequest<IdParam>, reply: FastifyReply) {
   try {
-    const { approvalService } = getServices();
-    // TODO: get respondedBy from auth when implemented
+    const { activationWorkflow } = getServices();
     const respondedBy = 'human:panel';
-    const data = await approvalService.approve(req.params.id, respondedBy);
 
-    // Activate the associated generation (completes the autonomous loop)
-    await activateGenerationForApproval(req.params.id);
+    const result = await activationWorkflow.approveApproval(req.params.id, respondedBy);
 
-    return reply.send({ data });
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
+    }
+
+    if (result.error) {
+      // Partial success (approval ok, but generation failed)
+      logger.warn({ approvalId: req.params.id, error: result.error }, 'Approval succeeded with warning');
+    }
+
+    return reply.send({ data: result.approval });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
     return reply.status(statusCode).send(body);
   }
 }
 
+/**
+ * Reject an approval using the central workflow service
+ */
 export async function reject(req: FastifyRequest<IdParam>, reply: FastifyReply) {
   try {
     const parsed = RespondApprovalSchema.safeParse(req.body);
     const reason = parsed.success ? parsed.data.reason : undefined;
 
-    const { approvalService } = getServices();
-    // TODO: get respondedBy from auth when implemented
+    const { activationWorkflow } = getServices();
     const respondedBy = 'human:panel';
-    const data = await approvalService.reject(req.params.id, respondedBy, reason);
-    return reply.send({ data });
+
+    const result = await activationWorkflow.rejectApproval(req.params.id, respondedBy, reason);
+
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
+    }
+
+    return reply.send({ data: result.approval });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
     return reply.status(statusCode).send(body);
   }
 }
 
+/**
+ * Respond to an approval (approve or reject) using the central workflow service
+ */
 export async function respond(req: FastifyRequest<IdParam>, reply: FastifyReply) {
   try {
     const parsed = RespondApprovalSchema.safeParse(req.body);
@@ -177,22 +126,18 @@ export async function respond(req: FastifyRequest<IdParam>, reply: FastifyReply)
       return reply.status(400).send({ error: 'Validation failed', details: parsed.error.flatten() });
     }
 
-    const { approvalService } = getServices();
-    // TODO: get respondedBy from auth when implemented
+    const { activationWorkflow } = getServices();
     const respondedBy = 'human:panel';
 
-    const data = await approvalService.respond(req.params.id, {
-      approved: parsed.data.approved,
-      respondedBy,
-      reason: parsed.data.reason,
-    });
+    const result = parsed.data.approved
+      ? await activationWorkflow.approveApproval(req.params.id, respondedBy)
+      : await activationWorkflow.rejectApproval(req.params.id, respondedBy, parsed.data.reason);
 
-    // If approved, activate the associated generation
-    if (parsed.data.approved) {
-      await activateGenerationForApproval(req.params.id);
+    if (!result.success) {
+      return reply.status(400).send({ error: result.error });
     }
 
-    return reply.send({ data });
+    return reply.send({ data: result.approval });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
     return reply.status(statusCode).send(body);

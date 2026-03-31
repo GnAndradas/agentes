@@ -14,6 +14,7 @@ export const ApproveSchema = z.object({
 
 export const RejectSchema = z.object({
   reason: z.string().min(1).max(1000),
+  rejectedBy: z.string().min(1).max(100).default('human:panel'),
 });
 
 export const ListGenerationsQuery = z.object({

@@ -17,8 +17,19 @@ export class EventBridge {
     const { eventService } = getServices();
 
     // Subscribe to all events and forward to WebSocket
+    // Pass full event context including category, severity, message
     eventService.subscribe((event) => {
-      this.forwardEvent(event.type as EventType, event.resourceType ?? null, event.resourceId ?? null, event.data);
+      this.forwardEvent(
+        event.type as EventType,
+        event.resourceType ?? null,
+        event.resourceId ?? null,
+        {
+          category: event.category,
+          severity: event.severity,
+          message: event.message,
+          ...event.data,
+        }
+      );
     });
 
     this.isRunning = true;
@@ -41,12 +52,21 @@ export class EventBridge {
     // Determine channels to broadcast to
     const channels = this.getChannelsForEvent(type, entityType, entityId);
 
+    // Extract category, severity, message from payload for flat access
+    const payloadObj = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
+
     const wsEvent: WSEvent = {
       type,
       channel: channels[0] || 'system',
       payload: {
         entityType,
         entityId,
+        resourceId: entityId,
+        resourceType: entityType,
+        // Flat fields for GatewayMonitor
+        category: payloadObj.category ?? entityType ?? 'system',
+        severity: payloadObj.severity ?? 'info',
+        message: payloadObj.message ?? type,
         data: payload,
       },
       timestamp: Date.now(),

@@ -1449,3 +1449,187 @@ npm run smoke-test
 npm run doctor -- --json    # Detalles completos
 tail -f backend/logs/combined.log
 ```
+
+## 15. Permisos del sistema y sudo seguro
+
+El sistema OCAAS debe ejecutarse bajo un usuario no root, con permisos controlados.
+
+Puede ejecutarse:
+- bajo un usuario dedicado (ocaas), recomendado
+- o bajo el usuario actual del sistema, si se controlan correctamente los permisos
+
+### Verificar usuario actual
+
+```bash
+whoami
+```
+
+Nunca ejecutar como root.
+
+### Permisos de directorios
+
+Crear estructura:
+
+```bash
+sudo mkdir -p /opt/ocaas
+sudo mkdir -p /var/log/ocaas
+sudo mkdir -p /opt/ocaas/backups
+```
+
+Asignar permisos (adaptar segun usuario):
+
+```bash
+sudo chown -R $USER:$USER /opt/ocaas
+sudo chown -R $USER:$USER /var/log/ocaas
+chmod -R 755 /opt/ocaas
+chmod -R 755 /var/log/ocaas
+```
+
+### Configuracion sudo segura
+
+Editar:
+
+```bash
+sudo visudo
+```
+
+Anadir solo lo necesario (ajustar usuario si no es ocaas):
+
+```bash
+ocaas ALL=(ALL) NOPASSWD: /usr/bin/systemctl
+ocaas ALL=(ALL) NOPASSWD: /usr/bin/docker
+```
+
+Si usas usuario actual:
+
+```bash
+<tu_usuario> ALL=(ALL) NOPASSWD: /usr/bin/systemctl
+```
+
+Reglas criticas:
+- no usar ALL=(ALL) NOPASSWD: ALL
+- no permitir bash libre
+- no permitir ejecucion dinamica
+
+## 16. Usuario de servicio y estructura del sistema
+
+Estructura recomendada:
+
+/opt/ocaas
+/opt/ocaas/backend
+/var/log/ocaas
+
+Asegurar ownership correcto:
+
+```bash
+sudo chown -R $USER:$USER /opt/ocaas
+sudo chown -R $USER:$USER /var/log/ocaas
+```
+
+Separar logs del sistema y aplicacion.
+
+## 17. Servicio systemd
+
+Crear:
+
+```bash
+sudo nano /etc/systemd/system/ocaas.service
+```
+
+Contenido:
+
+```ini
+[Unit]
+Description=OCAAS Backend
+After=network.target
+
+[Service]
+User=<usuario_actual>
+WorkingDirectory=/opt/ocaas/backend
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/ocaas/backend/.env
+StandardOutput=append:/var/log/ocaas/combined.log
+StandardError=append:/var/log/ocaas/error.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Activar:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable ocaas
+sudo systemctl start ocaas
+sudo systemctl status ocaas
+```
+
+## 18. Automatizacion segura
+
+Permitir ejecucion controlada de scripts:
+
+```bash
+chmod +x backend/scripts/*.sh
+```
+
+Usar siempre rutas absolutas:
+
+```bash
+/opt/ocaas/backend/scripts/script.sh
+```
+
+No permitir:
+- ejecucion arbitraria
+- scripts externos sin control
+- comandos dinamicos via sudo
+
+## 19. Hardening basico de produccion
+
+### Firewall
+
+```bash
+sudo ufw allow 3001
+sudo ufw enable
+```
+
+### Rotacion de logs
+
+```bash
+sudo nano /etc/logrotate.d/ocaas
+```
+
+Contenido:
+
+/var/log/ocaas/*.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+}
+
+### Backup automatico DB
+
+```bash
+crontab -e
+```
+
+Anadir:
+
+0 2 * * * cp /opt/ocaas/backend/data/ocaas.db /opt/ocaas/backups/ocaas_$(date +\%F).db
+
+### Seguridad del archivo .env
+
+```bash
+chmod 600 /opt/ocaas/backend/.env
+```
+
+## 20. Notas finales de operacion
+
+- ejecutar siempre como usuario no root
+- mantener permisos minimos necesarios
+- revisar logs regularmente
+- monitorizar escalaciones humanas
+- validar estado del sistema con diagnostics

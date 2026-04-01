@@ -8,7 +8,12 @@
 export * from './types.js';
 
 // Stores
-export { CheckpointStore, getCheckpointStore } from './CheckpointStore.js';
+export {
+  CheckpointStore,
+  getCheckpointStore,
+  initializeCheckpointStore,
+  shutdownCheckpointStore,
+} from './CheckpointStore.js';
 export { ExecutionLeaseStore, getExecutionLeaseStore } from './ExecutionLeaseStore.js';
 
 // Error handling
@@ -57,6 +62,7 @@ export {
 import { getHealthChecker, registerDefaultHealthChecks } from './HealthChecker.js';
 import { getCircuitBreaker } from './CircuitBreaker.js';
 import { getExecutionRecoveryService } from './ExecutionRecoveryService.js';
+import { initializeCheckpointStore, shutdownCheckpointStore } from './CheckpointStore.js';
 import { createLogger } from '../../utils/logger.js';
 
 const logger = createLogger('ResilienceInit');
@@ -66,6 +72,10 @@ const logger = createLogger('ResilienceInit');
  */
 export async function initializeResilience(): Promise<void> {
   logger.info('Initializing resilience layer...');
+
+  // Load checkpoints from DB first
+  const checkpointsLoaded = await initializeCheckpointStore();
+  logger.info({ checkpointsLoaded }, 'Checkpoints loaded from DB');
 
   // Register default health checks
   const healthChecker = getHealthChecker();
@@ -102,6 +112,9 @@ export async function shutdownResilience(): Promise<void> {
   const { getPauseResumeManager } = await import('./PauseResumeManager.js');
   const pauseManager = getPauseResumeManager();
   const results = pauseManager.pauseAllRunning('System shutdown');
+
+  // Flush pending checkpoint writes to DB
+  await shutdownCheckpointStore();
 
   logger.info({
     paused: results.filter(r => r.success).length,

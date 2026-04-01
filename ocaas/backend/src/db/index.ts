@@ -243,18 +243,27 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_resource_drafts_status ON resource_drafts(status);
     CREATE INDEX IF NOT EXISTS idx_resource_drafts_slug ON resource_drafts(resource_type, slug);
 
-    -- Execution checkpoints table (for resilience)
-    CREATE TABLE IF NOT EXISTS execution_checkpoints (
-      id TEXT PRIMARY KEY,
-      task_id TEXT NOT NULL,
-      phase TEXT NOT NULL,
-      state TEXT NOT NULL,
-      metadata TEXT,
+    -- Task checkpoints table (for resilience/recovery)
+    CREATE TABLE IF NOT EXISTS task_checkpoints (
+      task_id TEXT PRIMARY KEY,
+      execution_id TEXT NOT NULL,
+      assigned_agent_id TEXT,
+      current_stage TEXT NOT NULL,
+      last_completed_step TEXT,
+      progress_percent INTEGER NOT NULL DEFAULT 0,
+      last_known_blocker TEXT,
+      pending_approval TEXT,
+      pending_resources TEXT,
+      last_openclaw_session_id TEXT,
+      partial_result TEXT,
+      status_snapshot TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      resumable INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_checkpoints_task ON execution_checkpoints(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_checkpoints_stage ON task_checkpoints(current_stage);
 
     -- Execution leases table (for resilience)
     CREATE TABLE IF NOT EXISTS execution_leases (
@@ -274,7 +283,7 @@ export async function initDatabase(): Promise<void> {
   const criticalTables = [
     'tasks', 'agents', 'skills', 'tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
-    'execution_checkpoints', 'execution_leases',
+    'task_checkpoints', 'execution_leases',
   ];
 
   const existingTables = sqlite.prepare(`

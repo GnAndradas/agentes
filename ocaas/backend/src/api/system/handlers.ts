@@ -9,7 +9,7 @@ import {
 } from '../../config/autonomy.js';
 import { getTaskRouter, getFeedbackService } from '../../orchestrator/index.js';
 import { getOpenClawAdapter } from '../../integrations/openclaw/index.js';
-import { getSystemDiagnosticsService } from '../../system/index.js';
+import { getSystemDiagnosticsService, getTaskTimelineService } from '../../system/index.js';
 // NOTE: Gateway import kept ONLY for getDiagnostic() which needs full diagnostic object
 // All other methods use the adapter
 import { getGateway } from '../../openclaw/gateway.js';
@@ -323,6 +323,132 @@ export async function systemMetrics(_req: FastifyRequest, reply: FastifyReply) {
     const diagnostics = getSystemDiagnosticsService();
     const result = await diagnostics.getMetrics();
     return reply.send({ data: result });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// =============================================================================
+// TASK TIMELINE & OBSERVABILITY
+// =============================================================================
+
+/**
+ * GET /api/system/overview
+ * Comprehensive system overview with problem detection
+ */
+export async function systemOverview(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const timeline = getTaskTimelineService();
+    const result = await timeline.getSystemOverview();
+    return reply.send({ data: result });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/tasks/:taskId/timeline
+ * Get complete timeline for a specific task
+ */
+export async function taskTimeline(req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const { taskId } = req.params as { taskId: string };
+    const timeline = getTaskTimelineService();
+    const result = await timeline.getTaskTimeline(taskId);
+
+    if (!result) {
+      return reply.status(404).send({ error: 'Task not found' });
+    }
+
+    return reply.send({ data: result });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/problems/stuck
+ * Get all stuck tasks
+ */
+export async function stuckTasks(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const timeline = getTaskTimelineService();
+    const result = await timeline.getStuckTasks();
+    return reply.send({
+      data: result,
+      count: result.length,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/problems/high-retry
+ * Get tasks with high retry counts
+ */
+export async function highRetryTasks(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const timeline = getTaskTimelineService();
+    const result = await timeline.getHighRetryTasks();
+    return reply.send({
+      data: result,
+      count: result.length,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/problems/blocked
+ * Get blocked tasks
+ */
+export async function blockedTasks(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const timeline = getTaskTimelineService();
+    const result = await timeline.getBlockedTasks();
+    return reply.send({
+      data: result,
+      count: result.length,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/problems
+ * Get all problem tasks combined
+ */
+export async function allProblems(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const timeline = getTaskTimelineService();
+    const [stuck, highRetry, blocked] = await Promise.all([
+      timeline.getStuckTasks(),
+      timeline.getHighRetryTasks(),
+      timeline.getBlockedTasks(),
+    ]);
+
+    return reply.send({
+      data: {
+        stuck,
+        highRetry,
+        blocked,
+      },
+      counts: {
+        stuck: stuck.length,
+        highRetry: highRetry.length,
+        blocked: blocked.length,
+        total: stuck.length + highRetry.length + blocked.length,
+      },
+    });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
     return reply.status(statusCode).send(body);

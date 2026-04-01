@@ -28,7 +28,8 @@
       "Bash(do echo -n \"$route: \")",
       "Bash(done)",
       "Bash(while read f)",
-      "Bash(do grep -q '$(basename $f .ts)' src/api/index.ts src/index.ts src/services/index.ts)"
+      "Bash(do grep -q '$(basename $f .ts)' src/api/index.ts src/index.ts src/services/index.ts)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

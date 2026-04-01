@@ -150,9 +150,10 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 ✅ resilience.test.ts             - 45 tests
 ✅ logger.test.ts                 - 20 tests
 ✅ systemDiagnostics.test.ts      - 26 tests
-✅ task-resilience.test.ts        - 41 tests (NEW)
+✅ task-resilience.test.ts        - 41 tests
+✅ checkpoint-persistence.test.ts - 22 tests (NEW)
 
-TOTAL: 346+ tests passing
+TOTAL: 368+ tests passing
 ```
 
 ## 7. ResourceRetryService Hardening
@@ -514,9 +515,243 @@ Cada 30 segundos, `TaskRouter.cleanupStaleExecutions()`:
   - FSM Transitions: 11 tests
   - Recovery Scenarios: 4 tests
   - Concurrent Prevention: 4 tests
+
+✅ checkpoint-persistence.test.ts - 22 tests (NEW)
+  - Persistent vs Transient Stages: 3 tests
+  - Partial Result Persistence: 2 tests
+  - Blocker/Resource/Approval Tracking: 4 tests
+  - Recovery Queries: 3 tests
+  - Export/Import: 2 tests
+  - Stats/Observability: 1 test
+  - Retry Tracking: 1 test
+  - Cleanup: 2 tests
+  - Recovery Scenarios: 4 tests
 ```
 
-## 16. Próximos Pasos
+## 16. Persistencia de Checkpoints (NEW)
+
+Los checkpoints críticos ahora se persisten a DB para sobrevivir reinicios.
+
+### Tabla `task_checkpoints`
+
+```sql
+CREATE TABLE task_checkpoints (
+  task_id TEXT PRIMARY KEY,
+  execution_id TEXT NOT NULL,
+  assigned_agent_id TEXT,
+  current_stage TEXT NOT NULL,
+  last_completed_step TEXT,
+  progress_percent INTEGER DEFAULT 0,
+  last_known_blocker TEXT,
+  pending_approval TEXT,
+  pending_resources TEXT,      -- JSON array
+  last_openclaw_session_id TEXT,
+  partial_result TEXT,          -- JSON
+  status_snapshot TEXT,         -- JSON
+  retry_count INTEGER DEFAULT 0,
+  resumable INTEGER DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+### Stages Persistentes vs Transitorios
+
+| Tipo | Stages | Comportamiento |
+|------|--------|----------------|
+| **Persistent** | executing, awaiting_response, processing_result, paused, waiting_* | Se guardan en DB |
+| **Transient** | queued, analyzing, assigning, spawning_session, completing | Solo RAM |
+| **Terminal** | completed, failed | Se borran de DB |
+
+### Flujo de Persistencia
+
+```
+1. Task entra en stage persistente → schedulePersist(taskId)
+2. Debounce 1 segundo → persistToDb(taskId)
+3. Task entra en stage terminal → deleteFromDb(taskId)
+4. Shutdown → flushPendingPersists()
+```
+
+### Recovery al Startup
+
+```
+initializeResilience()
+    │
+    ├── initializeCheckpointStore()
+    │       └── loadFromDb() → carga checkpoints de DB a RAM
+    │
+    └── startupRecovery()
+            └── Procesa checkpoints cargados
+```
+
+### API del CheckpointStore
+
+```typescript
+// Control de persistencia (para tests)
+store.setPersistenceEnabled(false);
+
+// Flush manual
+await store.flushPendingPersists();
+
+// Cargar desde DB
+await store.loadFromDb();
+```
+
+## 17. Mapa de Memoria del Sistema
+
+### Memoria Crítica (Persistida)
+
+| Store | Ubicación DB | Datos | Recovery |
+|-------|-------------|-------|----------|
+| Tasks | `tasks` | Estado, output, metadata | ✅ Completo |
+| Checkpoints | `task_checkpoints` | Stage, progress, partialResult | ✅ Nuevo |
+| Resource Drafts | `resource_drafts` | Borradores de recursos | ✅ Completo |
+
+### Memoria Operacional (RAM)
+
+| Store | Datos | Riesgo en Restart |
+|-------|-------|------------------|
+| ExecutionLeaseStore | Leases activos | ✅ Se recrean |
+| QueueManager | Cola de tareas | ✅ Se reconstruye de DB |
+| SessionManager | agentId → sessionId | ✅ Sesiones efímeras |
+| TaskAnalyzer | Cache de análisis | ✅ Cache con TTL |
+| HealthChecker | Health status | ✅ Se re-evalúa |
+
+### Memoria de Configuración (Necesita Persistencia)
+
+| Store | Datos | Estado |
+|-------|-------|--------|
+| AgentHierarchyStore | Jerarquía de agentes | ⚠️ Pendiente |
+| WorkProfileStore | Custom work profiles | ⚠️ Pendiente |
+| TaskMemoryStore | Historial de decisiones | ⚠️ Pendiente |
+
+## 18. Sistema de Observabilidad (TaskTimelineService)
+
+Visibilidad completa del estado del sistema, progreso de tareas, y detección de problemas.
+
+### Componentes
+
+| Componente | Archivo | Función |
+|------------|---------|---------|
+| TaskTimelineService | `system/TaskTimelineService.ts` | Timeline completo por task, detección de problemas |
+| SystemDiagnosticsService | `system/SystemDiagnosticsService.ts` | Health checks, métricas, readiness |
+
+### API Endpoints (NEW)
+
+```
+GET /api/system/overview                    - Vista general del sistema con problemas
+GET /api/system/tasks/:taskId/timeline      - Timeline completo de una task
+GET /api/system/problems                    - Todos los problemas detectados
+GET /api/system/problems/stuck              - Tasks atascadas (>30 min sin progreso)
+GET /api/system/problems/high-retry         - Tasks con muchos reintentos (>=3)
+GET /api/system/problems/blocked            - Tasks bloqueadas (approval, resource, dependency)
+```
+
+### Task Timeline
+
+Para cada task, el timeline incluye:
+
+```typescript
+interface TaskTimeline {
+  taskId: string;
+  taskTitle: string;
+  currentStatus: string;
+  currentStage?: string;  // Del checkpoint
+  entries: TimelineEntry[];  // Eventos ordenados cronológicamente
+  summary: {
+    totalEvents: number;
+    stateChanges: number;
+    errors: number;
+    retries: number;
+    durationMs: number;
+    currentBlocker?: string;
+  };
+  related: {
+    agentId?: string;
+    parentTaskId?: string;
+    childTaskIds: string[];
+    pendingApproval?: string;
+    pendingResources: string[];
+  };
+}
+```
+
+### Tipos de Entradas en Timeline
+
+| Tipo | Descripción | Fuente |
+|------|-------------|--------|
+| `event` | Evento genérico | events table |
+| `state_change` | Cambio de estado | task/events |
+| `checkpoint` | Estado del checkpoint | CheckpointStore |
+| `error` | Error ocurrido | events/task |
+| `retry` | Reintento detectado | task/checkpoint |
+| `escalation` | Escalado/feedback | agent_feedback |
+| `approval` | Evento de aprobación | events |
+| `resource` | Evento de recurso | events |
+
+### Detección de Problemas
+
+#### Stuck Tasks
+- Criterio: `status in (running, assigned)` && `updatedAt > 30 min ago`
+- Información: duración atascada, checkpoint stage, blocker
+- Acción sugerida: según contexto
+
+#### High Retry Tasks
+- Criterio: `retryCount >= 3` && `status not in (completed, cancelled)`
+- Información: contador, último error, patrón detectado
+- Patrones detectables: timeout repetido, error de conexión, mismo error
+
+#### Blocked Tasks
+- Criterio: checkpoint en `waiting_approval` o `waiting_resource`
+- Tipos: approval, resource, dependency, external
+- Información: qué está bloqueando, duración
+
+### System Overview
+
+```typescript
+interface SystemOverview {
+  tasks: {
+    total: number;
+    byStatus: Record<string, number>;
+    activeCount: number;
+    problemCount: number;
+  };
+  problems: {
+    stuck: StuckTaskInfo[];
+    highRetry: HighRetryTaskInfo[];
+    blocked: BlockedTaskInfo[];
+  };
+  recentActivity: {  // Última hora
+    tasksCreated: number;
+    tasksCompleted: number;
+    tasksFailed: number;
+    eventsEmitted: number;
+  };
+  health: {
+    avgTaskDurationMs: number;
+    successRate: number;  // 0-100
+    errorRate: number;    // 0-100
+  };
+}
+```
+
+### Tests
+
+```
+✅ task-timeline.test.ts - 34 tests
+  - Types: 3 tests
+  - Configuration: 1 test
+  - Entry Classification: 7 tests
+  - Stuck Detection: 1 test
+  - Blocker Detection: 5 tests
+  - Suggested Actions: 5 tests
+  - Retry Pattern Detection: 5 tests
+  - Health Metrics: 4 tests
+  - Timeline Sorting/Limiting: 2 tests
+  - System Overview: 1 test
+```
+
+## 19. Próximos Pasos
 
 1. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
 2. Test integración end-to-end
@@ -524,7 +759,10 @@ Cada 30 segundos, `TaskRouter.cleanupStaleExecutions()`:
 4. Rate limiting
 5. Probar Telegram real
 6. Implementar canales adicionales (web, api)
+7. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
+8. Persistir TaskMemoryStore (historial de decisiones)
 
 ---
 
-*Ver [RUNBOOK.md](./RUNBOOK.md) para instalación y operación.*
+*Ver [RUNBOOK_PRODUCTION.md](./RUNBOOK_PRODUCTION.md) para instalación y operación.*
+

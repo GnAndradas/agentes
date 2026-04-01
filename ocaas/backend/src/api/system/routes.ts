@@ -26,4 +26,14 @@ export async function systemRoutes(fastify: FastifyInstance) {
   fastify.get('/system/readiness', h.systemReadiness);
   fastify.get('/system/issues', h.systemIssues);
   fastify.get('/system/metrics', h.systemMetrics);
+
+  // Task timeline & observability
+  fastify.get('/system/overview', h.systemOverview);
+  fastify.get('/system/tasks/:taskId/timeline', h.taskTimeline);
+
+  // Problem detection
+  fastify.get('/system/problems', h.allProblems);
+  fastify.get('/system/problems/stuck', h.stuckTasks);
+  fastify.get('/system/problems/high-retry', h.highRetryTasks);
+  fastify.get('/system/problems/blocked', h.blockedTasks);
 }

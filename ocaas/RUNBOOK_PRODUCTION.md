@@ -518,6 +518,212 @@ Respuesta ejemplo:
 | pausedCheckpoints | 0 | >0 = revisar tasks pausadas |
 | circuitBreakers | closed | open = OpenClaw con problemas |
 
+## 7.2 Checkpoints Persistentes (NEW)
+
+Los checkpoints críticos ahora se persisten a la base de datos para sobrevivir reinicios.
+
+### Verificar checkpoints persistidos
+
+```bash
+# Ver checkpoints en DB
+sqlite3 backend/data/ocaas.db "SELECT task_id, current_stage, progress_percent, last_known_blocker FROM task_checkpoints"
+
+# Contar checkpoints por stage
+sqlite3 backend/data/ocaas.db "SELECT current_stage, COUNT(*) FROM task_checkpoints GROUP BY current_stage"
+```
+
+### Stages que se persisten
+
+| Stage | Descripción | Se persiste |
+|-------|-------------|-------------|
+| executing | En ejecución | ✅ Sí |
+| awaiting_response | Esperando OpenClaw | ✅ Sí |
+| processing_result | Procesando resultado | ✅ Sí |
+| paused | Pausado manualmente | ✅ Sí |
+| waiting_approval | Esperando aprobación | ✅ Sí |
+| waiting_resource | Esperando recurso | ✅ Sí |
+| retrying | En proceso de retry | ✅ Sí |
+| queued | En cola | ❌ No (transitorio) |
+| completed | Completado | ❌ No (se borra) |
+| failed | Fallido | ❌ No (se borra) |
+
+### Recovery de checkpoints tras restart
+
+Al iniciar OCAAS:
+
+1. `initializeCheckpointStore()` carga checkpoints de DB
+2. `startupRecovery()` procesa checkpoints cargados
+3. Tasks en stages persistentes se re-encolan o pausan
+
+```bash
+# Ver logs de recovery de checkpoints
+grep "Checkpoints loaded from DB" backend/logs/combined.log
+grep "checkpointsLoaded" backend/logs/combined.log
+```
+
+### Troubleshooting checkpoints
+
+**Checkpoint stuck en DB:**
+```bash
+# Ver checkpoint específico
+sqlite3 backend/data/ocaas.db "SELECT * FROM task_checkpoints WHERE task_id='<task_id>'"
+
+# Eliminar checkpoint manualmente (último recurso)
+sqlite3 backend/data/ocaas.db "DELETE FROM task_checkpoints WHERE task_id='<task_id>'"
+```
+
+**Muchos checkpoints acumulados:**
+```bash
+# Ver antiguedad de checkpoints
+sqlite3 backend/data/ocaas.db "SELECT task_id, current_stage, datetime(updated_at, 'unixepoch') as updated FROM task_checkpoints ORDER BY updated_at"
+
+# Limpiar checkpoints viejos (>24 horas)
+sqlite3 backend/data/ocaas.db "DELETE FROM task_checkpoints WHERE updated_at < strftime('%s', 'now') - 86400"
+```
+
+**Flush manual de checkpoints:**
+
+Si OCAAS se cierra abruptamente, algunos checkpoints pueden no haberse guardado (debounce de 1 segundo). Al reiniciar, estos se reconstruyen desde el estado de las tasks en DB.
+
+## 7.3 Observabilidad y Detección de Problemas (NEW)
+
+OCAAS incluye un sistema de observabilidad que permite ver el timeline completo de tareas y detectar problemas automáticamente.
+
+### Endpoints de Observabilidad
+
+```bash
+# Vista general del sistema con todos los problemas
+curl localhost:3001/api/system/overview | jq
+
+# Timeline completo de una task específica
+curl localhost:3001/api/system/tasks/<task_id>/timeline | jq
+
+# Ver todos los problemas detectados
+curl localhost:3001/api/system/problems | jq
+
+# Solo tasks atascadas (>30 min sin progreso)
+curl localhost:3001/api/system/problems/stuck | jq
+
+# Solo tasks con muchos reintentos (>=3)
+curl localhost:3001/api/system/problems/high-retry | jq
+
+# Solo tasks bloqueadas (approval, resource, dependency)
+curl localhost:3001/api/system/problems/blocked | jq
+```
+
+### Respuesta de System Overview
+
+```json
+{
+  "tasks": {
+    "total": 150,
+    "byStatus": { "completed": 120, "running": 5, "pending": 25 },
+    "activeCount": 5,
+    "problemCount": 2
+  },
+  "problems": {
+    "stuck": [],
+    "highRetry": [
+      {
+        "taskId": "abc123",
+        "title": "Process report",
+        "retryCount": 4,
+        "pattern": "Frequent timeout errors",
+        "suggestedAction": "Consider increasing timeout limits"
+      }
+    ],
+    "blocked": []
+  },
+  "recentActivity": {
+    "tasksCreated": 15,
+    "tasksCompleted": 12,
+    "tasksFailed": 1,
+    "eventsEmitted": 89
+  },
+  "health": {
+    "avgTaskDurationMs": 45000,
+    "successRate": 92.31,
+    "errorRate": 7.69
+  }
+}
+```
+
+### Respuesta de Task Timeline
+
+```json
+{
+  "taskId": "abc123",
+  "taskTitle": "Process report",
+  "currentStatus": "running",
+  "currentStage": "executing",
+  "entries": [
+    { "type": "state_change", "timestamp": 1700000000, "title": "Task Created", "severity": "info" },
+    { "type": "state_change", "timestamp": 1700000100, "title": "Task Started", "severity": "info" },
+    { "type": "checkpoint", "timestamp": 1700000200, "title": "Checkpoint: executing", "severity": "info" }
+  ],
+  "summary": {
+    "totalEvents": 5,
+    "stateChanges": 2,
+    "errors": 0,
+    "retries": 0,
+    "durationMs": 300000,
+    "currentBlocker": null
+  },
+  "related": {
+    "agentId": "agent_1",
+    "childTaskIds": [],
+    "pendingApproval": null,
+    "pendingResources": []
+  }
+}
+```
+
+### Tipos de Problemas Detectados
+
+| Problema | Criterio | Acción Sugerida |
+|----------|----------|-----------------|
+| **Stuck** | Task en running/assigned > 30 min sin update | Ver checkpoint blocker, revisar OpenClaw |
+| **High Retry** | retryCount >= 3, no completada | Analizar patrón de errores, ajustar config |
+| **Blocked - Approval** | Checkpoint en waiting_approval | Procesar approval pendiente |
+| **Blocked - Resource** | Checkpoint en waiting_resource | Activar resource drafts pendientes |
+| **Blocked - Dependency** | Task con dependsOn pendientes | Esperar o cancelar dependencias |
+
+### Patrones de Error Detectados Automáticamente
+
+El sistema detecta patrones en los errores para sugerir acciones:
+
+| Patrón | Detección | Acción Sugerida |
+|--------|-----------|-----------------|
+| Timeout repetido | >50% errores contienen "timeout" | Incrementar timeout o optimizar task |
+| Error de conexión | >50% errores contienen "connection" | Verificar conectividad, health de OpenClaw |
+| Mismo error repetido | Todos los errores son idénticos | Investigar causa raíz específica |
+
+### Uso Operacional
+
+**Monitoreo periódico:**
+```bash
+# Cada 5 minutos, verificar problemas
+watch -n 300 'curl -s localhost:3001/api/system/problems | jq ".counts"'
+```
+
+**Dashboard manual:**
+```bash
+# Ver resumen rápido
+curl -s localhost:3001/api/system/overview | jq '{
+  total: .data.tasks.total,
+  active: .data.tasks.activeCount,
+  problems: .data.tasks.problemCount,
+  success_rate: .data.health.successRate
+}'
+```
+
+**Investigar task específica:**
+```bash
+# Obtener timeline completo
+TASK_ID="abc123"
+curl -s "localhost:3001/api/system/tasks/$TASK_ID/timeline" | jq
+```
+
 ## 8. Logs Importantes
 
 ### Ubicación de logs

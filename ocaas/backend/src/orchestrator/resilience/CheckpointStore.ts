@@ -1,18 +1,248 @@
 /**
  * Checkpoint Store
  *
- * Manages task execution checkpoints for recovery
+ * Manages task execution checkpoints for recovery.
+ * Hybrid: in-memory for performance, DB for persistence.
+ * Critical checkpoints are persisted to survive restarts.
  */
 
 import { nanoid } from 'nanoid';
 import { createLogger } from '../../utils/logger.js';
-import { nowTimestamp } from '../../utils/helpers.js';
+import { nowTimestamp, parseJsonSafe } from '../../utils/helpers.js';
 import type { TaskCheckpoint, TaskStage } from './types.js';
+
+// Lazy import of DB to allow unit tests without DB connection
+let dbModule: typeof import('../../db/index.js') | null = null;
+let drizzleOrmModule: typeof import('drizzle-orm') | null = null;
+
+async function getDb() {
+  if (!dbModule) {
+    dbModule = await import('../../db/index.js');
+  }
+  return dbModule;
+}
+
+async function getDrizzle() {
+  if (!drizzleOrmModule) {
+    drizzleOrmModule = await import('drizzle-orm');
+  }
+  return drizzleOrmModule;
+}
 
 const logger = createLogger('CheckpointStore');
 
+// Stages that should be persisted (non-terminal, non-transient)
+const PERSISTENT_STAGES: TaskStage[] = [
+  'executing',
+  'awaiting_response',
+  'processing_result',
+  'paused',
+  'waiting_external',
+  'waiting_approval',
+  'waiting_resource',
+  'retrying',
+];
+
+// Stages that are terminal (no need to persist)
+const TERMINAL_STAGES: TaskStage[] = ['completed', 'failed'];
+
+// Stages that are transient (short-lived, don't persist)
+const TRANSIENT_STAGES: TaskStage[] = ['queued', 'analyzing', 'assigning', 'spawning_session', 'completing'];
+
 export class CheckpointStore {
   private checkpoints = new Map<string, TaskCheckpoint>();
+  private persistenceEnabled = true;
+  private pendingPersists = new Set<string>(); // Tasks with pending DB writes
+  private persistDebounceMs = 1000; // Debounce DB writes by 1 second
+  private persistTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * Enable/disable DB persistence (useful for testing)
+   */
+  setPersistenceEnabled(enabled: boolean): void {
+    this.persistenceEnabled = enabled;
+  }
+
+  /**
+   * Check if a stage should be persisted to DB
+   */
+  private shouldPersist(stage: TaskStage): boolean {
+    return PERSISTENT_STAGES.includes(stage);
+  }
+
+  /**
+   * Schedule a debounced persist to DB
+   */
+  private schedulePersist(taskId: string): void {
+    if (!this.persistenceEnabled) return;
+
+    // Clear existing timer
+    const existing = this.persistTimers.get(taskId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    // Schedule new persist
+    const timer = setTimeout(() => {
+      this.persistToDb(taskId).catch(err => {
+        logger.error({ err, taskId }, 'Failed to persist checkpoint to DB');
+      });
+      this.persistTimers.delete(taskId);
+    }, this.persistDebounceMs);
+
+    this.persistTimers.set(taskId, timer);
+    this.pendingPersists.add(taskId);
+  }
+
+  /**
+   * Persist checkpoint to DB
+   */
+  private async persistToDb(taskId: string): Promise<void> {
+    if (!this.persistenceEnabled) return;
+
+    const checkpoint = this.checkpoints.get(taskId);
+    if (!checkpoint) {
+      // Checkpoint was deleted, remove from DB
+      await this.deleteFromDb(taskId);
+      return;
+    }
+
+    // Only persist if in a persistent stage
+    if (!this.shouldPersist(checkpoint.currentStage)) {
+      // Delete from DB if it was there (stage changed to transient/terminal)
+      await this.deleteFromDb(taskId);
+      return;
+    }
+
+    try {
+      const { db, schema } = await getDb();
+
+      const row = {
+        taskId: checkpoint.taskId,
+        executionId: checkpoint.executionId,
+        assignedAgentId: checkpoint.assignedAgentId,
+        currentStage: checkpoint.currentStage,
+        lastCompletedStep: checkpoint.lastCompletedStep,
+        progressPercent: checkpoint.progressPercent,
+        lastKnownBlocker: checkpoint.lastKnownBlocker,
+        pendingApproval: checkpoint.pendingApproval,
+        pendingResources: checkpoint.pendingResources.length > 0
+          ? JSON.stringify(checkpoint.pendingResources)
+          : null,
+        lastOpenClawSessionId: checkpoint.lastOpenClawSessionId,
+        partialResult: checkpoint.partialResult
+          ? JSON.stringify(checkpoint.partialResult)
+          : null,
+        statusSnapshot: Object.keys(checkpoint.statusSnapshot).length > 0
+          ? JSON.stringify(checkpoint.statusSnapshot)
+          : null,
+        retryCount: checkpoint.retryCount,
+        resumable: checkpoint.resumable,
+        createdAt: checkpoint.createdAt,
+        updatedAt: checkpoint.updatedAt,
+      };
+
+      // Upsert: insert or replace
+      await db.insert(schema.taskCheckpoints)
+        .values(row)
+        .onConflictDoUpdate({
+          target: schema.taskCheckpoints.taskId,
+          set: {
+            ...row,
+            taskId: undefined, // Don't update primary key
+          },
+        });
+
+      this.pendingPersists.delete(taskId);
+      logger.debug({ taskId, stage: checkpoint.currentStage }, 'Checkpoint persisted to DB');
+    } catch (err) {
+      logger.error({ err, taskId }, 'Failed to persist checkpoint');
+      throw err;
+    }
+  }
+
+  /**
+   * Delete checkpoint from DB
+   */
+  private async deleteFromDb(taskId: string): Promise<void> {
+    if (!this.persistenceEnabled) return;
+
+    try {
+      const { db, schema } = await getDb();
+      const { eq } = await getDrizzle();
+
+      await db.delete(schema.taskCheckpoints)
+        .where(eq(schema.taskCheckpoints.taskId, taskId));
+      this.pendingPersists.delete(taskId);
+    } catch (err) {
+      // Ignore errors (table might not exist yet)
+      logger.debug({ err, taskId }, 'Failed to delete checkpoint from DB (may not exist)');
+    }
+  }
+
+  /**
+   * Flush all pending persists immediately
+   */
+  async flushPendingPersists(): Promise<void> {
+    // Clear all timers
+    for (const [taskId, timer] of this.persistTimers) {
+      clearTimeout(timer);
+      this.persistTimers.delete(taskId);
+    }
+
+    // Persist all pending
+    const pending = Array.from(this.pendingPersists);
+    await Promise.all(pending.map(taskId => this.persistToDb(taskId)));
+  }
+
+  /**
+   * Load checkpoints from DB on startup
+   */
+  async loadFromDb(): Promise<number> {
+    if (!this.persistenceEnabled) return 0;
+
+    try {
+      const { db, schema } = await getDb();
+      const rows = await db.select().from(schema.taskCheckpoints);
+      let loaded = 0;
+
+      for (const row of rows) {
+        const checkpoint: TaskCheckpoint = {
+          taskId: row.taskId,
+          executionId: row.executionId,
+          assignedAgentId: row.assignedAgentId,
+          currentStage: row.currentStage as TaskStage,
+          lastCompletedStep: row.lastCompletedStep,
+          progressPercent: row.progressPercent,
+          statusSnapshot: parseJsonSafe(row.statusSnapshot) ?? {},
+          lastKnownBlocker: row.lastKnownBlocker,
+          pendingApproval: row.pendingApproval,
+          pendingResources: parseJsonSafe(row.pendingResources) ?? [],
+          lastOpenClawSessionId: row.lastOpenClawSessionId,
+          partialResult: parseJsonSafe(row.partialResult) ?? null,
+          retryCount: row.retryCount,
+          resumable: row.resumable,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        };
+
+        this.checkpoints.set(row.taskId, checkpoint);
+        loaded++;
+      }
+
+      logger.info({ loaded }, 'Checkpoints loaded from DB');
+      return loaded;
+    } catch (err) {
+      // Table might not exist yet
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (errorMsg.includes('no such table') || errorMsg.includes('SQLITE_ERROR')) {
+        logger.warn('Checkpoint table does not exist yet, skipping load');
+        return 0;
+      }
+      logger.error({ err }, 'Failed to load checkpoints from DB');
+      return 0;
+    }
+  }
 
   /**
    * Create a new checkpoint for a task
@@ -42,6 +272,12 @@ export class CheckpointStore {
 
     this.checkpoints.set(taskId, checkpoint);
     logger.debug({ taskId, executionId }, 'Checkpoint created');
+
+    // Schedule persist if stage is persistent
+    if (this.shouldPersist(checkpoint.currentStage)) {
+      this.schedulePersist(taskId);
+    }
+
     return checkpoint;
   }
 
@@ -79,6 +315,15 @@ export class CheckpointStore {
     checkpoint.updatedAt = nowTimestamp();
 
     logger.debug({ taskId, stage, step, progressPercent }, 'Checkpoint stage updated');
+
+    // Schedule persist if entering persistent stage, delete if leaving
+    if (this.shouldPersist(stage)) {
+      this.schedulePersist(taskId);
+    } else if (TERMINAL_STAGES.includes(stage)) {
+      // Terminal stage - delete from DB
+      this.deleteFromDb(taskId).catch(() => {});
+    }
+
     return checkpoint;
   }
 
@@ -151,6 +396,11 @@ export class CheckpointStore {
     checkpoint.partialResult = result;
     checkpoint.updatedAt = nowTimestamp();
 
+    // Partial results are critical - persist immediately if in persistent stage
+    if (this.shouldPersist(checkpoint.currentStage)) {
+      this.schedulePersist(taskId);
+    }
+
     return checkpoint;
   }
 
@@ -179,6 +429,9 @@ export class CheckpointStore {
     checkpoint.resumable = true;
     checkpoint.updatedAt = nowTimestamp();
 
+    // Paused is persistent - persist now
+    this.schedulePersist(taskId);
+
     logger.info({ taskId, reason }, 'Checkpoint marked as paused');
     return checkpoint;
   }
@@ -194,6 +447,9 @@ export class CheckpointStore {
     checkpoint.lastKnownBlocker = reason;
     checkpoint.resumable = false;
     checkpoint.updatedAt = nowTimestamp();
+
+    // Terminal state - delete from DB
+    this.deleteFromDb(taskId).catch(() => {});
 
     logger.info({ taskId, reason }, 'Checkpoint marked as failed');
     return checkpoint;
@@ -213,6 +469,9 @@ export class CheckpointStore {
     checkpoint.pendingApproval = null;
     checkpoint.pendingResources = [];
     checkpoint.updatedAt = nowTimestamp();
+
+    // Terminal state - delete from DB
+    this.deleteFromDb(taskId).catch(() => {});
 
     logger.info({ taskId }, 'Checkpoint marked as completed');
     return checkpoint;
@@ -238,6 +497,8 @@ export class CheckpointStore {
   delete(taskId: string): boolean {
     const deleted = this.checkpoints.delete(taskId);
     if (deleted) {
+      // Also delete from DB
+      this.deleteFromDb(taskId).catch(() => {});
       logger.debug({ taskId }, 'Checkpoint deleted');
     }
     return deleted;
@@ -312,7 +573,29 @@ export class CheckpointStore {
       logger.info({ cleaned, maxAgeMs }, 'Checkpoints cleaned up');
     }
 
+    // Also cleanup old entries from DB
+    this.cleanupDb(cutoff).catch(() => {});
+
     return cleaned;
+  }
+
+  /**
+   * Cleanup old checkpoints from DB
+   */
+  private async cleanupDb(cutoffTimestamp: number): Promise<number> {
+    if (!this.persistenceEnabled) return 0;
+
+    try {
+      const { db, schema } = await getDb();
+      const { lt } = await getDrizzle();
+
+      await db.delete(schema.taskCheckpoints)
+        .where(lt(schema.taskCheckpoints.updatedAt, cutoffTimestamp));
+      return 0; // SQLite doesn't return count
+    } catch (err) {
+      logger.debug({ err }, 'Failed to cleanup checkpoints from DB');
+      return 0;
+    }
   }
 
   /**
@@ -366,10 +649,38 @@ export class CheckpointStore {
 
 // Singleton
 let storeInstance: CheckpointStore | null = null;
+let storeInitialized = false;
 
 export function getCheckpointStore(): CheckpointStore {
   if (!storeInstance) {
     storeInstance = new CheckpointStore();
   }
   return storeInstance;
+}
+
+/**
+ * Initialize checkpoint store and load from DB
+ * Call this during application startup
+ */
+export async function initializeCheckpointStore(): Promise<number> {
+  const store = getCheckpointStore();
+
+  if (storeInitialized) {
+    logger.debug('CheckpointStore already initialized');
+    return 0;
+  }
+
+  const loaded = await store.loadFromDb();
+  storeInitialized = true;
+  return loaded;
+}
+
+/**
+ * Shutdown checkpoint store - flush pending writes
+ */
+export async function shutdownCheckpointStore(): Promise<void> {
+  if (!storeInstance) return;
+
+  await storeInstance.flushPendingPersists();
+  logger.info('CheckpointStore shutdown complete');
 }

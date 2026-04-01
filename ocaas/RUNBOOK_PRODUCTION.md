@@ -40,9 +40,9 @@ curl http://localhost:18789/health
 ### Paso 1: Clonar y preparar
 
 ```bash
-# Clonar repositorio
-git clone <repo-url> ocaas
-cd ocaas
+# Clonar repositorio (reemplazar con tu URL real)
+git clone https://github.com/tu-org/ocaas.git /opt/ocaas
+cd /opt/ocaas
 
 # Instalar dependencias
 npm install
@@ -51,7 +51,7 @@ npm install
 ### Paso 2: Crear directorios
 
 ```bash
-cd backend
+cd /opt/ocaas
 
 # Crear directorios requeridos
 mkdir -p logs data
@@ -69,7 +69,7 @@ npm run db:push
 
 ## 3. Configuración .env
 
-Crear archivo `backend/.env`:
+Crear archivo `/opt/ocaas/.env`:
 
 ```env
 # ============================================
@@ -152,7 +152,7 @@ curl http://localhost:18789/health
 ### Paso 2: Validar configuración OCAAS
 
 ```bash
-cd backend
+cd /opt/ocaas
 
 # Ejecutar doctor (verifica todo)
 npm run doctor
@@ -225,7 +225,7 @@ npm run smoke-test
 
 ```bash
 # Verificar .env existe
-cat backend/.env | grep OPENCLAW
+cat /opt/ocaas/.env | grep OPENCLAW
 
 # Solución: agregar a .env
 OPENCLAW_GATEWAY_URL=http://localhost:18789
@@ -257,16 +257,16 @@ API_SECRET_KEY=<nueva-key-generada>
 
 ```bash
 # Verificar permisos del directorio data
-ls -la backend/data/
+ls -la /opt/ocaas/data/
 
 # Crear si no existe
-mkdir -p backend/data
+mkdir -p /opt/ocaas/data
 
 # Verificar archivo DB
-ls -la backend/data/ocaas.db
+ls -la /opt/ocaas/data/ocaas.db
 
 # Si DB corrupta, backup y recrear:
-mv backend/data/ocaas.db backend/data/ocaas.db.bak
+mv /opt/ocaas/data/ocaas.db /opt/ocaas/data/ocaas.db.bak
 npm run db:push
 ```
 
@@ -282,7 +282,7 @@ npm run start
 npm run doctor
 
 # Si persiste, recrear DB:
-rm backend/data/ocaas.db
+rm /opt/ocaas/data/ocaas.db
 npm run start
 ```
 
@@ -308,10 +308,10 @@ OPENCLAW_WS_URL=ws://your-ws-endpoint
 
 ```bash
 # Verificar permisos
-ls -la backend/
+ls -la /opt/ocaas/
 
 # Dar permisos
-chmod 755 backend/logs backend/data
+chmod 755 /opt/ocaas/logs /opt/ocaas/data
 ```
 
 ### Sistema muestra DEGRADED
@@ -335,10 +335,10 @@ npm run doctor
 # (Ctrl+C si está en foreground, o kill proceso)
 
 # Limpiar estado temporal
-rm -f backend/data/*.tmp
+rm -f /opt/ocaas/data/*.tmp
 
 # Re-ejecutar validación
-npm run doctor
+cd /opt/ocaas && npm run doctor
 
 # Reiniciar
 npm run start
@@ -348,10 +348,10 @@ npm run start
 
 ```bash
 # Backup
-cp backend/data/ocaas.db backend/data/ocaas.db.backup
+cp /opt/ocaas/data/ocaas.db /opt/ocaas/data/ocaas.db.backup
 
 # Recrear
-rm backend/data/ocaas.db
+rm /opt/ocaas/data/ocaas.db
 npm run db:push
 
 # NOTA: Se pierden datos. Para producción real,
@@ -362,8 +362,9 @@ npm run db:push
 
 ```bash
 # Solo si necesario - ELIMINA TODOS LOS DATOS
-rm -rf backend/data/ocaas.db
-rm -rf backend/logs/*
+cd /opt/ocaas
+rm -rf data/ocaas.db
+rm -rf logs/*
 
 npm run db:push
 npm run doctor
@@ -394,7 +395,7 @@ Al iniciar OCAAS, automáticamente:
 **Verificar recovery:**
 ```bash
 # Ver logs de recovery al startup
-grep "recovery" backend/logs/combined.log | tail -20
+grep "recovery" /opt/ocaas/logs/combined.log | tail -20
 
 # Ver estado de resiliencia
 curl localhost:3001/api/system/diagnostics | jq '.data.checks[] | select(.category=="resilience")'
@@ -417,7 +418,7 @@ curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience'
 npm run start
 
 # 4. Si persiste, verificar en logs
-grep "task_id" backend/logs/orchestrator.log | tail -50
+grep "task_id" /opt/ocaas/logs/orchestrator.log | tail -50
 ```
 
 ### Orphan Tasks (Huérfanas)
@@ -440,7 +441,7 @@ curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience.orphan
 curl localhost:18789/health
 
 # 2. Ver errores de conexión
-grep "connection" backend/logs/integration.log | tail -20
+grep "connection" /opt/ocaas/logs/integration.log | tail -20
 
 # 3. Verificar circuit breakers
 curl localhost:3001/api/system/diagnostics | jq '.data.checks[] | select(.category=="resilience")'
@@ -453,7 +454,7 @@ El sistema previene que una task se ejecute dos veces simultáneamente mediante 
 **Si sospechas doble ejecución:**
 ```bash
 # 1. Buscar warnings en logs
-grep "already has active lease" backend/logs/orchestrator.log
+grep "already has active lease" /opt/ocaas/logs/orchestrator.log
 
 # 2. Verificar leases activos
 curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience.activeLeases'
@@ -484,7 +485,7 @@ cancelled → (terminal - no transitions)
 **Diagnóstico:**
 ```bash
 # Ver transición que falló
-grep "Invalid state transition" backend/logs/combined.log | tail -10
+grep "Invalid state transition" /opt/ocaas/logs/combined.log | tail -10
 
 # Esto NO es un bug - el sistema está previniendo un estado inconsistente
 ```
@@ -526,10 +527,10 @@ Los checkpoints críticos ahora se persisten a la base de datos para sobrevivir 
 
 ```bash
 # Ver checkpoints en DB
-sqlite3 backend/data/ocaas.db "SELECT task_id, current_stage, progress_percent, last_known_blocker FROM task_checkpoints"
+sqlite3 /opt/ocaas/data/ocaas.db "SELECT task_id, current_stage, progress_percent, last_known_blocker FROM task_checkpoints"
 
 # Contar checkpoints por stage
-sqlite3 backend/data/ocaas.db "SELECT current_stage, COUNT(*) FROM task_checkpoints GROUP BY current_stage"
+sqlite3 /opt/ocaas/data/ocaas.db "SELECT current_stage, COUNT(*) FROM task_checkpoints GROUP BY current_stage"
 ```
 
 ### Stages que se persisten
@@ -557,28 +558,29 @@ Al iniciar OCAAS:
 
 ```bash
 # Ver logs de recovery de checkpoints
-grep "Checkpoints loaded from DB" backend/logs/combined.log
-grep "checkpointsLoaded" backend/logs/combined.log
+grep "Checkpoints loaded from DB" /opt/ocaas/logs/combined.log
+grep "checkpointsLoaded" /opt/ocaas/logs/combined.log
 ```
 
 ### Troubleshooting checkpoints
 
 **Checkpoint stuck en DB:**
 ```bash
-# Ver checkpoint específico
-sqlite3 backend/data/ocaas.db "SELECT * FROM task_checkpoints WHERE task_id='<task_id>'"
+# Ver checkpoint específico (reemplazar TASK_ID con el ID real)
+TASK_ID="tu_task_id_aqui"
+sqlite3 /opt/ocaas/data/ocaas.db "SELECT * FROM task_checkpoints WHERE task_id='$TASK_ID'"
 
 # Eliminar checkpoint manualmente (último recurso)
-sqlite3 backend/data/ocaas.db "DELETE FROM task_checkpoints WHERE task_id='<task_id>'"
+sqlite3 /opt/ocaas/data/ocaas.db "DELETE FROM task_checkpoints WHERE task_id='$TASK_ID'"
 ```
 
 **Muchos checkpoints acumulados:**
 ```bash
 # Ver antiguedad de checkpoints
-sqlite3 backend/data/ocaas.db "SELECT task_id, current_stage, datetime(updated_at, 'unixepoch') as updated FROM task_checkpoints ORDER BY updated_at"
+sqlite3 /opt/ocaas/data/ocaas.db "SELECT task_id, current_stage, datetime(updated_at, 'unixepoch') as updated FROM task_checkpoints ORDER BY updated_at"
 
 # Limpiar checkpoints viejos (>24 horas)
-sqlite3 backend/data/ocaas.db "DELETE FROM task_checkpoints WHERE updated_at < strftime('%s', 'now') - 86400"
+sqlite3 /opt/ocaas/data/ocaas.db "DELETE FROM task_checkpoints WHERE updated_at < strftime('%s', 'now') - 86400"
 ```
 
 **Flush manual de checkpoints:**
@@ -729,7 +731,7 @@ curl -s "localhost:3001/api/system/tasks/$TASK_ID/timeline" | jq
 ### Ubicación de logs
 
 ```
-backend/logs/
+/opt/ocaas/logs/
 ├── combined.log      # Todos los logs
 ├── system.log        # Logs de sistema
 ├── orchestrator.log  # Logs del orquestador
@@ -741,16 +743,16 @@ backend/logs/
 
 ```bash
 # Todos los logs
-tail -f backend/logs/combined.log
+tail -f /opt/ocaas/logs/combined.log
 
 # Solo errores
-grep -i error backend/logs/combined.log | tail -20
+grep -i error /opt/ocaas/logs/combined.log | tail -20
 
 # Logs de OpenClaw
-tail -f backend/logs/integration.log
+tail -f /opt/ocaas/logs/integration.log
 
 # Logs de tareas
-grep -i task backend/logs/orchestrator.log | tail -20
+grep -i task /opt/ocaas/logs/orchestrator.log | tail -20
 ```
 
 ### Logs en desarrollo
@@ -785,7 +787,7 @@ curl -X POST localhost:3001/api/channels/ingest \
 curl localhost:3001/api/tasks | jq '.[0]'
 
 # 3. Ver en logs
-grep "channel" backend/logs/combined.log | tail -5
+grep "channel" /opt/ocaas/logs/combined.log | tail -5
 ```
 
 ### Verificar WebSocket RPC (si aplica)
@@ -1110,10 +1112,11 @@ Las reglas se evalúan en orden de prioridad (1 = primero):
 
 ```bash
 # Logs del orquestador
-grep -i "decision" backend/logs/orchestrator.log | tail -20
+grep -i "decision" /opt/ocaas/logs/orchestrator.log | tail -20
 
-# Buscar decisiones de una task específica
-grep "task_xyz" backend/logs/orchestrator.log | grep -i "decision"
+# Buscar decisiones de una task específica (reemplazar task_xyz con ID real)
+TASK_ID="task_xyz"
+grep "$TASK_ID" /opt/ocaas/logs/orchestrator.log | grep -i "decision"
 ```
 
 #### 2. Verificar métricas
@@ -1221,7 +1224,7 @@ curl localhost:3001/api/escalations | jq '.data.pending'
 
 # Verificar por qué se escaló
 # Buscar en logs:
-grep "Decision escalated to human" backend/logs/orchestrator.log | tail -5
+grep "Decision escalated to human" /opt/ocaas/logs/orchestrator.log | tail -5
 ```
 
 **Escalación se crea cuando:**
@@ -1272,10 +1275,10 @@ Cada decisión ahora loguea información completa:
 
 **Filtrar logs por método:**
 ```bash
-grep '"method":"heuristic"' backend/logs/orchestrator.log | wc -l  # Decisiones heurísticas
-grep '"method":"llm_'       backend/logs/orchestrator.log | wc -l  # Decisiones LLM
-grep '"method":"cached"'    backend/logs/orchestrator.log | wc -l  # Cache hits
-grep '"method":"fallback"'  backend/logs/orchestrator.log | wc -l  # Fallbacks (revisar!)
+grep '"method":"heuristic"' /opt/ocaas/logs/orchestrator.log | wc -l  # Decisiones heurísticas
+grep '"method":"llm_'       /opt/ocaas/logs/orchestrator.log | wc -l  # Decisiones LLM
+grep '"method":"cached"'    /opt/ocaas/logs/orchestrator.log | wc -l  # Cache hits
+grep '"method":"fallback"'  /opt/ocaas/logs/orchestrator.log | wc -l  # Fallbacks (revisar!)
 ```
 
 ## 14. Cost Optimization - Modos de Operación (NEW)
@@ -1379,13 +1382,13 @@ const summary = engine.getCostSummary();
 
 ```bash
 # Logs con info de costes
-grep "costInfo" backend/logs/orchestrator.log | tail -10
+grep "costInfo" /opt/ocaas/logs/orchestrator.log | tail -10
 
 # Ver breakdown por tier
-grep "LLM usage recorded" backend/logs/orchestrator.log | tail -20
+grep "LLM usage recorded" /opt/ocaas/logs/orchestrator.log | tail -20
 
 # Ver ahorros
-grep "Tokens saved" backend/logs/orchestrator.log | tail -20
+grep "Tokens saved" /opt/ocaas/logs/orchestrator.log | tail -20
 ```
 
 ### Eventos de Decisión con Cost Info
@@ -1434,7 +1437,7 @@ engine.resetCostTracking();
 
 ```bash
 # Setup inicial
-npm install && cd backend && mkdir -p logs data
+cd /opt/ocaas && npm install && mkdir -p logs data
 # Configurar .env (ver sección 3)
 
 # Arranque
@@ -1447,7 +1450,7 @@ npm run smoke-test
 
 # Troubleshooting
 npm run doctor -- --json    # Detalles completos
-tail -f backend/logs/combined.log
+tail -f /opt/ocaas/logs/combined.log
 ```
 
 ## 15. Permisos del sistema y sudo seguro
@@ -1455,16 +1458,16 @@ tail -f backend/logs/combined.log
 El sistema OCAAS debe ejecutarse bajo un usuario no root, con permisos controlados.
 
 Puede ejecutarse:
-- bajo un usuario dedicado (ocaas), recomendado
-- o bajo el usuario actual del sistema, si se controlan correctamente los permisos
+- bajo un usuario dedicado (ocaas), recomendado para producción
+- o bajo el usuario actual del sistema (ubuntu, admin, etc.)
 
 ### Verificar usuario actual
 
 ```bash
 whoami
+# Ejemplo: ubuntu, ocaas, admin
+# NUNCA debe ser: root
 ```
-
-Nunca ejecutar como root.
 
 ### Permisos de directorios
 
@@ -1472,20 +1475,23 @@ Crear estructura:
 
 ```bash
 sudo mkdir -p /opt/ocaas
-sudo mkdir -p /var/log/ocaas
+sudo mkdir -p /opt/ocaas/logs
+sudo mkdir -p /opt/ocaas/data
 sudo mkdir -p /opt/ocaas/backups
+sudo mkdir -p /var/log/ocaas
 ```
 
-Asignar permisos (adaptar segun usuario):
+Asignar permisos (ejemplo con usuario ubuntu):
 
 ```bash
-sudo chown -R $USER:$USER /opt/ocaas
-sudo chown -R $USER:$USER /var/log/ocaas
+# Reemplazar 'ubuntu' con tu usuario real (resultado de whoami)
+sudo chown -R ubuntu:ubuntu /opt/ocaas
+sudo chown -R ubuntu:ubuntu /var/log/ocaas
 chmod -R 755 /opt/ocaas
 chmod -R 755 /var/log/ocaas
 ```
 
-### Configuracion sudo segura
+### Configuración sudo segura
 
 Editar:
 
@@ -1493,50 +1499,56 @@ Editar:
 sudo visudo
 ```
 
-Anadir solo lo necesario (ajustar usuario si no es ocaas):
+Añadir solo lo necesario (reemplazar 'ubuntu' con tu usuario real):
 
-```bash
-ocaas ALL=(ALL) NOPASSWD: /usr/bin/systemctl
-ocaas ALL=(ALL) NOPASSWD: /usr/bin/docker
+```text
+# Permitir solo systemctl para gestión del servicio
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl start ocaas
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop ocaas
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart ocaas
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/systemctl status ocaas
 ```
 
-Si usas usuario actual:
-
-```bash
-<tu_usuario> ALL=(ALL) NOPASSWD: /usr/bin/systemctl
-```
-
-Reglas criticas:
-- no usar ALL=(ALL) NOPASSWD: ALL
-- no permitir bash libre
-- no permitir ejecucion dinamica
+**⚠️ QUÉ NO HACER en sudoers:**
+- `ALL=(ALL) NOPASSWD: ALL` - NUNCA usar esto
+- `NOPASSWD: /bin/bash` - permite shell como root
+- `NOPASSWD: /usr/bin/env` - permite ejecutar cualquier cosa
+- Cualquier comando que acepte argumentos arbitrarios
 
 ## 16. Usuario de servicio y estructura del sistema
 
-Estructura recomendada:
+Estructura de producción:
 
-/opt/ocaas
-/opt/ocaas/backend
-/var/log/ocaas
+```text
+/opt/ocaas/
+├── dist/           # Código compilado
+├── node_modules/   # Dependencias
+├── logs/           # Logs de aplicación
+├── data/           # Base de datos SQLite
+├── backups/        # Backups de DB
+├── .env            # Configuración
+└── package.json
 
-Asegurar ownership correcto:
-
-```bash
-sudo chown -R $USER:$USER /opt/ocaas
-sudo chown -R $USER:$USER /var/log/ocaas
+/var/log/ocaas/     # Logs de systemd (alternativo)
 ```
 
-Separar logs del sistema y aplicacion.
+Verificar ownership correcto:
+
+```bash
+# Reemplazar 'ubuntu' con tu usuario real
+ls -la /opt/ocaas/
+# Debe mostrar: ubuntu ubuntu (o tu usuario)
+```
 
 ## 17. Servicio systemd
 
-Crear:
+Crear archivo de servicio:
 
 ```bash
 sudo nano /etc/systemd/system/ocaas.service
 ```
 
-Contenido:
+Contenido (reemplazar 'ubuntu' con tu usuario real):
 
 ```ini
 [Unit]
@@ -1544,12 +1556,13 @@ Description=OCAAS Backend
 After=network.target
 
 [Service]
-User=<usuario_actual>
-WorkingDirectory=/opt/ocaas/backend
+# IMPORTANTE: Reemplazar 'ubuntu' con el usuario que ejecutará el servicio
+User=ubuntu
+WorkingDirectory=/opt/ocaas
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
-EnvironmentFile=/opt/ocaas/backend/.env
+EnvironmentFile=/opt/ocaas/.env
 StandardOutput=append:/var/log/ocaas/combined.log
 StandardError=append:/var/log/ocaas/error.log
 
@@ -1557,7 +1570,7 @@ StandardError=append:/var/log/ocaas/error.log
 WantedBy=multi-user.target
 ```
 
-Activar:
+Activar el servicio:
 
 ```bash
 sudo systemctl daemon-reload
@@ -1566,35 +1579,39 @@ sudo systemctl start ocaas
 sudo systemctl status ocaas
 ```
 
-## 18. Automatizacion segura
+## 18. Automatización segura
 
-Permitir ejecucion controlada de scripts:
+Dar permisos de ejecución a scripts:
 
 ```bash
-chmod +x backend/scripts/*.sh
+chmod +x /opt/ocaas/scripts/*.sh
 ```
 
 Usar siempre rutas absolutas:
 
 ```bash
-/opt/ocaas/backend/scripts/script.sh
+/opt/ocaas/scripts/deploy_production.sh
 ```
 
-No permitir:
-- ejecucion arbitraria
-- scripts externos sin control
-- comandos dinamicos via sudo
+**No permitir:**
+- Ejecución de scripts externos sin revisión
+- Comandos dinámicos via sudo
+- Scripts que acepten argumentos de usuarios no confiables
 
-## 19. Hardening basico de produccion
+## 19. Hardening básico de producción
 
 ### Firewall
 
 ```bash
-sudo ufw allow 3001
+sudo ufw allow 22/tcp    # SSH
+sudo ufw allow 3001/tcp  # OCAAS API
 sudo ufw enable
+sudo ufw status
 ```
 
-### Rotacion de logs
+### Rotación de logs
+
+Crear archivo de configuración:
 
 ```bash
 sudo nano /etc/logrotate.d/ocaas
@@ -1602,34 +1619,85 @@ sudo nano /etc/logrotate.d/ocaas
 
 Contenido:
 
+```text
 /var/log/ocaas/*.log {
     daily
     rotate 7
     compress
     missingok
     notifempty
+    create 644 ubuntu ubuntu
 }
+```
 
-### Backup automatico DB
+### Backup automático de DB
+
+Editar crontab:
 
 ```bash
 crontab -e
 ```
 
-Anadir:
+Añadir línea (backup diario a las 2:00 AM):
 
-0 2 * * * cp /opt/ocaas/backend/data/ocaas.db /opt/ocaas/backups/ocaas_$(date +\%F).db
+```cron
+0 2 * * * cp /opt/ocaas/data/ocaas.db /opt/ocaas/backups/ocaas_$(date +\%F).db
+```
 
 ### Seguridad del archivo .env
 
 ```bash
-chmod 600 /opt/ocaas/backend/.env
+chmod 600 /opt/ocaas/.env
 ```
 
-## 20. Notas finales de operacion
+## 20. Validación final antes de producción
 
-- ejecutar siempre como usuario no root
-- mantener permisos minimos necesarios
-- revisar logs regularmente
-- monitorizar escalaciones humanas
-- validar estado del sistema con diagnostics
+Ejecutar estos comandos para verificar que todo está correctamente configurado:
+
+```bash
+# 1. Verificar puerto libre
+lsof -ti:3001
+# Si devuelve un PID, el puerto está ocupado. Detener proceso: kill $(lsof -ti:3001)
+
+# 2. Verificar .env existe y tiene las variables críticas
+cat /opt/ocaas/.env | grep -E "^(OPENCLAW_GATEWAY_URL|API_SECRET_KEY)="
+# Debe mostrar ambas variables con valores
+
+# 3. Verificar OpenClaw está corriendo
+curl -s http://localhost:18789/health
+# Esperado: {"status":"ok"} o similar
+
+# 4. Iniciar OCAAS si no está corriendo
+cd /opt/ocaas && npm run start &
+
+# 5. Verificar backend responde
+sleep 3 && curl -s http://localhost:3001/health
+# Esperado: {"status":"ok"}
+
+# 6. Verificar diagnósticos completos
+curl -s http://localhost:3001/api/system/diagnostics | jq '.data.status'
+# Esperado: "healthy" o "degraded"
+
+# 7. Ejecutar smoke test
+cd /opt/ocaas && npm run smoke-test
+# Esperado: STATUS: PASS
+```
+
+### Checklist final
+
+| Verificación | Comando | Resultado esperado |
+|--------------|---------|-------------------|
+| Puerto 3001 libre | `lsof -ti:3001` | Vacío o PID de OCAAS |
+| .env configurado | `cat /opt/ocaas/.env \| wc -l` | >5 líneas |
+| OpenClaw activo | `curl localhost:18789/health` | `{"status":"ok"}` |
+| Backend activo | `curl localhost:3001/health` | `{"status":"ok"}` |
+| Permisos correctos | `ls -la /opt/ocaas/.env` | `-rw-------` (600) |
+| Logs escribibles | `touch /opt/ocaas/logs/test && rm /opt/ocaas/logs/test` | Sin error |
+
+## 21. Notas finales de operación
+
+- Ejecutar siempre como usuario no root
+- Mantener permisos mínimos necesarios
+- Revisar logs regularmente: `tail -f /opt/ocaas/logs/combined.log`
+- Monitorizar escalaciones humanas: `curl localhost:3001/api/escalations/inbox`
+- Validar estado del sistema: `npm run doctor`

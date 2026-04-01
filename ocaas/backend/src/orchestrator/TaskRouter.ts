@@ -14,12 +14,27 @@ import {
   getAutonomyConfig,
   requiresApprovalForTask,
 } from '../config/autonomy.js';
-import { EVENT_TYPE } from '../config/constants.js';
+import { EVENT_TYPE, TASK_STATUS } from '../config/constants.js';
 import type { TaskDTO } from '../types/domain.js';
 import type { OrchestratorConfig } from './types.js';
 import type { CreateTaskInput } from '../services/TaskService.js';
+import {
+  getExecutionLeaseStore,
+  getCheckpointStore,
+} from './resilience/index.js';
 
 const logger = orchestratorLogger.child({ component: 'TaskRouter' });
+
+// Valid state transitions FSM
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending: ['queued', 'cancelled'],
+  queued: ['assigned', 'cancelled', 'pending'], // pending for retry
+  assigned: ['running', 'failed', 'cancelled'],
+  running: ['completed', 'failed', 'cancelled'],
+  completed: [], // terminal
+  failed: ['pending'], // can retry
+  cancelled: [], // terminal
+};
 
 export class TaskRouter {
   private queue: QueueManager;
@@ -346,12 +361,44 @@ export class TaskRouter {
       return false;
     }
 
-    // Mark as processing
+    // =========================================================================
+    // CRITICAL: Acquire execution lease BEFORE processing to prevent duplicates
+    // =========================================================================
+    const leaseStore = getExecutionLeaseStore();
+    const checkpointStore = getCheckpointStore();
+    const executionId = `exec_${nanoid(12)}`;
+
+    // Check if task already has an active lease (another instance processing)
+    if (leaseStore.hasActiveLease(task.id)) {
+      logger.warn({ taskId: task.id }, 'Task already has active lease, skipping');
+      return false;
+    }
+
+    // Acquire lease - this is the critical section for preventing double execution
+    const lease = leaseStore.acquire(task.id, executionId);
+    if (!lease) {
+      logger.warn({ taskId: task.id, executionId }, 'Failed to acquire execution lease');
+      return false;
+    }
+
+    // Create checkpoint to track execution state
+    const checkpoint = checkpointStore.getOrCreate(task.id, assignment.agentId);
+    checkpoint.executionId = executionId;
+    checkpointStore.updateStage(task.id, 'assigning');
+
+    // Mark as processing in queue
     this.queue.markProcessing(task.id);
 
     try {
-      // Assign task
+      // =========================================================================
+      // STAGE: Assigning agent
+      // =========================================================================
       await taskService.assign(task.id, assignment.agentId);
+      checkpointStore.updateAgent(task.id, assignment.agentId);
+      checkpointStore.updateStage(task.id, 'spawning_session', 'agent_assigned', 20);
+
+      // Renew lease after each significant operation
+      leaseStore.renew(task.id, executionId);
 
       // Ensure agent has an active session
       if (!sessionManager.hasActiveSession(assignment.agentId)) {
@@ -364,10 +411,18 @@ export class TaskRouter {
         if (!sessionId) {
           throw new Error(`Failed to spawn session for agent ${assignment.agentId}`);
         }
+        checkpointStore.updateAgent(task.id, assignment.agentId, sessionId);
       }
+      checkpointStore.updateStage(task.id, 'executing', 'session_ready', 40);
 
-      // Start task
+      // =========================================================================
+      // STAGE: Starting execution
+      // =========================================================================
       await taskService.start(task.id);
+      checkpointStore.updateStage(task.id, 'awaiting_response', 'task_started', 50);
+
+      // Renew lease before long operation
+      leaseStore.renew(task.id, executionId);
 
       // Send to agent via session
       const response = await sessionManager.sendToAgent(
@@ -377,9 +432,29 @@ export class TaskRouter {
       );
 
       if (response) {
-        // Task completed
+        // =========================================================================
+        // STAGE: Processing result - save partial result BEFORE completing
+        // =========================================================================
+        checkpointStore.updateStage(task.id, 'processing_result', 'response_received', 80);
+        checkpointStore.savePartialResult(task.id, { response });
+
+        // Renew lease before final DB write
+        leaseStore.renew(task.id, executionId);
+
+        // =========================================================================
+        // STAGE: Completing task
+        // =========================================================================
+        checkpointStore.updateStage(task.id, 'completing', 'saving_result', 90);
         await taskService.complete(task.id, { response });
+
+        // Mark checkpoint as completed
+        checkpointStore.markCompleted(task.id);
+
+        // Release lease
+        leaseStore.release(task.id, executionId);
+
         this.queue.markDone(task.id);
+
         // Clear any feedback and pending retries for this task
         await getFeedbackService().clearForTask(task.id);
         getResourceRetryService().clearForTask(task.id);
@@ -390,15 +465,23 @@ export class TaskRouter {
           await decomposer.checkParentCompletion(task);
         }
 
+        logger.info({ taskId: task.id, executionId }, 'Task completed successfully');
         return true;
       }
 
-      // If no response, task might still be running async
+      // If no response, task might still be running async - keep lease active
+      checkpointStore.updateStage(task.id, 'awaiting_response', 'async_execution', 60);
       return true;
+
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
+
+      // Update checkpoint with failure info
+      checkpointStore.updateBlocker(task.id, message);
+
       logError(taskLog, err, {
         taskId: task.id,
+        executionId,
         errorType: 'task_processing_failed',
         recoverable: task.retryCount < task.maxRetries,
         suggestedAction: task.retryCount < task.maxRetries ? 'retry' : 'fail',
@@ -406,16 +489,34 @@ export class TaskRouter {
 
       // Use task's own retry settings
       if (task.retryCount < task.maxRetries) {
+        // Mark checkpoint as retrying
+        checkpointStore.incrementRetry(task.id);
+        checkpointStore.updateStage(task.id, 'retrying', `retry_${task.retryCount + 1}`);
+
         // Re-queue for retry
         await taskService.incrementRetry(task.id);
+
+        // Release lease before re-queue
+        leaseStore.release(task.id, executionId);
+
         this.queue.markDone(task.id);
+
         // Re-add to queue for retry
         const updatedTask = await taskService.getById(task.id);
         this.queue.add(updatedTask);
-        logger.info({ taskId: task.id, retryCount: updatedTask.retryCount }, 'Task queued for retry');
+
+        logger.info({ taskId: task.id, executionId, retryCount: updatedTask.retryCount }, 'Task queued for retry');
       } else {
+        // Mark checkpoint as failed
+        checkpointStore.markFailed(task.id, message);
+
         await taskService.fail(task.id, message);
+
+        // Release lease
+        leaseStore.release(task.id, executionId);
+
         this.queue.markDone(task.id);
+
         // Clear any feedback and pending retries for this task
         await getFeedbackService().clearForTask(task.id);
         getResourceRetryService().clearForTask(task.id);
@@ -426,7 +527,7 @@ export class TaskRouter {
           await decomposer.checkParentCompletion(task);
         }
 
-        logger.error({ taskId: task.id, retryCount: task.retryCount }, 'Task failed after max retries');
+        logger.error({ taskId: task.id, executionId, retryCount: task.retryCount }, 'Task failed after max retries');
       }
 
       return false;
@@ -478,23 +579,97 @@ export class TaskRouter {
     return this.processNext();
   }
 
-  // Recover pending tasks from database on startup
+  /**
+   * Recover pending tasks from database on startup
+   * Also rebuilds checkpoints and handles orphaned RUNNING tasks
+   */
   async recoverPendingTasks(): Promise<number> {
     const { taskService } = getServices();
-    const pendingTasks = await taskService.getPending();
+    const checkpointStore = getCheckpointStore();
+    const leaseStore = getExecutionLeaseStore();
 
-    let recovered = 0;
-    for (const task of pendingTasks) {
-      if (!this.queue.has(task.id)) {
-        this.queue.add(task);
-        recovered++;
+    logger.info('Starting task recovery from database...');
+
+    // 1. First, release all leases from previous instance (clean slate)
+    const expiredLeases = leaseStore.getExpiredLeases();
+    for (const lease of expiredLeases) {
+      leaseStore.forceRelease(lease.taskId);
+    }
+    logger.info({ releasedLeases: expiredLeases.length }, 'Released leases from previous instance');
+
+    // 2. Recover RUNNING tasks - these need special handling
+    const runningTasks = await taskService.getRunning();
+    let runningRecovered = 0;
+
+    for (const task of runningTasks) {
+      // Create checkpoint for tracking
+      const checkpoint = checkpointStore.getOrCreate(task.id, task.agentId);
+      checkpoint.currentStage = 'paused';
+      checkpoint.lastKnownBlocker = 'Recovered from crash - was RUNNING';
+      checkpoint.resumable = true;
+
+      // Decide: retry or fail based on retry count
+      if (task.retryCount < task.maxRetries) {
+        // Requeue for retry
+        await taskService.incrementRetry(task.id);
+        const updated = await taskService.getById(task.id);
+        this.queue.add(updated);
+        checkpoint.currentStage = 'retrying';
+        runningRecovered++;
+        logger.info({ taskId: task.id, retryCount: updated.retryCount }, 'RUNNING task recovered and requeued');
+      } else {
+        // No retries - mark as failed
+        await taskService.fail(task.id, 'Task was in RUNNING state during crash recovery');
+        checkpointStore.markFailed(task.id, 'Crash recovery - max retries exceeded');
+        logger.warn({ taskId: task.id }, 'RUNNING task failed during recovery - max retries');
       }
     }
 
-    if (recovered > 0) {
-      logger.info({ recovered }, 'Recovered pending tasks from database');
+    // 3. Recover ASSIGNED tasks (agent selected but not started)
+    const assignedTasks = await taskService.list({ status: TASK_STATUS.ASSIGNED as any });
+    let assignedRecovered = 0;
+
+    for (const task of assignedTasks) {
+      // Reset to queued state
+      await taskService.queue(task.id);
+      const updated = await taskService.getById(task.id);
+
+      if (!this.queue.has(task.id)) {
+        this.queue.add(updated);
+        assignedRecovered++;
+
+        const checkpoint = checkpointStore.getOrCreate(task.id, task.agentId);
+        checkpoint.currentStage = 'queued';
+        checkpoint.lastKnownBlocker = 'Recovered from crash - was ASSIGNED';
+      }
     }
-    return recovered;
+
+    // 4. Recover PENDING and QUEUED tasks
+    const pendingTasks = await taskService.getPending();
+    let pendingRecovered = 0;
+
+    for (const task of pendingTasks) {
+      if (!this.queue.has(task.id)) {
+        this.queue.add(task);
+        pendingRecovered++;
+
+        // Create lightweight checkpoint
+        const checkpoint = checkpointStore.getOrCreate(task.id, task.agentId);
+        checkpoint.currentStage = 'queued';
+      }
+    }
+
+    const totalRecovered = runningRecovered + assignedRecovered + pendingRecovered;
+
+    logger.info({
+      totalRecovered,
+      runningRecovered,
+      assignedRecovered,
+      pendingRecovered,
+      queueSize: this.queue.getQueueSize(),
+    }, 'Task recovery completed');
+
+    return totalRecovered;
   }
 
   start(): void {
@@ -502,6 +677,7 @@ export class TaskRouter {
 
     this.running = true;
     let cleanupCounter = 0;
+    let leaseCleanupCounter = 0;
 
     this.intervalId = setInterval(async () => {
       try {
@@ -517,6 +693,13 @@ export class TaskRouter {
           actionExecutor.cleanupOldPending();
         }
 
+        // Cleanup expired leases and stale tasks every ~30 seconds
+        leaseCleanupCounter++;
+        if (leaseCleanupCounter >= 30) {
+          leaseCleanupCounter = 0;
+          await this.cleanupStaleExecutions();
+        }
+
         // Process next task
         await this.processNext();
       } catch (err) {
@@ -525,6 +708,61 @@ export class TaskRouter {
     }, 1000);
 
     logger.info('TaskRouter started');
+  }
+
+  /**
+   * Cleanup stale executions - tasks with expired leases or stuck states
+   */
+  private async cleanupStaleExecutions(): Promise<void> {
+    const leaseStore = getExecutionLeaseStore();
+    const checkpointStore = getCheckpointStore();
+    const { taskService } = getServices();
+
+    // 1. Release expired leases
+    const expiredCount = leaseStore.cleanupExpired();
+    if (expiredCount > 0) {
+      logger.info({ expiredCount }, 'Cleaned up expired execution leases');
+    }
+
+    // 2. Find tasks in RUNNING state without active lease (orphaned)
+    const runningTasks = await taskService.getRunning();
+    for (const task of runningTasks) {
+      if (!leaseStore.hasActiveLease(task.id)) {
+        // Task is RUNNING but no lease - it's orphaned
+        const checkpoint = checkpointStore.get(task.id);
+
+        // Check how long it's been stuck
+        const stuckDuration = Date.now() - (task.startedAt ?? task.updatedAt) * 1000;
+        const stuckMinutes = Math.round(stuckDuration / 60000);
+
+        if (stuckDuration > 5 * 60 * 1000) { // 5 minutes
+          logger.warn({
+            taskId: task.id,
+            stuckMinutes,
+            hasCheckpoint: !!checkpoint,
+            checkpointStage: checkpoint?.currentStage,
+          }, 'Found orphaned RUNNING task');
+
+          // If task has retries remaining, requeue it
+          if (task.retryCount < task.maxRetries) {
+            await taskService.incrementRetry(task.id);
+            const updated = await taskService.getById(task.id);
+            if (!this.queue.has(task.id)) {
+              this.queue.add(updated);
+            }
+            logger.info({ taskId: task.id }, 'Orphaned task requeued for retry');
+          } else {
+            // No retries left - fail the task
+            await taskService.fail(task.id, `Task orphaned after ${stuckMinutes} minutes with no active lease`);
+            checkpointStore.markFailed(task.id, 'Orphaned execution');
+            logger.error({ taskId: task.id }, 'Orphaned task failed - no retries remaining');
+          }
+        }
+      }
+    }
+
+    // 3. Cleanup old checkpoints
+    checkpointStore.cleanup();
   }
 
   stop(): void {

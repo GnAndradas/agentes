@@ -370,6 +370,154 @@ npm run doctor
 npm run start
 ```
 
+## 7.1 Recovery de Tareas (Resiliencia)
+
+OCAAS incluye un sistema de resiliencia que previene doble ejecución y permite recovery después de crashes.
+
+### Conceptos Clave
+
+| Concepto | Descripción |
+|----------|-------------|
+| **Lease** | Lock temporal que previene que una task se ejecute dos veces simultáneamente |
+| **Checkpoint** | Estado guardado de una ejecución para recovery |
+| **Orphan** | Lease o ejecución sin correspondencia válida |
+
+### Recovery Automático al Startup
+
+Al iniciar OCAAS, automáticamente:
+
+1. Libera leases expirados (>5 min sin renovación)
+2. Re-encola tasks en estados intermedios
+3. Pausa tasks stale (>10 min sin update) para revisión
+4. Limpia checkpoints de tasks terminadas
+
+**Verificar recovery:**
+```bash
+# Ver logs de recovery al startup
+grep "recovery" backend/logs/combined.log | tail -20
+
+# Ver estado de resiliencia
+curl localhost:3001/api/system/diagnostics | jq '.data.checks[] | select(.category=="resilience")'
+```
+
+### Tasks Stuck (Atascadas)
+
+Si una task queda en estado `running` o `assigned` sin progresar:
+
+```bash
+# 1. Verificar estado actual
+curl localhost:3001/api/tasks | jq '.[] | select(.status=="running" or .status=="assigned")'
+
+# 2. Ver si tiene lease activo
+curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience'
+# Buscar: activeLeases, orphanLeases
+
+# 3. Forzar liberación via restart
+# El cleanup automático correrá al reiniciar
+npm run start
+
+# 4. Si persiste, verificar en logs
+grep "task_id" backend/logs/orchestrator.log | tail -50
+```
+
+### Orphan Tasks (Huérfanas)
+
+Cada 30 segundos, OCAAS detecta y limpia orphans automáticamente.
+
+**Causas comunes:**
+- Crash durante ejecución
+- OpenClaw timeout sin respuesta
+- Red intermitente
+
+**Verificar orphans:**
+```bash
+curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience.orphanLeases'
+```
+
+**Si hay muchos orphans persistentes:**
+```bash
+# 1. Verificar OpenClaw está respondiendo
+curl localhost:18789/health
+
+# 2. Ver errores de conexión
+grep "connection" backend/logs/integration.log | tail -20
+
+# 3. Verificar circuit breakers
+curl localhost:3001/api/system/diagnostics | jq '.data.checks[] | select(.category=="resilience")'
+```
+
+### Doble Ejecución Prevenida
+
+El sistema previene que una task se ejecute dos veces simultáneamente mediante leases.
+
+**Si sospechas doble ejecución:**
+```bash
+# 1. Buscar warnings en logs
+grep "already has active lease" backend/logs/orchestrator.log
+
+# 2. Verificar leases activos
+curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience.activeLeases'
+
+# 3. Ver checkpoints activos
+curl localhost:3001/api/system/diagnostics | jq '.data.metrics.resilience.activeCheckpoints'
+```
+
+### FSM - Transiciones Inválidas
+
+Las transiciones de estado están validadas. Si ves errores de transición inválida:
+
+```
+Error: Invalid state transition: completed → running
+```
+
+**Transiciones válidas:**
+```
+pending   → queued, cancelled
+queued    → assigned, cancelled, pending (retry)
+assigned  → running, failed, cancelled, queued (re-assign)
+running   → completed, failed, cancelled
+completed → (terminal - no transitions)
+failed    → pending (retry)
+cancelled → (terminal - no transitions)
+```
+
+**Diagnóstico:**
+```bash
+# Ver transición que falló
+grep "Invalid state transition" backend/logs/combined.log | tail -10
+
+# Esto NO es un bug - el sistema está previniendo un estado inconsistente
+```
+
+### Métricas de Resiliencia
+
+```bash
+curl localhost:3001/api/system/metrics | jq '.data.resilience'
+```
+
+Respuesta ejemplo:
+```json
+{
+  "activeLeases": 2,
+  "expiredLeases": 0,
+  "orphanLeases": 0,
+  "activeCheckpoints": 2,
+  "pausedCheckpoints": 0,
+  "circuitBreakers": {
+    "main": "closed",
+    "openclaw": "closed"
+  }
+}
+```
+
+| Métrica | Valor Normal | Acción si Anormal |
+|---------|--------------|-------------------|
+| activeLeases | 0-5 | >10 = posible leak, reiniciar |
+| expiredLeases | 0 | >0 = cleanup pendiente, esperar 30s |
+| orphanLeases | 0 | >0 = cleanup pendiente, esperar 30s |
+| pausedCheckpoints | 0 | >0 = revisar tasks pausadas |
+| circuitBreakers | closed | open = OpenClaw con problemas |
+
 ## 8. Logs Importantes
 
 ### Ubicación de logs

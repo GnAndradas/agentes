@@ -10,6 +10,26 @@ import type { TaskDTO, TaskStatus, TaskPriority } from '../types/domain.js';
 
 const logger = createLogger('TaskService');
 
+// Valid state transitions FSM - prevents invalid state changes
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending: ['queued', 'cancelled'],
+  queued: ['assigned', 'cancelled', 'pending'], // pending for retry
+  assigned: ['running', 'failed', 'cancelled', 'queued'], // queued for re-assignment
+  running: ['completed', 'failed', 'cancelled'],
+  completed: [], // terminal
+  failed: ['pending'], // can retry
+  cancelled: [], // terminal
+};
+
+/**
+ * Check if a state transition is valid
+ */
+function isValidTransition(fromStatus: string, toStatus: string): boolean {
+  const allowed = VALID_TRANSITIONS[fromStatus];
+  if (!allowed) return false;
+  return allowed.includes(toStatus);
+}
+
 export interface CreateTaskInput {
   title: string;
   description?: string;
@@ -147,6 +167,16 @@ export class TaskService {
     const task = await this.getById(id);
     const now = nowTimestamp();
 
+    // Validate state transition
+    if (!isValidTransition(task.status, TASK_STATUS.ASSIGNED)) {
+      logger.warn({
+        taskId: id,
+        fromStatus: task.status,
+        toStatus: TASK_STATUS.ASSIGNED,
+      }, 'Invalid state transition attempted');
+      throw new Error(`Invalid state transition: ${task.status} → ${TASK_STATUS.ASSIGNED}`);
+    }
+
     await db.update(schema.tasks).set({
       agentId,
       status: TASK_STATUS.ASSIGNED,
@@ -169,6 +199,16 @@ export class TaskService {
     const task = await this.getById(id);
     const now = nowTimestamp();
 
+    // Validate state transition
+    if (!isValidTransition(task.status, TASK_STATUS.RUNNING)) {
+      logger.warn({
+        taskId: id,
+        fromStatus: task.status,
+        toStatus: TASK_STATUS.RUNNING,
+      }, 'Invalid state transition attempted');
+      throw new Error(`Invalid state transition: ${task.status} → ${TASK_STATUS.RUNNING}`);
+    }
+
     await db.update(schema.tasks).set({
       status: TASK_STATUS.RUNNING,
       startedAt: now,
@@ -190,6 +230,16 @@ export class TaskService {
   async complete(id: string, output?: Record<string, unknown>): Promise<TaskDTO> {
     const task = await this.getById(id);
     const now = nowTimestamp();
+
+    // Validate state transition
+    if (!isValidTransition(task.status, TASK_STATUS.COMPLETED)) {
+      logger.warn({
+        taskId: id,
+        fromStatus: task.status,
+        toStatus: TASK_STATUS.COMPLETED,
+      }, 'Invalid state transition attempted');
+      throw new Error(`Invalid state transition: ${task.status} → ${TASK_STATUS.COMPLETED}`);
+    }
 
     await db.update(schema.tasks).set({
       status: TASK_STATUS.COMPLETED,

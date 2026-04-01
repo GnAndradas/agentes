@@ -1,6 +1,6 @@
 # OCAAS - Sistema de Memoria
 
-> Documento de referencia técnica. Actualizado: 2026-03-31
+> Documento de referencia técnica. Actualizado: 2026-04-01
 
 ## 1. Visión General
 
@@ -53,10 +53,18 @@ draft → pending_approval → approved → active
           rejected
 ```
 
-### Tareas
+### Tareas (con FSM validada)
 ```
 pending → queued → assigned → running → completed
-                                    ↘ failed/cancelled
+   ↓         ↓         ↓         ↓
+cancelled cancelled cancelled cancelled
+                      ↓
+                   failed → pending (retry)
+
+Invariantes:
+- Una task no puede tener más de una ejecución activa (lease)
+- Transiciones inválidas se bloquean con error
+- Recovery no duplica ejecuciones en curso
 ```
 
 ### Task ↔ Resource Retry Loop
@@ -92,6 +100,8 @@ TaskRouter.retryTask() → Task re-processed
 | ChannelBridge | `services/ChannelBridge.ts` | Bridge para enviar respuestas a canales |
 | OrganizationalPolicyService | `organization/OrganizationalPolicyService.ts` | Motor de decisiones organizacionales |
 | **SystemDiagnosticsService** | `system/SystemDiagnosticsService.ts` | **Diagnóstico integral del sistema** |
+| **ExecutionLeaseStore** | `orchestrator/resilience/ExecutionLeaseStore.ts` | **Prevención de doble ejecución** |
+| **CheckpointStore** | `orchestrator/resilience/CheckpointStore.ts` | **Estado de ejecución para recovery** |
 
 ## 5. Variables de Entorno Críticas
 
@@ -105,7 +115,7 @@ TELEGRAM_WEBHOOK_SECRET=<opcional>
 TELEGRAM_ALLOWED_USER_IDS=<opcional>
 ```
 
-## 6. Estado del Proyecto (2026-03-31)
+## 6. Estado del Proyecto (2026-04-01)
 
 ### Fases Completadas
 - ✅ FASE 1: Corrección bugs críticos
@@ -140,8 +150,9 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 ✅ resilience.test.ts             - 45 tests
 ✅ logger.test.ts                 - 20 tests
 ✅ systemDiagnostics.test.ts      - 26 tests
+✅ task-resilience.test.ts        - 41 tests (NEW)
 
-TOTAL: 277+ tests passing
+TOTAL: 346+ tests passing
 ```
 
 ## 7. ResourceRetryService Hardening
@@ -396,7 +407,116 @@ GET /api/system/metrics      - Snapshot de métricas
 ### Tests
 - `tests/systemDiagnostics.test.ts` - 26 tests
 
-## 15. Próximos Pasos
+## 15. Sistema de Resiliencia de Ejecución
+
+Sistema de protección contra doble ejecución, crash recovery y task orphaning.
+
+### Componentes
+
+| Componente | Archivo | Función |
+|------------|---------|---------|
+| ExecutionLeaseStore | `orchestrator/resilience/ExecutionLeaseStore.ts` | Leases para prevenir doble ejecución |
+| CheckpointStore | `orchestrator/resilience/CheckpointStore.ts` | Estado de ejecución para recovery |
+| ExecutionRecoveryService | `orchestrator/resilience/ExecutionRecoveryService.ts` | Recovery al startup y orphan detection |
+| HealthChecker | `orchestrator/resilience/HealthChecker.ts` | Health checks del sistema |
+| CircuitBreaker | `orchestrator/resilience/CircuitBreaker.ts` | Circuit breaker para OpenClaw |
+
+### Flujo de Ejecución Protegido
+
+```
+TaskRouter.processNext()
+    │
+    ├── 1. Check hasActiveLease(taskId) → Si existe, SKIP
+    │
+    ├── 2. leaseStore.acquire(taskId, executionId)
+    │       └── Si falla → SKIP (otra instancia lo tiene)
+    │
+    ├── 3. checkpointStore.getOrCreate(taskId)
+    │       └── Track stage: queued → assigning → executing → completing
+    │
+    ├── 4. [Ejecutar task con OpenClaw]
+    │       └── leaseStore.renew() cada 30s para operaciones largas
+    │
+    ├── 5. checkpointStore.savePartialResult() antes de completar
+    │
+    └── 6. leaseStore.release(taskId) al finalizar (success o error)
+```
+
+### Invariantes Garantizadas
+
+1. **Una task no puede tener más de una ejecución activa** (lease único por taskId)
+2. **Transiciones de estado inválidas se bloquean** (FSM validado en TaskService)
+3. **Leases expirados pueden ser recuperados** (cleanup automático cada 30s)
+4. **Recovery no duplica ejecuciones en curso** (verifica lease antes de retry)
+5. **Retry registra causa y contador** (error en metadata)
+
+### Lease Store API
+
+```typescript
+// Adquirir lease (falla si ya existe)
+const lease = leaseStore.acquire(taskId, executionId);
+
+// Verificar si task tiene lease activo
+const hasLease = leaseStore.hasActiveLease(taskId);
+
+// Renovar lease (para operaciones largas)
+leaseStore.renew(taskId);
+
+// Liberar lease
+leaseStore.release(taskId);
+
+// Forzar liberación (admin/recovery)
+leaseStore.forceRelease(taskId);
+```
+
+### Checkpoint Store API
+
+```typescript
+// Crear/obtener checkpoint
+const checkpoint = checkpointStore.getOrCreate(taskId, agentId);
+
+// Actualizar stage
+checkpointStore.updateStage(taskId, 'executing');
+
+// Guardar resultado parcial
+checkpointStore.savePartialResult(taskId, result);
+
+// Marcar completado/fallido
+checkpointStore.markCompleted(taskId, output);
+checkpointStore.markFailed(taskId, error);
+```
+
+### Recovery Automático
+
+Al iniciar OCAAS, `ExecutionRecoveryService.startupRecovery()`:
+
+1. Libera leases expirados
+2. Encuentra checkpoints resumibles
+3. Re-encola tasks en stages intermedios (analyzing, assigning, etc.)
+4. Pausa tasks stale (>10 min sin update) para revisión manual
+5. Limpia checkpoints completados/fallidos antiguos
+
+### Cleanup de Orphans
+
+Cada 30 segundos, `TaskRouter.cleanupStaleExecutions()`:
+
+1. Detecta leases sin checkpoint correspondiente
+2. Detecta checkpoints con execution ID que no coincide con lease
+3. Detecta leases para tasks en estado terminal
+4. Libera estos leases orphan
+
+### Tests de Resiliencia
+
+```
+✅ task-resilience.test.ts - 41 tests
+  - ExecutionLeaseStore: 10 tests
+  - CheckpointStore: 12 tests
+  - FSM Transitions: 11 tests
+  - Recovery Scenarios: 4 tests
+  - Concurrent Prevention: 4 tests
+```
+
+## 16. Próximos Pasos
 
 1. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
 2. Test integración end-to-end

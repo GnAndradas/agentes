@@ -106,12 +106,12 @@ export function StatusBar() {
     retry: false,
   });
 
-  // Derive status indicators from QuickStatus
-  const restOk = gatewayStatus?.rest.reachable && gatewayStatus?.rest.authenticated;
-  const hooksConfigured = gatewayStatus?.hooks.configured;
-  const hooksProbed = gatewayStatus?.hooks.probed;
-  const probeEnabled = gatewayStatus?.probe.enabled;
-  const probeTested = gatewayStatus?.probe.tested;
+  // Derive status indicators from QuickStatus (all null-safe)
+  const restOk = gatewayStatus?.rest?.reachable && gatewayStatus?.rest?.authenticated;
+  const hooksConfigured = gatewayStatus?.hooks?.configured;
+  const hooksProbed = gatewayStatus?.hooks?.probed;
+  const probeEnabled = gatewayStatus?.probe?.enabled;
+  const probeTested = gatewayStatus?.probe?.tested;
   // OpenClaw WS status available via gatewayStatus?.websocket.connected if needed
 
   // Get orchestrator status
@@ -192,8 +192,8 @@ export function StatusBar() {
             className="flex items-center gap-1.5"
             title={
               restOk
-                ? `OpenClaw REST OK (${gatewayStatus?.rest.latencyMs}ms)`
-                : gatewayStatus?.rest.error || 'OpenClaw REST disconnected'
+                ? `OpenClaw REST OK (${gatewayStatus?.rest?.latencyMs ?? 0}ms)`
+                : gatewayStatus?.rest?.error || 'OpenClaw REST disconnected'
             }
           >
             {restOk ? (
@@ -214,7 +214,7 @@ export function StatusBar() {
             className="flex items-center gap-1.5"
             title={
               hooksProbed
-                ? (gatewayStatus?.hooks.working ? 'Hooks working' : 'Hooks failed')
+                ? (gatewayStatus?.hooks?.working ? 'Hooks working' : 'Hooks failed')
                 : hooksConfigured
                   ? 'Hooks configured (not probed)'
                   : 'Hooks not configured'
@@ -222,7 +222,7 @@ export function StatusBar() {
           >
             {hooksConfigured ? (
               hooksProbed ? (
-                gatewayStatus?.hooks.working ? (
+                gatewayStatus?.hooks?.working ? (
                   <>
                     <Link className="w-3.5 h-3.5 text-green-400" />
                     <span className="text-dark-400">Hooks</span>
@@ -253,12 +253,12 @@ export function StatusBar() {
               className="flex items-center gap-1.5"
               title={
                 probeTested
-                  ? (gatewayStatus?.probe.working ? 'Generation probe OK' : `Probe failed: ${gatewayStatus?.probe.error}`)
+                  ? (gatewayStatus?.probe?.working ? 'Generation probe OK' : `Probe failed: ${gatewayStatus?.probe?.error ?? 'unknown'}`)
                   : 'Probe enabled (run diagnostic for full test)'
               }
             >
               {probeTested ? (
-                gatewayStatus?.probe.working ? (
+                gatewayStatus?.probe?.working ? (
                   <>
                     <Cpu className="w-3.5 h-3.5 text-green-400" />
                     <span className="text-dark-400">Probe</span>

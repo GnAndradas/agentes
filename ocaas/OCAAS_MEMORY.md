@@ -155,9 +155,11 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 ✅ task-resilience.test.ts        - 41 tests
 ✅ checkpoint-persistence.test.ts - 22 tests
 ✅ task-timeline.test.ts          - 34 tests
-✅ human-escalation.test.ts       - 41 tests (NEW)
+✅ human-escalation.test.ts       - 41 tests
+✅ DecisionEngine.integration.test.ts - 18 tests
+✅ CostOptimization.test.ts       - 44 tests (NEW)
 
-TOTAL: 443+ tests passing
+TOTAL: 505+ tests passing
 ```
 
 ## 7. ResourceRetryService Hardening
@@ -1217,7 +1219,196 @@ Cuando `requiresEscalation = true`, se crea automáticamente una escalación:
 - NORMAL: default
 ```
 
-## 22. Próximos Pasos
+## 22. Cost Optimization (SmartDecisionEngine) (NEW)
+
+Sistema de optimización de costes LLM con modos de operación configurables en runtime.
+
+### Arquitectura de Costes
+
+```
+SmartDecisionEngine
+    │
+    ├── OperationMode: economy | balanced | max_quality
+    │
+    ├── CostTracker (singleton)
+    │       ├── recordLLMUsage(tier, tokens?)
+    │       ├── recordSavings(tier, 'heuristic' | 'cache')
+    │       ├── recordCacheHit/Miss(decisionType)
+    │       └── getMetrics() → CostMetrics
+    │
+    └── Decision Pipeline (respeta OperationMode)
+            ├── 1. Cache (TTL × ttlMultiplier)
+            ├── 2. Heuristics (threshold según mode)
+            ├── 3. LLM (max tier según mode, compact prompts en economy)
+            └── 4. Fallback
+```
+
+### Modos de Operación
+
+| Modo | Descripción | Casos de Uso |
+|------|-------------|--------------|
+| `economy` | Minimizar uso LLM, cache agresivo | Desarrollo, testing, alto volumen |
+| `balanced` | Balance coste/calidad (default) | Producción normal |
+| `max_quality` | Maximizar calidad, LLM libre | Tareas críticas, auditorías |
+
+### Configuración por Modo
+
+| Parámetro | economy | balanced | max_quality |
+|-----------|---------|----------|-------------|
+| `heuristicConfidenceThreshold` | 0.5 | 0.7 | 0.85 |
+| `maxLLMTier` | SHORT | MEDIUM | DEEP |
+| `cacheConfig.ttlMultiplier` | 2.0 | 1.0 | 0.5 |
+| `cacheConfig.minConfidenceToCache` | 0.4 | 0.5 | 0.7 |
+| `skipLLMOnRetry` | ✅ | ✅ | ❌ |
+| `skipLLMOnExactMatch` | ✅ | ✅ | ❌ |
+| `forceHeuristicsForKnownTypes` | ✅ | ❌ | ❌ |
+| `useCompactPrompts` | ✅ | ❌ | ❌ |
+
+### Token Costs (Estimación)
+
+```typescript
+const TOKEN_COSTS = {
+  inputTokens: { short: 150, medium: 400, deep: 1200 },
+  outputTokens: { short: 100, medium: 250, deep: 800 },
+  costPer1KTokens: { input: 0.003, output: 0.015 },  // USD
+};
+```
+
+### LLM Avoidance Strategies
+
+1. **Skip on Retry**: Si `retryCount > 0`, usar heurísticas (economy, balanced)
+2. **Skip on Exact Match**: Si agent.capabilities incluye task.type
+3. **Force Heuristics for Known Types**: coding, testing, documentation, analysis, research
+4. **Compact Prompts**: Prompts minimizados en economy (~128 tokens max)
+5. **Cache con TTL multiplicado**: Decisiones válidas más tiempo en economy
+
+### CostMetrics
+
+```typescript
+interface CostMetrics {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  estimatedCostUSD: number;
+  byTier: {
+    short: { count, inputTokens, outputTokens, cost };
+    medium: { count, inputTokens, outputTokens, cost };
+    deep: { count, inputTokens, outputTokens, cost };
+  };
+  tokensSaved: number;
+  costSavedUSD: number;
+  llmAvoidanceRate: number;  // 0-1, % de decisiones que evitaron LLM
+}
+```
+
+### CacheMetrics
+
+```typescript
+interface CacheMetrics {
+  size: number;
+  maxSize: number;
+  hitCount: number;
+  missCount: number;
+  hitRate: number;  // 0-1
+  evictions: number;
+  byDecisionType: Record<DecisionType, { hits: number; misses: number }>;
+}
+```
+
+### API de Cost Management
+
+```typescript
+const engine = getSmartDecisionEngine();
+
+// Cambiar modo en runtime
+engine.setOperationMode(OPERATION_MODE.ECONOMY);
+engine.setOperationMode(OPERATION_MODE.MAX_QUALITY);
+
+// Obtener modo actual
+const mode = engine.getOperationMode();
+const config = engine.getOperationModeConfig();
+
+// Métricas extendidas (incluye cost y cache)
+const metrics = engine.getExtendedMetrics();
+console.log(`Total cost: ${metrics.cost.estimatedCostUSD}`);
+console.log(`Saved: ${metrics.cost.costSavedUSD}`);
+console.log(`LLM avoidance: ${metrics.cost.llmAvoidanceRate * 100}%`);
+console.log(`Cache hit rate: ${metrics.cache.hitRate * 100}%`);
+
+// Summary para logging
+const summary = engine.getCostSummary();
+// { mode, totalCost: '$0.0045', totalSaved: '$0.0120', llmAvoidanceRate: '75.0%', ... }
+
+// Reset cost tracking
+engine.resetCostTracking();
+```
+
+### Via DecisionEngine Facade
+
+```typescript
+const decisionEngine = getDecisionEngine();
+
+// Todos los métodos de cost están disponibles
+decisionEngine.setOperationMode(OPERATION_MODE.ECONOMY);
+decisionEngine.getExtendedMetrics();
+decisionEngine.getCostSummary();
+```
+
+### Compact Prompts (Economy Mode)
+
+En modo economy, se usan prompts compactos:
+
+```
+System: Task classifier. JSON only.
+Output: {"category":"...","type":"...","caps":[...],"decompose":bool,"humanReview":bool,"confidence":0.0-1.0}
+
+User: T: Build login page
+Type: coding, P: 2
+Agents: 3, Caps: coding,testing,frontend
+```
+
+~128 tokens vs ~500 tokens del prompt MEDIUM normal.
+
+### Events con Cost Info
+
+Las decisiones ahora emiten eventos con información de costes:
+
+```typescript
+{
+  type: 'decision.task_completed',
+  data: {
+    // ... campos existentes ...
+    operationMode: 'economy',
+    llmTier: 'short',
+    costInfo: {
+      inputTokens: 150,
+      outputTokens: 100,
+      estimatedCostUSD: 0.00195,
+      savedByHeuristic: false,
+      savedByCache: false,
+    },
+    costSummary: {
+      totalCost: '$0.0045',
+      totalSaved: '$0.0120',
+      llmAvoidanceRate: '75.0%',
+      cacheHitRate: '45.0%',
+    }
+  }
+}
+```
+
+### Tests
+
+```
+✅ CostOptimization.test.ts - 44 tests
+  - CostTracker: 14 tests
+  - Operation Mode Configuration: 12 tests
+  - SmartDecisionEngine Operation Modes: 10 tests
+  - LLM Avoidance Strategies: 8 tests
+
+TOTAL Decision Engine: 106 tests (62 + 44)
+```
+
+## 23. Próximos Pasos
 
 1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
 2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada

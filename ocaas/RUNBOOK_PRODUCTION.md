@@ -1278,6 +1278,156 @@ grep '"method":"cached"'    backend/logs/orchestrator.log | wc -l  # Cache hits
 grep '"method":"fallback"'  backend/logs/orchestrator.log | wc -l  # Fallbacks (revisar!)
 ```
 
+## 14. Cost Optimization - Modos de Operación (NEW)
+
+El SmartDecisionEngine soporta modos de operación que permiten controlar el balance coste/calidad en runtime.
+
+### Modos Disponibles
+
+| Modo | Uso de LLM | Cache | Casos de Uso |
+|------|------------|-------|--------------|
+| `economy` | Minimizado (solo SHORT) | Agresivo (2x TTL) | Desarrollo, testing, alto volumen |
+| `balanced` | Moderado (hasta MEDIUM) | Normal | Producción estándar |
+| `max_quality` | Completo (hasta DEEP) | Corto (0.5x TTL) | Tareas críticas, auditorías |
+
+### Cambiar Modo en Runtime
+
+```bash
+# Via API (cuando se exponga)
+# curl -X POST localhost:3001/api/system/operation-mode \
+#   -H "Content-Type: application/json" \
+#   -d '{"mode": "economy"}'
+
+# Via código (runtime)
+import { getDecisionEngine } from './orchestrator/DecisionEngine.js';
+import { OPERATION_MODE } from './orchestrator/decision/types.js';
+
+const engine = getDecisionEngine();
+engine.setOperationMode(OPERATION_MODE.ECONOMY);
+```
+
+### Verificar Modo Actual
+
+```bash
+# Via extended metrics
+curl localhost:3001/api/system/diagnostics | jq '.data.metrics.decision.operationMode'
+```
+
+### Métricas de Costes
+
+```typescript
+const engine = getDecisionEngine();
+const metrics = engine.getExtendedMetrics();
+
+console.log('Operation Mode:', metrics.operationMode);
+console.log('Total Cost:', metrics.cost.estimatedCostUSD);
+console.log('Cost Saved:', metrics.cost.costSavedUSD);
+console.log('LLM Avoidance Rate:', metrics.cost.llmAvoidanceRate * 100, '%');
+console.log('Cache Hit Rate:', metrics.cache.hitRate * 100, '%');
+```
+
+### Cost Summary para Logging
+
+```typescript
+const summary = engine.getCostSummary();
+// {
+//   mode: 'economy',
+//   totalCost: '$0.0045',
+//   totalSaved: '$0.0120',
+//   llmAvoidanceRate: '75.0%',
+//   cacheHitRate: '45.0%',
+//   llmCalls: 3,
+//   decisions: { heuristic: 12, cached: 8, llm: 3 }
+// }
+```
+
+### Guía de Selección de Modo
+
+| Escenario | Modo Recomendado | Justificación |
+|-----------|------------------|---------------|
+| Desarrollo/testing | `economy` | Minimizar costes, respuestas rápidas |
+| Producción normal | `balanced` | Balance óptimo |
+| Demo a cliente | `max_quality` | Máxima calidad de decisiones |
+| Alta carga (>100 tasks/min) | `economy` | Reducir latencia y coste |
+| Tarea crítica (priority 4) | `max_quality` | Decisión completa con DEEP tier |
+| Troubleshooting | `balanced` | Visibilidad sin sobrecarga |
+
+### Impacto en Decisiones
+
+**Economy Mode:**
+- Acepta heurísticas con confianza ≥ 0.5 (vs 0.7 en balanced)
+- Solo usa LLM tier SHORT (max ~150 input tokens)
+- Prompts compactos (~128 tokens vs ~500)
+- Cache TTL duplicado (10 min vs 5 min)
+- Salta LLM en retry, match exacto, y tipos conocidos
+
+**Balanced Mode (default):**
+- Heurísticas requieren confianza ≥ 0.7
+- Usa LLM hasta tier MEDIUM
+- Prompts estándar
+- Cache TTL normal (5 min)
+- Salta LLM en retry y match exacto
+
+**Max Quality Mode:**
+- Heurísticas requieren confianza ≥ 0.85
+- Usa LLM hasta tier DEEP (análisis completo)
+- Prompts detallados
+- Cache TTL reducido (2.5 min)
+- No salta LLM (siempre considera LLM)
+
+### Monitorear Costes
+
+```bash
+# Logs con info de costes
+grep "costInfo" backend/logs/orchestrator.log | tail -10
+
+# Ver breakdown por tier
+grep "LLM usage recorded" backend/logs/orchestrator.log | tail -20
+
+# Ver ahorros
+grep "Tokens saved" backend/logs/orchestrator.log | tail -20
+```
+
+### Eventos de Decisión con Cost Info
+
+Las decisiones emiten eventos con información de costes:
+
+```json
+{
+  "type": "decision.task_completed",
+  "data": {
+    "operationMode": "economy",
+    "llmTier": "short",
+    "costInfo": {
+      "inputTokens": 150,
+      "outputTokens": 100,
+      "estimatedCostUSD": 0.00195
+    },
+    "costSummary": {
+      "totalCost": "$0.0045",
+      "totalSaved": "$0.0120",
+      "llmAvoidanceRate": "75.0%"
+    }
+  }
+}
+```
+
+### Reset de Métricas de Coste
+
+```typescript
+// Limpiar métricas (útil al inicio de un período de medición)
+engine.resetCostTracking();
+```
+
+### Alertas Recomendadas de Coste
+
+| Métrica | Umbral Warning | Umbral Critical |
+|---------|----------------|-----------------|
+| `llmAvoidanceRate` | < 50% | < 30% |
+| `cacheHitRate` | < 20% | < 10% |
+| `estimatedCostUSD` (por hora) | > $1.00 | > $5.00 |
+| `llmDecisions.deep` (por hora) | > 100 | > 500 |
+
 ---
 
 ## Quick Reference

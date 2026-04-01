@@ -23,11 +23,14 @@ export {
 // Prompt tiers
 export {
   getPromptBundle,
+  getCompactPromptBundle,
   parseResponse,
+  parseCompactResponse,
   determineTier,
   SYSTEM_PROMPT_SHORT,
   SYSTEM_PROMPT_MEDIUM,
   SYSTEM_PROMPT_DEEP,
+  SYSTEM_PROMPT_COMPACT,
   type DecisionContext,
   type AgentContext,
   type TaskContext,
@@ -35,7 +38,17 @@ export {
   type ShortResponse,
   type MediumResponse,
   type DeepResponse,
+  type CompactResponse,
 } from './PromptTiers.js';
+
+// Cost tracking
+export {
+  CostTracker,
+  getCostTracker,
+  resetCostTracker,
+  estimateTokenCost,
+  getEstimatedTokensForTier,
+} from './CostTracker.js';
 
 // Smart decision engine
 export {

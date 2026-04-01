@@ -15,7 +15,13 @@ import {
   getSmartDecisionEngine,
   type SmartDecisionEngineConfig,
 } from './decision/index.js';
-import type { StructuredDecision, DecisionMetrics } from './decision/types.js';
+import type {
+  StructuredDecision,
+  DecisionMetrics,
+  OperationMode,
+  OperationModeConfig,
+  ExtendedDecisionMetrics,
+} from './decision/types.js';
 import type { TaskDTO, AgentDTO } from '../types/domain.js';
 import type {
   TaskAssignment,
@@ -282,6 +288,54 @@ export class DecisionEngine {
    */
   updateDecisionConfig(config: Partial<SmartDecisionEngineConfig>): void {
     getSmartDecisionEngine().updateConfig(config);
+  }
+
+  // ============================================
+  // OPERATION MODE & COST MANAGEMENT
+  // ============================================
+
+  /**
+   * Set operation mode at runtime
+   * @param mode - 'economy', 'balanced', or 'max_quality'
+   */
+  setOperationMode(mode: OperationMode): void {
+    getSmartDecisionEngine().setOperationMode(mode);
+    logger.info({ mode }, 'Operation mode set via DecisionEngine');
+  }
+
+  /**
+   * Get current operation mode
+   */
+  getOperationMode(): OperationMode {
+    return getSmartDecisionEngine().getOperationMode();
+  }
+
+  /**
+   * Get current operation mode configuration
+   */
+  getOperationModeConfig(): OperationModeConfig {
+    return getSmartDecisionEngine().getOperationModeConfig();
+  }
+
+  /**
+   * Get extended metrics including cost and cache data
+   */
+  getExtendedMetrics(): ExtendedDecisionMetrics {
+    return getSmartDecisionEngine().getExtendedMetrics();
+  }
+
+  /**
+   * Get cost summary for logging/display
+   */
+  getCostSummary(): ReturnType<typeof getSmartDecisionEngine.prototype.getCostSummary> {
+    return getSmartDecisionEngine().getCostSummary();
+  }
+
+  /**
+   * Reset cost tracking metrics
+   */
+  resetCostTracking(): void {
+    getSmartDecisionEngine().resetCostTracking();
   }
 
   // ============================================

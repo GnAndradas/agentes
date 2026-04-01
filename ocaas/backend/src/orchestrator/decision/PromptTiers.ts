@@ -438,12 +438,76 @@ export function determineTier(ctx: DecisionContext): PromptTier {
   return PROMPT_TIER.MEDIUM;
 }
 
+// =============================================================================
+// COMPACT PROMPTS (for economy mode)
+// =============================================================================
+
+const SYSTEM_PROMPT_COMPACT = `Task classifier. JSON only.
+Output: {"category":"simple|moderate|complex|planning","type":"...","caps":["..."],"decompose":bool,"humanReview":bool,"confidence":0.0-1.0}`;
+
+/**
+ * Build compact user prompt (minimal tokens)
+ */
+function buildCompactPrompt(ctx: DecisionContext): string {
+  const agents = ctx.agents.filter(a => a.status === 'active');
+  const caps = agents.flatMap(a => a.capabilities).slice(0, 10);
+
+  return `T: ${ctx.task.title.substring(0, 100)}
+Type: ${ctx.task.type}, P: ${ctx.task.priority}
+Agents: ${agents.length}, Caps: ${caps.join(',')}`;
+}
+
+/**
+ * Compact response type
+ */
+export interface CompactResponse {
+  category: 'simple' | 'moderate' | 'complex' | 'planning';
+  type: string;
+  caps: string[];
+  decompose: boolean;
+  humanReview: boolean;
+  confidence: number;
+}
+
+function isCompactResponse(obj: unknown): obj is CompactResponse {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as Record<string, unknown>;
+  return (
+    typeof o.category === 'string' &&
+    typeof o.type === 'string' &&
+    Array.isArray(o.caps) &&
+    typeof o.confidence === 'number'
+  );
+}
+
+/**
+ * Get compact prompt bundle for economy mode
+ */
+export function getCompactPromptBundle(ctx: DecisionContext): PromptBundle {
+  return {
+    tier: PROMPT_TIER.SHORT,
+    systemPrompt: SYSTEM_PROMPT_COMPACT,
+    userPrompt: buildCompactPrompt(ctx),
+    maxTokens: 128,  // Even smaller than SHORT
+    timeout: 3000,
+  };
+}
+
+/**
+ * Parse compact response
+ */
+export function parseCompactResponse(content: string): CompactResponse | null {
+  return parseJsonResponse(content, isCompactResponse);
+}
+
 export {
   SYSTEM_PROMPT_SHORT,
   SYSTEM_PROMPT_MEDIUM,
   SYSTEM_PROMPT_DEEP,
+  SYSTEM_PROMPT_COMPACT,
   parseJsonResponse,
   isShortResponse,
   isMediumResponse,
   isDeepResponse,
+  isCompactResponse,
 };

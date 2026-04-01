@@ -27,15 +27,23 @@ import type {
   HeuristicContext,
   TaskClassification,
   PromptTier,
+  OperationMode,
+  OperationModeConfig,
+  ExtendedDecisionMetrics,
+  DecisionWithCost,
 } from './types.js';
 import {
   PROMPT_TIER,
   CONFIDENCE_THRESHOLDS,
   DECISION_CACHE_CONFIG,
+  OPERATION_MODE,
+  OPERATION_MODE_CONFIGS,
+  DEFAULT_CACHE_CONFIG,
 } from './types.js';
 import { evaluateHeuristics, matchCapabilities } from './HeuristicRules.js';
 import {
   getPromptBundle,
+  getCompactPromptBundle,
   parseResponse,
   determineTier,
   type DecisionContext,
@@ -45,6 +53,11 @@ import {
   type MediumResponse,
   type DeepResponse,
 } from './PromptTiers.js';
+import {
+  CostTracker,
+  getCostTracker,
+  getEstimatedTokensForTier,
+} from './CostTracker.js';
 
 const logger = orchestratorLogger.child({ component: 'SmartDecisionEngine' });
 
@@ -190,6 +203,8 @@ export interface SmartDecisionEngineConfig {
   enableLLM: boolean;
   forceDeepAnalysis: boolean;
   minConfidenceForHeuristic: number;
+  /** Operation mode for cost/quality tradeoff */
+  operationMode: OperationMode;
 }
 
 const DEFAULT_CONFIG: SmartDecisionEngineConfig = {
@@ -200,17 +215,22 @@ const DEFAULT_CONFIG: SmartDecisionEngineConfig = {
   enableLLM: true,
   forceDeepAnalysis: false,
   minConfidenceForHeuristic: 0.7,
+  operationMode: OPERATION_MODE.BALANCED,
 };
 
 export class SmartDecisionEngine {
   private config: SmartDecisionEngineConfig;
   private cache: DecisionCache;
   private metrics: DecisionMetrics;
+  private costTracker: CostTracker;
+  private modeConfig: OperationModeConfig;
 
   constructor(config: Partial<SmartDecisionEngineConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.cache = new DecisionCache(this.config.cacheMaxSize, this.config.cacheTTL);
     this.metrics = this.initMetrics();
+    this.costTracker = getCostTracker(this.config.operationMode);
+    this.modeConfig = OPERATION_MODE_CONFIGS[this.config.operationMode];
   }
 
   private initMetrics(): DecisionMetrics {
@@ -240,7 +260,11 @@ export class SmartDecisionEngine {
     const startTime = Date.now();
     const decisionId = randomUUID();
 
-    logger.info({ taskId: task.id, decisionId }, 'Starting decision process');
+    logger.info({
+      taskId: task.id,
+      decisionId,
+      operationMode: this.modeConfig.mode,
+    }, 'Starting decision process');
 
     const { eventService } = getServices();
 
@@ -252,73 +276,107 @@ export class SmartDecisionEngine {
       message: `Starting decision for task "${task.title}"`,
       resourceType: 'task',
       resourceId: task.id,
-      data: { decisionId },
+      data: { decisionId, operationMode: this.modeConfig.mode },
     });
 
     try {
       let decision: StructuredDecision;
+      const cacheKey = this.cache.generateKey(task, agents);
 
-      // Stage 1: Check cache
-      if (this.config.enableCache) {
-        const cacheKey = this.cache.generateKey(task, agents);
+      // Stage 1: Check cache (respecting operation mode)
+      if (this.config.enableCache && this.modeConfig.cacheConfig.enabled) {
         const cached = this.cache.get(cacheKey);
         if (cached) {
           decision = this.createCachedDecision(decisionId, task.id, cached, cacheKey, startTime);
+
+          // Track cache hit and savings
+          this.costTracker.recordCacheHit(decision.decisionType);
+          this.costTracker.recordSavings(PROMPT_TIER.MEDIUM, 'cache');
+
           this.updateMetrics(decision);
           await this.emitDecisionComplete(decision, task);
           return decision;
         }
+        // Track cache miss for metrics
+        // (decisionType unknown yet, will update later)
       }
+
+      // Determine effective confidence threshold based on mode
+      const effectiveThreshold = this.modeConfig.heuristicConfidenceThreshold;
+
+      // Check if we should skip LLM based on operation mode rules
+      const shouldSkipLLM = this.shouldSkipLLMForTask(task, agents);
 
       // Stage 2: Evaluate heuristics
       if (this.config.enableHeuristics) {
         const heuristicResult = await this.tryHeuristics(task, agents);
         if (heuristicResult) {
-          decision = this.buildDecision(
-            decisionId,
-            task.id,
-            heuristicResult.decisionType,
-            heuristicResult.targetAgent,
-            heuristicResult.confidence,
-            heuristicResult.reasoning,
-            'heuristic',
-            startTime,
-            {
-              heuristicsAttempted: true,
-              agentScores: heuristicResult.agentScores,
-              suggestedActions: heuristicResult.actions || [],
+          // Check if heuristic confidence meets threshold for this mode
+          const meetsThreshold = heuristicResult.confidence >= effectiveThreshold;
+
+          if (meetsThreshold || shouldSkipLLM) {
+            decision = this.buildDecision(
+              decisionId,
+              task.id,
+              heuristicResult.decisionType,
+              heuristicResult.targetAgent,
+              heuristicResult.confidence,
+              heuristicResult.reasoning,
+              'heuristic',
+              startTime,
+              {
+                heuristicsAttempted: true,
+                agentScores: heuristicResult.agentScores,
+                suggestedActions: heuristicResult.actions || [],
+              }
+            );
+
+            // Track savings from using heuristics instead of LLM
+            this.costTracker.recordSavings(PROMPT_TIER.MEDIUM, 'heuristic');
+
+            // Cache if confidence meets mode's cache threshold
+            if (
+              this.config.enableCache &&
+              this.modeConfig.cacheConfig.enabled &&
+              decision.confidenceScore >= this.modeConfig.cacheConfig.minConfidenceToCache
+            ) {
+              const ttl = this.getCacheTTLForDecision(decision);
+              this.cache.set(cacheKey, decision, ttl);
+              decision.cacheKey = cacheKey;
+              this.costTracker.updateCacheSize(this.cache.getStats().size, this.cache.getStats().maxSize);
             }
-          );
 
-          // Cache if confidence is good
-          if (this.config.enableCache && decision.confidenceScore >= this.config.minConfidenceForHeuristic) {
-            const cacheKey = this.cache.generateKey(task, agents);
-            this.cache.set(cacheKey, decision);
-            decision.cacheKey = cacheKey;
+            this.updateMetrics(decision);
+            this.costTracker.recordCacheMiss(decision.decisionType);
+            await this.emitDecisionComplete(decision, task);
+            return decision;
           }
-
-          this.updateMetrics(decision);
-          await this.emitDecisionComplete(decision, task);
-          return decision;
+          // Heuristic didn't meet threshold - fall through to LLM
         }
       }
 
-      // Stage 3: Use LLM with appropriate tier
-      if (this.config.enableLLM) {
+      // Stage 3: Use LLM with appropriate tier (if enabled and not skipped)
+      if (this.config.enableLLM && this.modeConfig.enableLLM && !shouldSkipLLM) {
         const llmResult = await this.tryLLM(task, agents);
         if (llmResult) {
           decision = llmResult;
           decision.id = decisionId;
           decision.processingTimeMs = Date.now() - startTime;
 
-          // Cache LLM decisions if high confidence
-          if (this.config.enableCache && decision.confidenceScore >= 0.7) {
-            const cacheKey = this.cache.generateKey(task, agents);
-            this.cache.set(cacheKey, decision);
+          // Cache LLM decisions if meets mode's cache threshold
+          if (
+            this.config.enableCache &&
+            this.modeConfig.cacheConfig.enabled &&
+            decision.confidenceScore >= this.modeConfig.cacheConfig.minConfidenceToCache
+          ) {
+            const ttl = this.getCacheTTLForDecision(decision);
+            this.cache.set(cacheKey, decision, ttl);
             decision.cacheKey = cacheKey;
+            this.costTracker.updateCacheSize(this.cache.getStats().size, this.cache.getStats().maxSize);
           }
 
           this.updateMetrics(decision);
+          this.costTracker.recordCacheMiss(decision.decisionType);
           await this.emitDecisionComplete(decision, task);
           return decision;
         }
@@ -326,7 +384,9 @@ export class SmartDecisionEngine {
 
       // Stage 4: Fallback decision
       decision = this.createFallbackDecision(decisionId, task, agents, startTime);
+      this.costTracker.recordSavings(PROMPT_TIER.SHORT, 'heuristic');
       this.updateMetrics(decision);
+      this.costTracker.recordCacheMiss(decision.decisionType);
       await this.emitDecisionComplete(decision, task);
       return decision;
 
@@ -339,6 +399,53 @@ export class SmartDecisionEngine {
       await this.emitDecisionComplete(fallback, task);
       return fallback;
     }
+  }
+
+  /**
+   * Determine if LLM should be skipped based on operation mode rules
+   */
+  private shouldSkipLLMForTask(task: TaskDTO, agents: AgentDTO[]): boolean {
+    // Skip on retry if configured
+    if (this.modeConfig.skipLLMOnRetry && task.retryCount && task.retryCount > 0) {
+      logger.debug({ taskId: task.id, retryCount: task.retryCount }, 'Skipping LLM due to retry');
+      return true;
+    }
+
+    // Skip if exact match found (and configured)
+    if (this.modeConfig.skipLLMOnExactMatch) {
+      const activeAgents = agents.filter(a => a.status === 'active');
+      const exactMatch = activeAgents.find(a =>
+        a.capabilities?.includes(task.type) ||
+        a.type === task.type
+      );
+      if (exactMatch) {
+        logger.debug({
+          taskId: task.id,
+          agentId: exactMatch.id,
+        }, 'Skipping LLM due to exact agent match');
+        return true;
+      }
+    }
+
+    // Force heuristics for known types if configured
+    if (this.modeConfig.forceHeuristicsForKnownTypes) {
+      const knownTypes = ['coding', 'testing', 'documentation', 'analysis', 'research'];
+      if (knownTypes.includes(task.type)) {
+        logger.debug({ taskId: task.id, type: task.type }, 'Skipping LLM for known task type');
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Get cache TTL based on decision type and operation mode
+   */
+  private getCacheTTLForDecision(decision: StructuredDecision): number {
+    const baseTTL = DEFAULT_CACHE_CONFIG.ttlByType[decision.decisionType]
+      ?? DEFAULT_CACHE_CONFIG.defaultTtlMs;
+    return baseTTL * this.modeConfig.cacheConfig.ttlMultiplier;
   }
 
   /**
@@ -451,14 +558,25 @@ export class SmartDecisionEngine {
       })),
     };
 
-    // Determine which tier to use
-    const tier = this.config.forceDeepAnalysis
+    // Determine which tier to use (respecting operation mode limits)
+    let tier = this.config.forceDeepAnalysis
       ? PROMPT_TIER.DEEP
       : determineTier(decisionContext);
 
-    logger.info({ taskId: task.id, tier }, 'Using LLM tier');
+    // Enforce max tier from operation mode
+    tier = this.enforceMaxTier(tier);
 
-    const bundle = getPromptBundle(tier, decisionContext);
+    logger.info({
+      taskId: task.id,
+      tier,
+      operationMode: this.modeConfig.mode,
+      useCompactPrompts: this.modeConfig.useCompactPrompts,
+    }, 'Using LLM tier');
+
+    // Use compact prompts in economy mode
+    const bundle = this.modeConfig.useCompactPrompts
+      ? getCompactPromptBundle(decisionContext)
+      : getPromptBundle(tier, decisionContext);
 
     try {
       const result = await adapter.generate({
@@ -472,6 +590,13 @@ export class SmartDecisionEngine {
         return null;
       }
 
+      // Track LLM usage with actual tokens if available
+      const costInfo = this.costTracker.recordLLMUsage(
+        bundle.tier,
+        result.usage?.inputTokens,
+        result.usage?.outputTokens
+      );
+
       const parsed = parseResponse(tier, result.content);
 
       if (!parsed) {
@@ -479,13 +604,48 @@ export class SmartDecisionEngine {
         return null;
       }
 
-      // Convert parsed response to StructuredDecision
-      return this.convertLLMResponse(task.id, tier, parsed, activeAgents);
+      // Convert parsed response to StructuredDecision with cost info
+      const decision = this.convertLLMResponse(task.id, tier, parsed, activeAgents);
+
+      // Attach cost info to decision (if implementing DecisionWithCost)
+      (decision as DecisionWithCost).costInfo = {
+        inputTokens: costInfo.inputTokens,
+        outputTokens: costInfo.outputTokens,
+        estimatedCostUSD: costInfo.cost,
+        savedByHeuristic: false,
+        savedByCache: false,
+      };
+
+      return decision;
 
     } catch (err) {
       logger.error({ err, taskId: task.id, tier }, 'LLM request failed');
       return null;
     }
+  }
+
+  /**
+   * Enforce max tier based on operation mode
+   */
+  private enforceMaxTier(requestedTier: PromptTier): PromptTier {
+    const maxTier = this.modeConfig.maxLLMTier;
+
+    const tierOrder: Record<PromptTier, number> = {
+      [PROMPT_TIER.SHORT]: 1,
+      [PROMPT_TIER.MEDIUM]: 2,
+      [PROMPT_TIER.DEEP]: 3,
+    };
+
+    if (tierOrder[requestedTier] > tierOrder[maxTier]) {
+      logger.debug({
+        requestedTier,
+        maxTier,
+        operationMode: this.modeConfig.mode,
+      }, 'Downgrading LLM tier due to operation mode');
+      return maxTier;
+    }
+
+    return requestedTier;
   }
 
   /**
@@ -783,6 +943,7 @@ export class SmartDecisionEngine {
    */
   private async emitDecisionComplete(decision: StructuredDecision, task: TaskDTO): Promise<void> {
     const { eventService } = getServices();
+    const costSummary = this.costTracker.getSummary();
 
     await eventService.emit({
       type: EVENT_TYPE.TASK_DECISION_COMPLETED,
@@ -799,6 +960,16 @@ export class SmartDecisionEngine {
         method: decision.method,
         processingTimeMs: decision.processingTimeMs,
         fromCache: decision.fromCache,
+        // Cost optimization info
+        operationMode: this.modeConfig.mode,
+        llmTier: decision.llmTier,
+        costInfo: (decision as DecisionWithCost).costInfo,
+        costSummary: {
+          totalCost: costSummary.totalCost,
+          totalSaved: costSummary.totalSaved,
+          llmAvoidanceRate: costSummary.llmAvoidanceRate,
+          cacheHitRate: costSummary.cacheHitRate,
+        },
       },
     });
   }
@@ -873,6 +1044,11 @@ export class SmartDecisionEngine {
    */
   updateConfig(config: Partial<SmartDecisionEngineConfig>): void {
     this.config = { ...this.config, ...config };
+
+    // Update operation mode if changed
+    if (config.operationMode && config.operationMode !== this.modeConfig.mode) {
+      this.setOperationMode(config.operationMode);
+    }
   }
 
   /**
@@ -880,6 +1056,83 @@ export class SmartDecisionEngine {
    */
   resetMetrics(): void {
     this.metrics = this.initMetrics();
+  }
+
+  // =============================================================================
+  // OPERATION MODE MANAGEMENT
+  // =============================================================================
+
+  /**
+   * Set operation mode at runtime
+   */
+  setOperationMode(mode: OperationMode): void {
+    const oldMode = this.modeConfig.mode;
+    this.modeConfig = OPERATION_MODE_CONFIGS[mode];
+    this.config.operationMode = mode;
+    this.costTracker.setOperationMode(mode);
+
+    logger.info({
+      oldMode,
+      newMode: mode,
+      heuristicThreshold: this.modeConfig.heuristicConfidenceThreshold,
+      maxTier: this.modeConfig.maxLLMTier,
+      useCompactPrompts: this.modeConfig.useCompactPrompts,
+    }, 'Operation mode changed');
+  }
+
+  /**
+   * Get current operation mode
+   */
+  getOperationMode(): OperationMode {
+    return this.modeConfig.mode;
+  }
+
+  /**
+   * Get operation mode config
+   */
+  getOperationModeConfig(): OperationModeConfig {
+    return { ...this.modeConfig };
+  }
+
+  // =============================================================================
+  // EXTENDED METRICS
+  // =============================================================================
+
+  /**
+   * Get extended metrics including cost and cache data
+   */
+  getExtendedMetrics(): ExtendedDecisionMetrics {
+    const costMetrics = this.costTracker.getCostMetrics();
+    const cacheMetrics = this.costTracker.getCacheMetrics();
+
+    // Update cache size from actual cache
+    const cacheStats = this.cache.getStats();
+    cacheMetrics.size = cacheStats.size;
+    cacheMetrics.maxSize = cacheStats.maxSize;
+
+    return {
+      ...this.metrics,
+      cost: costMetrics,
+      cache: cacheMetrics,
+      operationMode: this.modeConfig.mode,
+    };
+  }
+
+  /**
+   * Get cost summary for logging
+   */
+  getCostSummary(): ReturnType<CostTracker['getSummary']> {
+    const summary = this.costTracker.getSummary();
+    // Update heuristic count from our metrics
+    summary.decisions.heuristic = this.metrics.heuristicDecisions;
+    return summary;
+  }
+
+  /**
+   * Reset cost tracking
+   */
+  resetCostTracking(): void {
+    this.costTracker.reset();
   }
 }
 

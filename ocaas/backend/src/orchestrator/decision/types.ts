@@ -312,3 +312,177 @@ export interface DecisionMetrics {
   averageProcessingTimeMs: number;
   byDecisionType: Record<DecisionType, number>;
 }
+
+// =============================================================================
+// COST OPTIMIZATION
+// =============================================================================
+
+/**
+ * Operation modes for cost/quality tradeoff
+ */
+export const OPERATION_MODE = {
+  /** Minimize LLM usage, aggressive caching, lower thresholds */
+  ECONOMY: 'economy',
+  /** Default balanced approach */
+  BALANCED: 'balanced',
+  /** Maximize quality, use LLM more freely */
+  MAX_QUALITY: 'max_quality',
+} as const;
+
+export type OperationMode = (typeof OPERATION_MODE)[keyof typeof OPERATION_MODE];
+
+/**
+ * Configuration for each operation mode
+ */
+export interface OperationModeConfig {
+  mode: OperationMode;
+  /** Minimum confidence to skip LLM */
+  heuristicConfidenceThreshold: number;
+  /** Whether to allow LLM at all */
+  enableLLM: boolean;
+  /** Which tier is the maximum allowed */
+  maxLLMTier: PromptTier;
+  /** Cache aggressiveness */
+  cacheConfig: {
+    enabled: boolean;
+    ttlMultiplier: number;  // 1.0 = default, 2.0 = double TTL, etc.
+    minConfidenceToCache: number;
+  };
+  /** Skip LLM for retry attempts */
+  skipLLMOnRetry: boolean;
+  /** Skip LLM when agents are obvious match */
+  skipLLMOnExactMatch: boolean;
+  /** Force heuristics for known task types */
+  forceHeuristicsForKnownTypes: boolean;
+  /** Use compact prompts */
+  useCompactPrompts: boolean;
+}
+
+export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> = {
+  [OPERATION_MODE.ECONOMY]: {
+    mode: OPERATION_MODE.ECONOMY,
+    heuristicConfidenceThreshold: 0.5,  // Accept lower confidence from heuristics
+    enableLLM: true,
+    maxLLMTier: PROMPT_TIER.SHORT,      // Only SHORT tier
+    cacheConfig: {
+      enabled: true,
+      ttlMultiplier: 2.0,               // Double TTL
+      minConfidenceToCache: 0.4,        // Cache more aggressively
+    },
+    skipLLMOnRetry: true,
+    skipLLMOnExactMatch: true,
+    forceHeuristicsForKnownTypes: true,
+    useCompactPrompts: true,
+  },
+  [OPERATION_MODE.BALANCED]: {
+    mode: OPERATION_MODE.BALANCED,
+    heuristicConfidenceThreshold: 0.7,  // Default threshold
+    enableLLM: true,
+    maxLLMTier: PROMPT_TIER.MEDIUM,     // Up to MEDIUM tier
+    cacheConfig: {
+      enabled: true,
+      ttlMultiplier: 1.0,               // Default TTL
+      minConfidenceToCache: 0.5,        // Standard caching
+    },
+    skipLLMOnRetry: true,
+    skipLLMOnExactMatch: true,
+    forceHeuristicsForKnownTypes: false,
+    useCompactPrompts: false,
+  },
+  [OPERATION_MODE.MAX_QUALITY]: {
+    mode: OPERATION_MODE.MAX_QUALITY,
+    heuristicConfidenceThreshold: 0.85, // High threshold before skipping LLM
+    enableLLM: true,
+    maxLLMTier: PROMPT_TIER.DEEP,       // Full DEEP tier
+    cacheConfig: {
+      enabled: true,
+      ttlMultiplier: 0.5,               // Shorter TTL, fresher decisions
+      minConfidenceToCache: 0.7,        // Only cache high-quality
+    },
+    skipLLMOnRetry: false,
+    skipLLMOnExactMatch: false,
+    forceHeuristicsForKnownTypes: false,
+    useCompactPrompts: false,
+  },
+};
+
+/**
+ * Token cost estimation by tier (approximate)
+ */
+export const TOKEN_COSTS = {
+  /** Estimated input tokens per tier */
+  inputTokens: {
+    [PROMPT_TIER.SHORT]: 150,
+    [PROMPT_TIER.MEDIUM]: 400,
+    [PROMPT_TIER.DEEP]: 1200,
+  },
+  /** Estimated output tokens per tier */
+  outputTokens: {
+    [PROMPT_TIER.SHORT]: 100,
+    [PROMPT_TIER.MEDIUM]: 250,
+    [PROMPT_TIER.DEEP]: 800,
+  },
+  /** Cost per 1K tokens (Claude pricing estimate in USD) */
+  costPer1KTokens: {
+    input: 0.003,   // $3/M input tokens
+    output: 0.015,  // $15/M output tokens
+  },
+} as const;
+
+/**
+ * Cost metrics for tracking
+ */
+export interface CostMetrics {
+  /** Total estimated tokens used */
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  /** Estimated cost in USD */
+  estimatedCostUSD: number;
+  /** Breakdown by tier */
+  byTier: {
+    short: { count: number; inputTokens: number; outputTokens: number; cost: number };
+    medium: { count: number; inputTokens: number; outputTokens: number; cost: number };
+    deep: { count: number; inputTokens: number; outputTokens: number; cost: number };
+  };
+  /** Savings from not using LLM */
+  tokensSaved: number;
+  costSavedUSD: number;
+  /** Percentage of decisions that avoided LLM */
+  llmAvoidanceRate: number;
+}
+
+/**
+ * Cache metrics for monitoring
+ */
+export interface CacheMetrics {
+  size: number;
+  maxSize: number;
+  hitCount: number;
+  missCount: number;
+  hitRate: number;
+  evictions: number;
+  byDecisionType: Partial<Record<DecisionType, { hits: number; misses: number }>>;
+}
+
+/**
+ * Extended decision with cost info
+ */
+export interface DecisionWithCost extends StructuredDecision {
+  /** Cost tracking */
+  costInfo?: {
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCostUSD: number;
+    savedByHeuristic: boolean;
+    savedByCache: boolean;
+  };
+}
+
+/**
+ * Combined metrics including cost
+ */
+export interface ExtendedDecisionMetrics extends DecisionMetrics {
+  cost: CostMetrics;
+  cache: CacheMetrics;
+  operationMode: OperationMode;
+}

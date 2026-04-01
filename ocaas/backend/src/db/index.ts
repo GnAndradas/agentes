@@ -270,7 +270,26 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_leases_expires ON execution_leases(expires_at);
   `);
 
-  logger.info('Database initialized');
+  // Verify critical tables exist after initialization
+  const criticalTables = [
+    'tasks', 'agents', 'skills', 'tools', 'events',
+    'resource_drafts', 'approvals', 'agent_feedback',
+    'execution_checkpoints', 'execution_leases',
+  ];
+
+  const existingTables = sqlite.prepare(`
+    SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'
+  `).all() as Array<{ name: string }>;
+
+  const tableNames = new Set(existingTables.map(t => t.name));
+  const missingTables = criticalTables.filter(t => !tableNames.has(t));
+
+  if (missingTables.length > 0) {
+    logger.error({ missingTables }, 'CRITICAL: Some tables failed to create during initDatabase');
+    throw new Error(`Failed to create critical tables: ${missingTables.join(', ')}`);
+  }
+
+  logger.info({ tableCount: tableNames.size, criticalTables: criticalTables.length }, 'Database initialized with all critical tables');
 }
 
 export function closeDatabase(): void {

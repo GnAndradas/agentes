@@ -105,11 +105,19 @@ export class SystemDiagnosticsService {
 
     // Calculate score and status
     const score = this.calculateScore(checks);
-    const status = this.determineStatus(score, criticalIssues.length);
+
+    // Override status if critical components are down
+    // This ensures we don't report healthy=97 when REST is off or tables missing
+    const hasCriticalComponentFailure = this.hasCriticalFailures(checks);
+    const effectiveCriticalCount = hasCriticalComponentFailure
+      ? Math.max(criticalIssues.length, 1)
+      : criticalIssues.length;
+
+    const status = this.determineStatus(score, effectiveCriticalCount);
 
     const result: SystemHealthResult = {
       status,
-      score,
+      score: hasCriticalComponentFailure ? Math.min(score, 49) : score, // Cap score if critical failure
       checks,
       criticalIssues,
       warnings,
@@ -938,6 +946,12 @@ export class SystemDiagnosticsService {
         });
       }
 
+      // Verify critical tables exist
+      const criticalTableCheck = await this.checkCriticalTables();
+      checks.push(...criticalTableCheck.checks);
+      issues.push(...criticalTableCheck.issues);
+      recommendations.push(...criticalTableCheck.recommendations);
+
     } catch (err) {
       checks.push({
         name: 'database_connection',
@@ -954,6 +968,96 @@ export class SystemDiagnosticsService {
         description: err instanceof Error ? err.message : 'Cannot connect to database',
         severity: 'critical',
         detectedAt: nowTimestamp(),
+      });
+    }
+
+    return { checks, issues, recommendations };
+  }
+
+  /**
+   * Check that critical tables exist in the database
+   */
+  private async checkCriticalTables(): Promise<CheckResult> {
+    const checks: DiagnosticCheck[] = [];
+    const issues: DiagnosticIssue[] = [];
+    const recommendations: DiagnosticRecommendation[] = [];
+
+    const CRITICAL_TABLES = [
+      'tasks',
+      'agents',
+      'skills',
+      'tools',
+      'events',
+      'resource_drafts',
+      'approvals',
+      'agent_feedback',
+    ];
+
+    try {
+      const Database = (await import('better-sqlite3')).default;
+      const { config } = await import('../config/index.js');
+
+      const dbPath = config.database.url;
+      const sqlite = new Database(dbPath, { readonly: true });
+
+      try {
+        const tables = sqlite.prepare(`
+          SELECT name FROM sqlite_master
+          WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        `).all() as Array<{ name: string }>;
+
+        const existingTables = new Set(tables.map(t => t.name));
+        const missingTables = CRITICAL_TABLES.filter(t => !existingTables.has(t));
+
+        if (missingTables.length > 0) {
+          checks.push({
+            name: 'critical_tables',
+            category: 'database',
+            status: 'fail',
+            message: `Missing critical tables: ${missingTables.join(', ')}`,
+            severity: 'critical',
+            data: { missingTables, existingTables: Array.from(existingTables) },
+          });
+
+          issues.push({
+            id: nanoid(),
+            category: 'database',
+            title: 'Missing Critical Tables',
+            description: `The following tables are missing: ${missingTables.join(', ')}`,
+            severity: 'critical',
+            suggestion: 'Restart the backend to run initDatabase() which creates missing tables',
+            detectedAt: nowTimestamp(),
+          });
+
+          recommendations.push({
+            id: nanoid(),
+            priority: 1,
+            title: 'Recreate Missing Tables',
+            description: 'Critical tables are missing from the database',
+            category: 'database',
+            action: 'Restart the backend server or run npm run db:push to create missing tables',
+          });
+        } else {
+          checks.push({
+            name: 'critical_tables',
+            category: 'database',
+            status: 'pass',
+            message: `All ${CRITICAL_TABLES.length} critical tables present`,
+            severity: 'info',
+            data: { tableCount: existingTables.size },
+          });
+        }
+      } finally {
+        sqlite.close();
+      }
+    } catch (err) {
+      // If we can't check tables, it's a warning (connection check already passed)
+      checks.push({
+        name: 'critical_tables',
+        category: 'database',
+        status: 'warn',
+        message: `Could not verify tables: ${err instanceof Error ? err.message : 'Unknown'}`,
+        severity: 'warning',
       });
     }
 
@@ -1006,13 +1110,41 @@ export class SystemDiagnosticsService {
   }
 
   private determineStatus(score: number, criticalCount: number): SystemStatus {
+    // Critical if ANY critical issue exists OR score is very low
     if (criticalCount > 0 || score < 50) {
       return 'critical';
     }
+    // Degraded if score is below threshold
     if (score < 80) {
       return 'degraded';
     }
     return 'healthy';
+  }
+
+  /**
+   * Check if specific critical components are working
+   * Used to ensure we don't report healthy when critical systems are down
+   */
+  private hasCriticalFailures(checks: DiagnosticCheck[]): boolean {
+    // OpenClaw REST connection is critical
+    const openclawCheck = checks.find(c => c.name === 'openclaw_connection');
+    if (openclawCheck && openclawCheck.status === 'fail') {
+      return true;
+    }
+
+    // Database critical tables are critical
+    const tablesCheck = checks.find(c => c.name === 'critical_tables');
+    if (tablesCheck && tablesCheck.status === 'fail') {
+      return true;
+    }
+
+    // Database connection is critical
+    const dbCheck = checks.find(c => c.name === 'database_connection');
+    if (dbCheck && dbCheck.status === 'fail') {
+      return true;
+    }
+
+    return false;
   }
 
   private calculateAvgTaskDuration(tasks: Array<{ status: string; createdAt: number; updatedAt: number }>): number {

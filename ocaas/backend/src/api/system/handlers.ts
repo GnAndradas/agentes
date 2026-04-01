@@ -42,13 +42,13 @@ export async function gatewayDiagnostic(_req: FastifyRequest, reply: FastifyRepl
 /**
  * Quick gateway status - for StatusBar polling
  *
- * HONEST: Uses getStatus() which makes REAL requests.
- * Does NOT use cached state like the old isConnected().
+ * HONEST: Uses getQuickStatus() which makes REAL requests.
+ * Returns QuickStatus format that frontend expects (with probe, hooks.probed, etc.)
  */
 export async function gatewayStatus(_req: FastifyRequest, reply: FastifyReply) {
   try {
-    const adapter = getOpenClawAdapter();
-    const status = await adapter.getStatus();
+    const gateway = getGateway();
+    const status = await gateway.getQuickStatus();
 
     return reply.send({
       data: status,

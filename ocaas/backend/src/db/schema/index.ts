@@ -10,3 +10,4 @@ export * from './approvals.js';
 export * from './feedback.js';
 export * from './drafts.js';
 export * from './checkpoints.js';
+export * from './escalations.js';

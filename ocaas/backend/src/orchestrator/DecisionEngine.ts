@@ -11,6 +11,11 @@ import {
 } from '../config/autonomy.js';
 import { EVENT_TYPE } from '../config/constants.js';
 import { getTaskAnalyzer } from './TaskAnalyzer.js';
+import {
+  getSmartDecisionEngine,
+  type SmartDecisionEngineConfig,
+} from './decision/index.js';
+import type { StructuredDecision, DecisionMetrics } from './decision/types.js';
 import type { TaskDTO, AgentDTO } from '../types/domain.js';
 import type {
   TaskAssignment,
@@ -20,12 +25,13 @@ import type {
   IntelligentDecision,
   SuggestedAction,
 } from './types.js';
+import { getHumanEscalationService, ESCALATION_TYPE, ESCALATION_PRIORITY } from '../hitl/index.js';
 
 const logger = orchestratorLogger.child({ component: 'DecisionEngine' });
 
 export class DecisionEngine {
   // ============================================
-  // NEW: Intelligent Decision (AI-powered)
+  // SMART DECISION ENGINE INTEGRATION
   // ============================================
 
   /**
@@ -42,10 +48,251 @@ export class DecisionEngine {
   };
 
   /**
-   * Main intelligent decision method - uses AI analysis when available
-   * Falls back to basic logic if AI unavailable
+   * Main intelligent decision method - NOW USES SmartDecisionEngine
+   * This is the preferred entry point for the TaskRouter.
+   *
+   * Pipeline:
+   * 1. Check cache for existing decision
+   * 2. Evaluate heuristic rules (8 rules, no LLM)
+   * 3. If heuristics fail, use appropriate LLM tier
+   * 4. Cache result and return structured decision
+   *
+   * Converts StructuredDecision to IntelligentDecision for backward compatibility.
    */
   async makeIntelligentDecision(task: TaskDTO): Promise<IntelligentDecision> {
+    const { agentService } = getServices();
+    const agents = await agentService.getActive();
+    const smartEngine = getSmartDecisionEngine();
+
+    // Use the SmartDecisionEngine for the actual decision
+    const structuredDecision = await smartEngine.decide(task, agents);
+
+    // Log comprehensive decision info
+    logger.info({
+      taskId: task.id,
+      decisionId: structuredDecision.id,
+      decisionType: structuredDecision.decisionType,
+      method: structuredDecision.method,
+      llmTier: structuredDecision.llmTier,
+      confidenceScore: structuredDecision.confidenceScore,
+      confidenceLevel: structuredDecision.confidenceLevel,
+      fromCache: structuredDecision.fromCache,
+      processingTimeMs: structuredDecision.processingTimeMs,
+      targetAgent: structuredDecision.targetAgent,
+      requiresEscalation: structuredDecision.requiresEscalation,
+    }, 'Smart decision made');
+
+    // Handle escalation to HITL if required
+    if (structuredDecision.requiresEscalation) {
+      await this.handleEscalation(task, structuredDecision);
+    }
+
+    // Convert StructuredDecision to IntelligentDecision for backward compatibility
+    return this.convertToIntelligentDecision(task, structuredDecision);
+  }
+
+  /**
+   * Handle escalation to human via HITL service
+   */
+  private async handleEscalation(task: TaskDTO, decision: StructuredDecision): Promise<void> {
+    const escalationService = getHumanEscalationService();
+
+    // Determine escalation type based on decision
+    let escalationType: typeof ESCALATION_TYPE[keyof typeof ESCALATION_TYPE] = ESCALATION_TYPE.APPROVAL_REQUIRED;
+    if (decision.missingCapabilities && decision.missingCapabilities.length > 0) {
+      escalationType = ESCALATION_TYPE.RESOURCE_MISSING;
+    } else if (decision.confidenceScore < 0.4) {
+      escalationType = ESCALATION_TYPE.UNCERTAINTY;
+    }
+
+    // Determine priority based on confidence and task priority
+    let priority: typeof ESCALATION_PRIORITY[keyof typeof ESCALATION_PRIORITY] = ESCALATION_PRIORITY.NORMAL;
+    if (task.priority >= 4) {
+      priority = ESCALATION_PRIORITY.CRITICAL;
+    } else if (task.priority >= 3 || decision.confidenceScore < 0.3) {
+      priority = ESCALATION_PRIORITY.HIGH;
+    }
+
+    // Create escalation
+    await escalationService.escalate({
+      type: escalationType,
+      priority,
+      taskId: task.id,
+      reason: decision.reasoning,
+      context: {
+        decisionId: decision.id,
+        decisionType: decision.decisionType,
+        method: decision.method,
+        confidenceScore: decision.confidenceScore,
+        missingCapabilities: decision.missingCapabilities,
+        suggestedActions: decision.suggestedActions,
+      },
+    });
+
+    logger.info({
+      taskId: task.id,
+      decisionId: decision.id,
+      escalationType,
+      priority,
+    }, 'Decision escalated to human');
+  }
+
+  /**
+   * Convert StructuredDecision to IntelligentDecision for backward compatibility
+   */
+  private convertToIntelligentDecision(task: TaskDTO, decision: StructuredDecision): IntelligentDecision {
+    // Create a TaskAnalysis from the decision
+    const analysis: TaskAnalysis = {
+      taskId: task.id,
+      analyzedAt: decision.decidedAt,
+      intent: decision.reasoning,
+      taskType: task.type,
+      complexity: decision.confidenceLevel === 'low' ? 'high' : decision.confidenceLevel === 'medium' ? 'medium' : 'low',
+      requiredCapabilities: decision.missingCapabilities || [task.type],
+      suggestedTools: [],
+      canBeSubdivided: decision.decisionType === 'subdivide',
+      estimatedDuration: 'normal',
+      requiresHumanReview: decision.requiresEscalation,
+      humanReviewReason: decision.requiresEscalation ? decision.reasoning : undefined,
+      confidence: decision.confidenceScore,
+      suggestedSubtasks: decision.subtasks?.map((s, i) => ({
+        title: s.title,
+        description: s.description,
+        type: s.type,
+        order: s.order,
+        dependsOnPrevious: s.dependsOn.length > 0,
+        estimatedComplexity: s.estimatedComplexity,
+        requiredCapabilities: s.requiredCapabilities,
+      })),
+    };
+
+    // Create assignment if decision is to assign
+    let assignment: TaskAssignment | null = null;
+    if (decision.decisionType === 'assign' && decision.targetAgent) {
+      const agentScore = decision.agentScores?.find(s => s.agentId === decision.targetAgent);
+      assignment = {
+        taskId: task.id,
+        agentId: decision.targetAgent,
+        score: agentScore?.totalScore ?? decision.confidenceScore * 100,
+        reason: agentScore
+          ? `Capability match: ${agentScore.capabilityMatch.toFixed(2)}`
+          : decision.reasoning,
+      };
+    }
+
+    // Convert decision actions to SuggestedAction format
+    const suggestedActions: SuggestedAction[] = decision.suggestedActions.map(action => {
+      let actionType: SuggestedAction['action'];
+      switch (action.type) {
+        case 'assign':
+          actionType = 'assign';
+          break;
+        case 'subdivide':
+          actionType = 'subdivide';
+          break;
+        case 'create_resource':
+          actionType = action.resourceType === 'agent' ? 'create_agent'
+            : action.resourceType === 'skill' ? 'create_skill'
+            : 'create_tool';
+          break;
+        case 'escalate':
+          actionType = 'wait_approval';
+          break;
+        case 'wait':
+          actionType = 'wait_approval';
+          break;
+        case 'reject':
+          actionType = 'reject';
+          break;
+        default:
+          actionType = 'reject';
+      }
+
+      return {
+        action: actionType,
+        reason: action.reason || decision.reasoning,
+        metadata: {
+          ...action.metadata,
+          priority: action.priority,
+          targetId: action.targetId,
+          decisionMethod: decision.method,
+          confidenceScore: decision.confidenceScore,
+        },
+      };
+    });
+
+    // Generate missing capability report if needed
+    let missingReport: MissingCapabilityReport | undefined;
+    if (decision.missingCapabilities && decision.missingCapabilities.length > 0) {
+      missingReport = {
+        taskId: task.id,
+        createdAt: decision.decidedAt,
+        missingCapabilities: decision.missingCapabilities,
+        suggestions: decision.missingCapabilities.map(cap => ({
+          type: 'skill' as const,
+          name: `${cap}-skill`,
+          description: `Skill providing ${cap} capability`,
+          reason: `Task requires "${cap}" capability`,
+          canAutoGenerate: false,
+          priority: 'required' as const,
+        })),
+        requiresApproval: true,
+      };
+    }
+
+    // Determine if fallback was used
+    const usedFallback = decision.method === 'fallback';
+    const fallbackReason = usedFallback ? decision.heuristicFailReason : undefined;
+
+    return {
+      taskId: task.id,
+      decidedAt: decision.decidedAt,
+      analysis,
+      assignment,
+      missingReport,
+      suggestedActions,
+      usedFallback,
+      fallbackReason,
+    };
+  }
+
+  /**
+   * Get SmartDecisionEngine metrics
+   */
+  getDecisionMetrics(): DecisionMetrics {
+    return getSmartDecisionEngine().getMetrics();
+  }
+
+  /**
+   * Get SmartDecisionEngine cache stats
+   */
+  getDecisionCacheStats(): { size: number; maxSize: number; hitRate: number } {
+    return getSmartDecisionEngine().getCacheStats();
+  }
+
+  /**
+   * Clear decision cache
+   */
+  clearDecisionCache(): void {
+    getSmartDecisionEngine().clearCache();
+  }
+
+  /**
+   * Update SmartDecisionEngine configuration
+   */
+  updateDecisionConfig(config: Partial<SmartDecisionEngineConfig>): void {
+    getSmartDecisionEngine().updateConfig(config);
+  }
+
+  // ============================================
+  // LEGACY: makeIntelligentDecisionLegacy
+  // ============================================
+
+  /**
+   * Legacy intelligent decision method - kept for reference/fallback
+   * @deprecated Use makeIntelligentDecision which uses SmartDecisionEngine
+   */
+  async makeIntelligentDecisionLegacy(task: TaskDTO): Promise<IntelligentDecision> {
     const decidedAt = Date.now();
     const taskAnalyzer = getTaskAnalyzer();
 
@@ -187,7 +434,7 @@ export class DecisionEngine {
       actions: suggestedActions.map(a => a.action),
       usedFallback,
       confidence: analysis.confidence,
-    }, 'Intelligent decision made');
+    }, 'Legacy intelligent decision made');
 
     return decision;
   }

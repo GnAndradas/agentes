@@ -11,6 +11,7 @@ import { webhookRoutes } from './webhooks/routes.js';
 import { feedbackRoutes } from './feedback/routes.js';
 import { manualResourceRoutes } from './manualResources/routes.js';
 import { channelRoutes } from './channels/routes.js';
+import { escalationRoutes } from './escalations/routes.js';
 import orgRoutes from './org/routes.js';
 
 export async function registerRoutes(app: FastifyInstance) {
@@ -30,5 +31,6 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(feedbackRoutes, { prefix: '/api/feedback' });
   await app.register(manualResourceRoutes, { prefix: '/api/manual/resources' });
   await app.register(channelRoutes, { prefix: '/api/channels' });
+  await app.register(escalationRoutes, { prefix: '/api/escalations' });
   await app.register(orgRoutes, { prefix: '/api/org' });
 }

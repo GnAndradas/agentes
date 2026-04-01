@@ -277,13 +277,47 @@ export async function initDatabase(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_leases_task ON execution_leases(task_id);
     CREATE INDEX IF NOT EXISTS idx_leases_expires ON execution_leases(expires_at);
+
+    -- Human escalations table (for HITL)
+    CREATE TABLE IF NOT EXISTS human_escalations (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      task_id TEXT,
+      agent_id TEXT,
+      resource_type TEXT,
+      resource_id TEXT,
+      reason TEXT NOT NULL,
+      context TEXT,
+      checkpoint_stage TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      acknowledged_at INTEGER,
+      acknowledged_by TEXT,
+      resolution TEXT,
+      resolution_details TEXT,
+      resolved_at INTEGER,
+      resolved_by TEXT,
+      expires_at INTEGER,
+      fallback_action TEXT,
+      linked_approval_id TEXT,
+      linked_feedback_id TEXT,
+      linked_generation_id TEXT,
+      metadata TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_escalations_status ON human_escalations(status);
+    CREATE INDEX IF NOT EXISTS idx_escalations_type ON human_escalations(type);
+    CREATE INDEX IF NOT EXISTS idx_escalations_task ON human_escalations(task_id);
+    CREATE INDEX IF NOT EXISTS idx_escalations_priority ON human_escalations(priority, status);
   `);
 
   // Verify critical tables exist after initialization
   const criticalTables = [
     'tasks', 'agents', 'skills', 'tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
-    'task_checkpoints', 'execution_leases',
+    'task_checkpoints', 'execution_leases', 'human_escalations',
   ];
 
   const existingTables = sqlite.prepare(`

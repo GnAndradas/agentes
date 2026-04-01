@@ -885,6 +885,399 @@ GET /api/system/metrics
 GET /api/system/issues
 ```
 
+## 12. Human Inbox - Gestión de Escalaciones (NEW)
+
+El sistema HITL (Human-in-the-Loop) permite que tareas escalen a humanos cuando necesitan intervención.
+
+### Ver Escalaciones Pendientes
+
+```bash
+# Inbox completo (pendientes + acknowledged + resumen)
+curl localhost:3001/api/escalations/inbox | jq
+
+# Solo lista de pendientes
+curl localhost:3001/api/escalations/pending | jq
+
+# Estadísticas
+curl localhost:3001/api/escalations/stats | jq
+```
+
+### Respuesta de Inbox
+
+```json
+{
+  "pending": [
+    {
+      "id": "esc_abc123",
+      "type": "approval_required",
+      "priority": "normal",
+      "taskId": "task_xyz",
+      "reason": "Skill generation requires approval",
+      "status": "pending",
+      "expiresAt": 1700001000,
+      "createdAt": 1700000000
+    }
+  ],
+  "acknowledged": [],
+  "summary": {
+    "totalPending": 1,
+    "totalAcknowledged": 0,
+    "byType": { "approval_required": 1 },
+    "byPriority": { "normal": 1 },
+    "oldestPendingAge": 60000,
+    "expiringCount": 0
+  }
+}
+```
+
+### Responder a Escalaciones
+
+```bash
+# Aprobar una escalación
+curl -X POST localhost:3001/api/escalations/esc_abc123/approve \
+  -H "Content-Type: application/json" \
+  -d '{"approvedBy": "admin"}'
+
+# Rechazar con razón
+curl -X POST localhost:3001/api/escalations/esc_abc123/reject \
+  -H "Content-Type: application/json" \
+  -d '{"rejectedBy": "admin", "reason": "Not appropriate for current context"}'
+
+# Proveer recurso faltante
+curl -X POST localhost:3001/api/escalations/esc_abc123/provide-resource \
+  -H "Content-Type: application/json" \
+  -d '{
+    "providedBy": "admin",
+    "resourceId": "skill_new123",
+    "resourceType": "skill"
+  }'
+
+# Override manual (tomar decisión humana)
+curl -X POST localhost:3001/api/escalations/esc_abc123/override \
+  -H "Content-Type: application/json" \
+  -d '{
+    "overriddenBy": "admin",
+    "decision": "Skip this step and use alternative approach",
+    "details": {"justification": "Time constraint"}
+  }'
+```
+
+### Acknowledge (marcar como vista)
+
+```bash
+curl -X POST localhost:3001/api/escalations/esc_abc123/acknowledge \
+  -H "Content-Type: application/json" \
+  -d '{"acknowledgedBy": "operator"}'
+```
+
+### Ver Escalaciones por Task
+
+```bash
+curl localhost:3001/api/escalations/task/task_xyz | jq
+```
+
+### Tipos de Escalación
+
+| Tipo | Descripción | Acciones Típicas |
+|------|-------------|------------------|
+| `approval_required` | Recurso necesita aprobación | approve, reject |
+| `resource_missing` | Falta un recurso | provide-resource |
+| `execution_failure` | Fallo tras reintentos | override, reject |
+| `uncertainty` | Agente tiene dudas | override |
+| `blocked` | Tarea bloqueada externamente | override, reject |
+
+### Escalaciones Expiradas
+
+Las escalaciones tienen timeout configurable. Cuando expiran, ejecutan un fallback:
+
+| Fallback | Efecto |
+|----------|--------|
+| `retry` | Re-encola la task |
+| `fail` | Marca task como fallida |
+| `escalate_higher` | Crea nueva escalación CRITICAL |
+| `auto_approve` | Aprueba automáticamente |
+| `pause` | Pausa task para revisión manual |
+
+```bash
+# Procesar manualmente las expiradas (normalmente automático)
+curl -X POST localhost:3001/api/escalations/process-expired
+```
+
+### Monitoreo de Escalaciones
+
+```bash
+# Verificar si hay escalaciones críticas
+curl -s localhost:3001/api/escalations/inbox | jq '.summary.byPriority.critical // 0'
+
+# Ver escalaciones por expirar pronto (<5 min)
+curl -s localhost:3001/api/escalations/inbox | jq '.summary.expiringCount'
+
+# Ver edad de la escalación más antigua
+curl -s localhost:3001/api/escalations/inbox | jq '.summary.oldestPendingAge'
+```
+
+### Alertas Recomendadas
+
+| Condición | Severidad | Acción |
+|-----------|-----------|--------|
+| `byPriority.critical > 0` | Alta | Atender inmediatamente |
+| `expiringCount > 0` | Media | Responder antes de timeout |
+| `oldestPendingAge > 3600000` | Media | Revisar escalaciones viejas (>1h) |
+| `totalPending > 10` | Baja | Backlog de escalaciones |
+
+### Integración con Timeline
+
+Las escalaciones aparecen en el timeline de tasks:
+
+```bash
+# Ver timeline de task con escalaciones
+curl localhost:3001/api/system/tasks/task_xyz/timeline | jq '.entries[] | select(.type=="escalation")'
+```
+
+### Cleanup de Escalaciones Antiguas
+
+```bash
+# Limpiar escalaciones resueltas/expiradas > 7 días (default)
+curl -X POST localhost:3001/api/escalations/cleanup
+
+# Limpiar con edad personalizada (en ms)
+curl -X POST "localhost:3001/api/escalations/cleanup?maxAgeMs=86400000"  # 1 día
+```
+
+## 13. Smart Decision Engine - Debugging (NEW)
+
+El DecisionEngine mejorado usa heurísticas primero y LLM solo cuando es necesario.
+
+### Cómo Interpretar Decisiones
+
+Cada decisión incluye información sobre cómo se tomó:
+
+```json
+{
+  "decisionType": "assign",
+  "targetAgent": "agent_123",
+  "confidenceScore": 0.85,
+  "confidenceLevel": "high",
+  "method": "heuristic",
+  "heuristicsAttempted": true,
+  "reasoning": "Agent \"Coding Agent\" has exact capability match for task type \"coding\"",
+  "processingTimeMs": 12,
+  "fromCache": false
+}
+```
+
+### Métodos de Decisión
+
+| Método | Descripción | Tiempo Típico |
+|--------|-------------|---------------|
+| `heuristic` | Regla heurística directa | <50ms |
+| `cached` | Decisión cacheada | <5ms |
+| `llm_classify` | LLM tier SHORT (~100 tokens) | 1-3s |
+| `llm_decide` | LLM tier MEDIUM (~500 tokens) | 2-5s |
+| `llm_plan` | LLM tier DEEP (~1500 tokens) | 5-15s |
+| `fallback` | Fallback seguro (sin LLM ni heurísticas) | <10ms |
+
+### Cuando Interviene el LLM
+
+El LLM solo se invoca si:
+1. Ninguna regla heurística aplicó con confianza suficiente
+2. La task es compleja (priority ≥ 4 o input data > 3 fields)
+3. No hay decisión cacheada válida
+
+**Tier seleccionado automáticamente:**
+- SHORT: Task simple con tipo definido + agentes disponibles
+- MEDIUM: Task con descripción larga o tipo genérico
+- DEEP: Priority ≥ 4 o mucho input data
+
+### Reglas Heurísticas
+
+Las reglas se evalúan en orden de prioridad (1 = primero):
+
+| Prioridad | Regla | Cuando Aplica |
+|-----------|-------|---------------|
+| 1 | direct_type_match | Agent capability = task type |
+| 2 | single_agent | Solo 1 agente activo |
+| 3 | specialist_match | Specialist con caps matching |
+| 4 | no_agents | 0 agentes activos → escalate |
+| 5 | critical_task | Priority ≥ 4 |
+| 6 | subtask_match | Task tiene parentTaskId |
+| 7 | retry_limit | retryCount ≥ 3 → escalate |
+| 8 | general_capability | Match general de capabilities |
+
+### Debugging Decisiones Incorrectas
+
+#### 1. Ver logs de decisión
+
+```bash
+# Logs del orquestador
+grep -i "decision" backend/logs/orchestrator.log | tail -20
+
+# Buscar decisiones de una task específica
+grep "task_xyz" backend/logs/orchestrator.log | grep -i "decision"
+```
+
+#### 2. Verificar métricas
+
+```bash
+# Ver métricas de decisiones (requiere endpoint API)
+# Agregar a tu código si necesitas exponer:
+# console.log(getSmartDecisionEngine().getMetrics())
+```
+
+#### 3. Verificar por qué se usó LLM
+
+```json
+{
+  "method": "llm_decide",
+  "heuristicsAttempted": true,
+  "heuristicFailReason": "escalated_to_llm"
+}
+```
+
+Esto significa que las heurísticas se intentaron pero ninguna aplicó o la confianza fue insuficiente.
+
+#### 4. Verificar cache
+
+```bash
+# Ver stats de cache
+# Agregar endpoint o log:
+# console.log(getSmartDecisionEngine().getCacheStats())
+```
+
+### Forzar Comportamiento
+
+Para testing/debugging, puedes configurar el engine:
+
+```typescript
+const engine = getSmartDecisionEngine({
+  enableCache: false,        // Deshabilitar cache
+  enableHeuristics: false,   // Forzar LLM
+  enableLLM: false,          // Solo heurísticas
+  forceDeepAnalysis: true,   // Forzar tier DEEP
+});
+```
+
+### Casos Comunes de Decisiones Inesperadas
+
+| Problema | Causa Probable | Solución |
+|----------|----------------|----------|
+| Siempre usa LLM | Agentes no tienen capabilities matching | Agregar capabilities a agentes |
+| Task asignada a agente incorrecto | Matching por tipo muy genérico | Usar tipos de task más específicos |
+| Siempre escala a humano | Sin agentes activos o priority alta | Activar más agentes |
+| Cache devuelve decisión vieja | TTL muy largo | Invalidar cache manualmente |
+
+### Invalidar Cache Manualmente
+
+```bash
+# Desde código:
+# engine.clearCache();
+# engine.invalidateCache(task, agents);
+
+# O reiniciar el backend (cache es in-memory)
+```
+
+### Monitorear Uso de LLM
+
+El objetivo es minimizar llamadas LLM innecesarias. Monitorear:
+
+```typescript
+const metrics = engine.getMetrics();
+const llmRate = (metrics.llmDecisions.short + metrics.llmDecisions.medium + metrics.llmDecisions.deep) / metrics.totalDecisions;
+// Target: < 30% de decisiones usan LLM
+```
+
+### Integración DecisionEngine + SmartDecisionEngine
+
+El `DecisionEngine` ahora usa `SmartDecisionEngine` internamente. El flujo es:
+
+```
+TaskRouter.processTask(task)
+    └── DecisionEngine.makeIntelligentDecision(task)
+            └── SmartDecisionEngine.decide(task, agents)
+                    ├── Cache check
+                    ├── Heuristics (8 rules)
+                    ├── LLM (if needed)
+                    └── Fallback
+```
+
+#### Ver Métricas de Decisiones
+
+```typescript
+// Desde DecisionEngine
+const engine = getDecisionEngine();
+const metrics = engine.getDecisionMetrics();
+console.log('Total decisions:', metrics.totalDecisions);
+console.log('Heuristic rate:', metrics.heuristicDecisions / metrics.totalDecisions);
+console.log('Cache hit rate:', engine.getDecisionCacheStats().hitRate);
+```
+
+#### Escalaciones Automáticas a HITL
+
+Cuando `requiresEscalation = true`, el sistema crea automáticamente una escalación:
+
+```bash
+# Ver escalaciones pendientes
+curl localhost:3001/api/escalations | jq '.data.pending'
+
+# Verificar por qué se escaló
+# Buscar en logs:
+grep "Decision escalated to human" backend/logs/orchestrator.log | tail -5
+```
+
+**Escalación se crea cuando:**
+- `decisionType === 'escalate'`
+- `confidenceScore < 0.4`
+- No hay agentes activos
+
+**Prioridad de escalación:**
+- `critical`: task.priority >= 4
+- `high`: task.priority >= 3 OR confidenceScore < 0.3
+- `normal`: default
+
+#### Control de Configuración
+
+```typescript
+// Actualizar config sin reiniciar
+const engine = getDecisionEngine();
+engine.updateDecisionConfig({
+  enableCache: true,          // Cache on/off
+  enableHeuristics: true,     // Heuristics on/off
+  enableLLM: false,           // LLM on/off (útil para testing)
+  forceDeepAnalysis: false,   // Forzar tier DEEP
+});
+
+// Limpiar cache
+engine.clearDecisionCache();
+```
+
+### Logs de Decisiones Enriquecidos
+
+Cada decisión ahora loguea información completa:
+
+```json
+{
+  "taskId": "task_123",
+  "decisionId": "uuid-...",
+  "decisionType": "assign",
+  "method": "heuristic",
+  "llmTier": null,
+  "confidenceScore": 0.85,
+  "confidenceLevel": "high",
+  "fromCache": false,
+  "processingTimeMs": 23,
+  "targetAgent": "agent_456",
+  "requiresEscalation": false
+}
+```
+
+**Filtrar logs por método:**
+```bash
+grep '"method":"heuristic"' backend/logs/orchestrator.log | wc -l  # Decisiones heurísticas
+grep '"method":"llm_'       backend/logs/orchestrator.log | wc -l  # Decisiones LLM
+grep '"method":"cached"'    backend/logs/orchestrator.log | wc -l  # Cache hits
+grep '"method":"fallback"'  backend/logs/orchestrator.log | wc -l  # Fallbacks (revisar!)
+```
+
 ---
 
 ## Quick Reference

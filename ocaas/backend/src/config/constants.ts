@@ -154,6 +154,14 @@ export const EVENT_TYPE = {
   ORG_HUMAN_NOTIFIED: 'org.human_notified',
   ORG_POLICY_APPLIED: 'org.policy_applied',
 
+  // Smart Decision Engine events (heuristics, LLM tiers, caching)
+  TASK_DECISION_STARTED: 'decision.task_started',
+  TASK_DECISION_COMPLETED: 'decision.task_completed',
+  DECISION_HEURISTIC_APPLIED: 'decision.heuristic_applied',
+  DECISION_LLM_INVOKED: 'decision.llm_invoked',
+  DECISION_CACHE_HIT: 'decision.cache_hit',
+  DECISION_FALLBACK_USED: 'decision.fallback_used',
+
   // Resilience events (fault tolerance, recovery, checkpoints)
   EXECUTION_CHECKPOINTED: 'resilience.execution_checkpointed',
   EXECUTION_LEASE_ACQUIRED: 'resilience.lease_acquired',

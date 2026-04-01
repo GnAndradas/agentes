@@ -11,6 +11,7 @@ import { systemLogger } from '../utils/logger.js';
 import { nowTimestamp, parseJsonSafe } from '../utils/helpers.js';
 import { getServices } from '../services/index.js';
 import { getCheckpointStore } from '../orchestrator/resilience/index.js';
+import { getHumanEscalationService, type EscalationDTO, ESCALATION_STATUS } from '../hitl/index.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { NotFoundError } from '../utils/errors.js';
 import type { EventDTO, TaskDTO } from '../types/domain.js';
@@ -60,6 +61,7 @@ export interface TaskTimeline {
     stateChanges: number;
     errors: number;
     retries: number;
+    escalations: number;
     durationMs: number;
     currentBlocker?: string;
   };
@@ -70,6 +72,7 @@ export interface TaskTimeline {
     childTaskIds: string[];
     pendingApproval?: string;
     pendingResources: string[];
+    pendingEscalations: string[];
   };
   /** Generated at */
   generatedAt: number;
@@ -105,7 +108,7 @@ export interface BlockedTaskInfo {
   taskId: string;
   title: string;
   status: string;
-  blockerType: 'approval' | 'resource' | 'dependency' | 'external' | 'unknown';
+  blockerType: 'approval' | 'resource' | 'dependency' | 'external' | 'escalation' | 'unknown';
   blockerDetails: string;
   blockedSinceMs: number;
   suggestedAction: string;
@@ -208,6 +211,9 @@ export class TaskTimelineService {
     // Get feedback for this task
     const feedback = await this.getTaskFeedback(taskId);
 
+    // Get escalations for this task
+    const escalations = await this.getTaskEscalations(taskId);
+
     // Get child tasks directly from DB
     const childTasks = await this.getChildTasks(taskId);
 
@@ -243,6 +249,24 @@ export class TaskTimelineService {
         data: { feedbackType: fb.type, requirement: fb.requirement },
         source: 'feedback',
       });
+    }
+
+    // Add escalations to timeline
+    for (const esc of escalations) {
+      entries.push(this.escalationToTimelineEntry(esc));
+      // If escalation was resolved, add resolution entry
+      if (esc.resolvedAt && esc.resolution) {
+        entries.push({
+          id: `esc_resolved_${esc.id}`,
+          type: 'escalation',
+          timestamp: esc.resolvedAt,
+          title: `Escalation Resolved: ${esc.resolution}`,
+          description: `Resolved by ${esc.resolvedBy}${esc.resolutionDetails ? `: ${JSON.stringify(esc.resolutionDetails)}` : ''}`,
+          severity: esc.resolution === 'rejected' || esc.resolution === 'timed_out' ? 'warning' : 'success',
+          data: { escalationId: esc.id, resolution: esc.resolution, resolvedBy: esc.resolvedBy },
+          source: 'event',
+        });
+      }
     }
 
     // Add checkpoint info if exists
@@ -314,9 +338,15 @@ export class TaskTimelineService {
     // Calculate summary
     const errors = entries.filter(e => e.type === 'error').length;
     const stateChanges = entries.filter(e => e.type === 'state_change').length;
+    const escalationCount = escalations.length;
     const durationMs = task.completedAt
       ? (task.completedAt - task.createdAt) * 1000
       : (nowTimestamp() - task.createdAt) * 1000;
+
+    // Get pending escalations
+    const pendingEscalations = escalations
+      .filter(e => e.status === ESCALATION_STATUS.PENDING || e.status === ESCALATION_STATUS.ACKNOWLEDGED)
+      .map(e => e.id);
 
     return {
       taskId,
@@ -329,6 +359,7 @@ export class TaskTimelineService {
         stateChanges,
         errors,
         retries: task.retryCount,
+        escalations: escalationCount,
         durationMs,
         currentBlocker: checkpoint?.lastKnownBlocker ?? undefined,
       },
@@ -338,6 +369,7 @@ export class TaskTimelineService {
         childTaskIds: childTasks.map(t => t.id),
         pendingApproval: checkpoint?.pendingApproval ?? undefined,
         pendingResources: checkpoint?.pendingResources ?? [],
+        pendingEscalations,
       },
       generatedAt: nowTimestamp(),
     };
@@ -494,6 +526,37 @@ export class TaskTimelineService {
             suggestedAction: 'Wait for dependencies to complete or cancel blocking tasks',
           });
         }
+      }
+    }
+
+    // Check for escalation-blocked tasks (tasks with pending escalations)
+    const escalationService = getHumanEscalationService();
+    const inbox = await escalationService.getHumanInbox();
+    const pendingEscalations = [...inbox.pending, ...inbox.acknowledged];
+
+    for (const esc of pendingEscalations) {
+      if (esc.taskId) {
+        // Skip if already added
+        if (result.some(r => r.taskId === esc.taskId)) continue;
+
+        let task: TaskDTO;
+        try {
+          task = await taskService.getById(esc.taskId);
+        } catch {
+          continue;
+        }
+
+        const blockedDuration = (now - esc.createdAt) * 1000;
+
+        result.push({
+          taskId: task.id,
+          title: task.title,
+          status: task.status,
+          blockerType: 'escalation',
+          blockerDetails: `Awaiting human response: ${esc.reason} [${esc.type}]`,
+          blockedSinceMs: blockedDuration,
+          suggestedAction: `Respond to escalation ${esc.id} in human inbox`,
+        });
       }
     }
 
@@ -815,9 +878,58 @@ export class TaskTimelineService {
         return 'Wait for dependencies or consider cancelling blocking tasks';
       case 'external':
         return 'Check external system integration and retry';
+      case 'escalation':
+        return 'Check human inbox and respond to pending escalation';
       default:
         return 'Investigate blocker cause and take appropriate action';
     }
+  }
+
+  private async getTaskEscalations(taskId: string): Promise<EscalationDTO[]> {
+    try {
+      const escalationService = getHumanEscalationService();
+      return await escalationService.getByTask(taskId);
+    } catch {
+      return [];
+    }
+  }
+
+  private escalationToTimelineEntry(escalation: EscalationDTO): TimelineEntry {
+    let severity: TimelineEntry['severity'] = 'warning';
+
+    // Map priority to severity
+    if (escalation.priority === 'critical') {
+      severity = 'error';
+    } else if (escalation.status === ESCALATION_STATUS.RESOLVED) {
+      severity = 'success';
+    } else if (escalation.status === ESCALATION_STATUS.EXPIRED) {
+      severity = 'error';
+    }
+
+    // Build title
+    const typeLabel = escalation.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const statusLabel = escalation.status.charAt(0).toUpperCase() + escalation.status.slice(1);
+
+    return {
+      id: `escalation_${escalation.id}`,
+      type: 'escalation',
+      timestamp: escalation.createdAt,
+      title: `Escalation: ${typeLabel} [${statusLabel}]`,
+      description: escalation.reason,
+      severity,
+      data: {
+        escalationId: escalation.id,
+        type: escalation.type,
+        priority: escalation.priority,
+        status: escalation.status,
+        agentId: escalation.agentId,
+        checkpointStage: escalation.checkpointStage,
+        expiresAt: escalation.expiresAt,
+        linkedApprovalId: escalation.linkedApprovalId,
+        linkedFeedbackId: escalation.linkedFeedbackId,
+      },
+      source: 'event',
+    };
   }
 }
 

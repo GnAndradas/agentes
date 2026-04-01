@@ -100,6 +100,8 @@ TaskRouter.retryTask() → Task re-processed
 | ChannelBridge | `services/ChannelBridge.ts` | Bridge para enviar respuestas a canales |
 | OrganizationalPolicyService | `organization/OrganizationalPolicyService.ts` | Motor de decisiones organizacionales |
 | **SystemDiagnosticsService** | `system/SystemDiagnosticsService.ts` | **Diagnóstico integral del sistema** |
+| **TaskTimelineService** | `system/TaskTimelineService.ts` | **Observabilidad completa de tasks** |
+| **HumanEscalationService** | `hitl/HumanEscalationService.ts` | **Escalación formal a humano (DIOS)** |
 | **ExecutionLeaseStore** | `orchestrator/resilience/ExecutionLeaseStore.ts` | **Prevención de doble ejecución** |
 | **CheckpointStore** | `orchestrator/resilience/CheckpointStore.ts` | **Estado de ejecución para recovery** |
 
@@ -151,9 +153,11 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 ✅ logger.test.ts                 - 20 tests
 ✅ systemDiagnostics.test.ts      - 26 tests
 ✅ task-resilience.test.ts        - 41 tests
-✅ checkpoint-persistence.test.ts - 22 tests (NEW)
+✅ checkpoint-persistence.test.ts - 22 tests
+✅ task-timeline.test.ts          - 34 tests
+✅ human-escalation.test.ts       - 41 tests (NEW)
 
-TOTAL: 368+ tests passing
+TOTAL: 443+ tests passing
 ```
 
 ## 7. ResourceRetryService Hardening
@@ -751,16 +755,481 @@ interface SystemOverview {
   - System Overview: 1 test
 ```
 
-## 19. Próximos Pasos
+## 19. Sistema Human-in-the-Loop (HumanEscalationService)
 
-1. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
-2. Test integración end-to-end
-3. PostgreSQL si producción real
-4. Rate limiting
-5. Probar Telegram real
-6. Implementar canales adicionales (web, api)
-7. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
-8. Persistir TaskMemoryStore (historial de decisiones)
+Sistema formal de escalación a humano ("DIOS") con trazabilidad completa.
+
+### Componentes
+
+| Componente | Archivo | Función |
+|------------|---------|---------|
+| HumanEscalationService | `hitl/HumanEscalationService.ts` | Servicio central de escalaciones |
+| Escalation API | `api/escalations/` | Endpoints REST para inbox humano |
+
+### Tabla `human_escalations`
+
+```sql
+CREATE TABLE human_escalations (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,              -- approval_required, resource_missing, etc.
+  priority TEXT NOT NULL,          -- low, normal, high, critical
+  task_id TEXT,
+  agent_id TEXT,
+  resource_type TEXT,
+  resource_id TEXT,
+  reason TEXT NOT NULL,
+  context TEXT,                    -- JSON
+  checkpoint_stage TEXT,
+  status TEXT NOT NULL,            -- pending, acknowledged, resolved, expired, cancelled
+  acknowledged_at INTEGER,
+  acknowledged_by TEXT,
+  resolution TEXT,                 -- approved, rejected, resource_provided, overridden, timed_out
+  resolution_details TEXT,         -- JSON
+  resolved_at INTEGER,
+  resolved_by TEXT,
+  expires_at INTEGER,
+  fallback_action TEXT,            -- retry, fail, escalate_higher, auto_approve, pause
+  linked_approval_id TEXT,
+  linked_feedback_id TEXT,
+  metadata TEXT,                   -- JSON
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+### Tipos de Escalación
+
+| Tipo | Descripción | Prioridad Default |
+|------|-------------|-------------------|
+| `approval_required` | Recurso necesita aprobación humana | normal |
+| `resource_missing` | Falta un recurso que no se puede generar | high |
+| `permission_denied` | Sin permisos para la acción | normal |
+| `execution_failure` | Fallo de ejecución tras reintentos | high si ≥3 retries |
+| `uncertainty` | Agente tiene dudas sobre cómo proceder | normal |
+| `blocked` | Tarea bloqueada por razón externa | high |
+| `timeout` | Operación excedió tiempo límite | normal |
+| `policy_violation` | Acción viola políticas organizacionales | critical |
+
+### Estado de Escalaciones (FSM)
+
+```
+pending → acknowledged → resolved
+   ↓           ↓
+expired    expired
+   ↓           ↓
+ (terminal)  (terminal)
+
+pending → resolved (directa sin acknowledge)
+pending → cancelled
+```
+
+### Resoluciones
+
+| Resolución | Descripción | Efecto en Task |
+|------------|-------------|----------------|
+| `approved` | Humano aprueba la acción | Continúa, limpia blocker |
+| `rejected` | Humano rechaza la acción | Depende del contexto |
+| `resource_provided` | Humano provee el recurso faltante | Continúa, limpia blocker |
+| `overridden` | Humano toma decisión manual | Continúa con decisión humana |
+| `timed_out` | Expiró sin respuesta humana | Ejecuta fallback |
+| `cancelled` | Escalación cancelada | Sin efecto |
+
+### Fallback Actions (Timeout)
+
+| Acción | Descripción |
+|--------|-------------|
+| `retry` | Re-encolar task para reintento |
+| `fail` | Marcar task como fallida |
+| `escalate_higher` | Crear escalación CRITICAL |
+| `auto_approve` | Aprobar automáticamente (si linked_approval_id) |
+| `pause` | Pausar task para revisión manual |
+
+### API Endpoints
+
+```
+# Inbox Humano
+GET  /api/escalations/inbox              - Inbox completo (pending + acknowledged + summary)
+GET  /api/escalations/pending            - Solo escalaciones pendientes
+GET  /api/escalations/stats              - Estadísticas de escalaciones
+
+# CRUD
+GET  /api/escalations                    - Listar con filtros (status, type, priority, taskId)
+GET  /api/escalations/:id                - Obtener escalación
+GET  /api/escalations/task/:taskId       - Escalaciones de una task
+POST /api/escalations                    - Crear escalación manual
+
+# Acknowledgment
+POST /api/escalations/:id/acknowledge    - Marcar como vista
+
+# Resolución
+POST /api/escalations/:id/approve        - Aprobar
+POST /api/escalations/:id/reject         - Rechazar (con razón opcional)
+POST /api/escalations/:id/provide-resource - Proveer recurso (resourceId, resourceType)
+POST /api/escalations/:id/override       - Override manual (decision, details)
+
+# Mantenimiento
+POST /api/escalations/process-expired    - Procesar escalaciones expiradas
+POST /api/escalations/cleanup            - Limpiar antiguas (maxAgeMs opcional)
+```
+
+### Human Inbox
+
+```typescript
+interface HumanInbox {
+  pending: EscalationDTO[];      // Ordenadas por prioridad
+  acknowledged: EscalationDTO[];  // Vistas pero no resueltas
+  summary: {
+    totalPending: number;
+    totalAcknowledged: number;
+    byType: Record<string, number>;      // approval_required: 3, resource_missing: 1
+    byPriority: Record<string, number>;  // critical: 1, high: 2, normal: 1
+    oldestPendingAge?: number;           // ms desde la más antigua
+    expiringCount: number;               // expiran en < 5 min
+  };
+}
+```
+
+### Integración con Timeline
+
+Las escalaciones aparecen en el timeline de tasks:
+
+```typescript
+// En TaskTimeline.entries
+{
+  id: 'escalation_esc_123',
+  type: 'escalation',
+  timestamp: 1234567890,
+  title: 'Escalation: Approval Required [Pending]',
+  description: 'Skill generation requires approval',
+  severity: 'warning',  // error si critical/expired
+  data: { escalationId, type, priority, status }
+}
+
+// TaskTimeline.related incluye:
+pendingEscalations: ['esc_123', 'esc_456']
+```
+
+### Integración con Blocked Tasks
+
+`TaskTimelineService.getBlockedTasks()` incluye blocker type `escalation`:
+
+```typescript
+{
+  taskId: 'task_123',
+  title: 'Process data',
+  status: 'running',
+  blockerType: 'escalation',
+  blockerDetails: 'Awaiting human response: Missing skill [resource_missing]',
+  blockedSinceMs: 120000,
+  suggestedAction: 'Respond to escalation esc_456 in human inbox'
+}
+```
+
+### Métodos de Convenience
+
+```typescript
+// Crear escalación por tipo
+await escalationService.escalateForApproval(approvalId, taskId, reason);
+await escalationService.escalateForMissingResource(taskId, resourceType, requirement);
+await escalationService.escalateForFailure(taskId, error, retryCount);
+await escalationService.escalateForUncertainty(taskId, agentId, question, options);
+await escalationService.escalateForBlocked(taskId, agentId, reason);
+```
+
+### Tests
+
+```
+✅ human-escalation.test.ts - 41 tests
+  - Escalation Types: 5 tests
+  - State Machine: 7 tests
+  - Human Inbox: 5 tests
+  - Resolution Handling: 4 tests
+  - Timeout/Fallback: 6 tests
+  - Multiple Escalations: 2 tests
+  - Statistics: 4 tests
+  - Timeline Integration: 4 tests
+  - Convenience Methods: 4 tests
+```
+
+## 20. Smart Decision Engine (NEW)
+
+Sistema de decisiones inteligente con enfoque heurísticas-primero para reducir dependencia de LLM y aumentar consistencia.
+
+### Arquitectura
+
+```
+Task llega a DecisionEngine
+        │
+        ├── 1. Check Cache → Si hay decisión cacheada, retorna
+        │
+        ├── 2. Evaluate Heuristics → 8 reglas en orden de prioridad
+        │       └── Si alguna regla decide con confianza ≥ mínimo, retorna
+        │
+        ├── 3. LLM con Tier apropiado
+        │       ├── SHORT (~100 tokens): clasificación rápida
+        │       ├── MEDIUM (~500 tokens): decisión estándar
+        │       └── DEEP (~1500 tokens): planificación compleja
+        │
+        └── 4. Fallback → Decisión segura si todo falla
+```
+
+### Componentes
+
+| Componente | Archivo | Función |
+|------------|---------|---------|
+| SmartDecisionEngine | `orchestrator/decision/SmartDecisionEngine.ts` | Motor principal con pipeline |
+| HeuristicRules | `orchestrator/decision/HeuristicRules.ts` | 8 reglas heurísticas |
+| PromptTiers | `orchestrator/decision/PromptTiers.ts` | Prompts SHORT/MEDIUM/DEEP |
+| types.ts | `orchestrator/decision/types.ts` | Tipos y configuración |
+
+### Reglas Heurísticas (Orden de Prioridad)
+
+| # | Regla | Condición | Resultado |
+|---|-------|-----------|-----------|
+| 1 | `direct_type_match` | Agent capability = task type | assign |
+| 2 | `single_agent` | Solo 1 agente activo + task no crítica | assign |
+| 3 | `specialist_match` | Specialist con capabilities matching | assign |
+| 4 | `no_agents` | 0 agentes activos | escalate |
+| 5 | `critical_task` | Priority ≥ 4 | assign (si buen match) o escalate |
+| 6 | `subtask_match` | Task tiene parentTaskId | assign por capability |
+| 7 | `retry_limit` | retryCount ≥ 3 | escalate |
+| 8 | `general_capability` | Match por capabilities inferidas | assign |
+
+### Prompt Tiers
+
+| Tier | Max Tokens | Timeout | Cuándo Usar |
+|------|------------|---------|-------------|
+| SHORT | 256 | 5s | Tasks simples con tipo definido |
+| MEDIUM | 512 | 10s | Mayoría de tasks, descripción larga |
+| DEEP | 1536 | 30s | Priority ≥ 4, input data complejo |
+
+### Structured Decision (Output)
+
+```typescript
+interface StructuredDecision {
+  id: string;
+  taskId: string;
+  decidedAt: number;
+
+  // Core
+  decisionType: 'assign' | 'subdivide' | 'create_resource' | 'escalate' | 'wait' | 'reject';
+  targetAgent?: string;
+  requiresEscalation: boolean;
+  confidenceScore: number;      // 0-1
+  confidenceLevel: 'high' | 'medium' | 'low';
+  reasoning: string;
+
+  // Método
+  method: 'heuristic' | 'cached' | 'llm_classify' | 'llm_decide' | 'llm_plan' | 'fallback';
+  llmTier?: 'short' | 'medium' | 'deep';
+  heuristicsAttempted: boolean;
+
+  // Detalles
+  agentScores?: AgentScore[];
+  suggestedActions: DecisionAction[];
+  missingCapabilities?: string[];
+  subtasks?: SubtaskPlan[];
+
+  // Meta
+  processingTimeMs: number;
+  fromCache: boolean;
+  cacheKey?: string;
+}
+```
+
+### Decision Cache
+
+| Config | Default | Descripción |
+|--------|---------|-------------|
+| `enableCache` | true | Habilitar cache |
+| `cacheMaxSize` | 500 | Máximo entries |
+| `cacheTTL` | 5 min | TTL default |
+| `minConfidenceForHeuristic` | 0.7 | Mínimo para cachear |
+
+**No se cachea:**
+- Decisiones con `confidenceScore < 0.5`
+- Decisiones de `escalate`
+- Tasks críticas (priority 4)
+
+### Capability Matching
+
+Matching semántico con sinónimos:
+
+```typescript
+// Ejemplo: 'programming' matches 'coding'
+const CAPABILITY_SYNONYMS = {
+  'coding': ['programming', 'development', 'code', 'software'],
+  'testing': ['test', 'qa', 'quality', 'unit-test'],
+  'deployment': ['deploy', 'release', 'ci-cd', 'devops'],
+  // ... más grupos
+};
+```
+
+### Uso
+
+```typescript
+import { getSmartDecisionEngine } from './orchestrator/decision/index.js';
+
+const engine = getSmartDecisionEngine();
+const decision = await engine.decide(task, agents);
+
+// Métricas
+const metrics = engine.getMetrics();
+console.log(`Heuristic rate: ${metrics.heuristicDecisions / metrics.totalDecisions}`);
+
+// Cache stats
+const cacheStats = engine.getCacheStats();
+console.log(`Cache hit rate: ${cacheStats.hitRate}`);
+```
+
+### Métricas
+
+```typescript
+interface DecisionMetrics {
+  totalDecisions: number;
+  heuristicDecisions: number;
+  cachedDecisions: number;
+  llmDecisions: { short: number; medium: number; deep: number };
+  fallbackDecisions: number;
+  averageConfidence: number;
+  averageProcessingTimeMs: number;
+  byDecisionType: Record<DecisionType, number>;
+}
+```
+
+### Events
+
+| Evento | Descripción |
+|--------|-------------|
+| `decision.task_started` | Inicio de proceso de decisión |
+| `decision.task_completed` | Decisión completada |
+| `decision.heuristic_applied` | Regla heurística aplicada |
+| `decision.llm_invoked` | LLM invocado |
+| `decision.cache_hit` | Cache hit |
+| `decision.fallback_used` | Fallback usado |
+
+### Tests
+
+```
+✅ HeuristicRules.test.ts - 21 tests
+✅ PromptTiers.test.ts - 28 tests
+✅ SmartDecisionEngine.test.ts - 25 tests
+✅ DecisionEngine.integration.test.ts - 18 tests
+
+TOTAL: 92 tests
+```
+
+## 21. Integración DecisionEngine + SmartDecisionEngine
+
+### Arquitectura de Integración
+
+```
+TaskRouter
+    │
+    └── DecisionEngine.makeIntelligentDecision(task)
+            │
+            ├── getSmartDecisionEngine().decide(task, agents)
+            │       │
+            │       ├── 1. Check Cache
+            │       ├── 2. Evaluate Heuristics (8 rules)
+            │       ├── 3. LLM Tier Selection (if needed)
+            │       └── 4. Fallback Decision
+            │
+            ├── handleEscalation() → HITL Service (if requiresEscalation)
+            │
+            └── convertToIntelligentDecision() → IntelligentDecision (backward compat)
+```
+
+### Flujo de Decisión
+
+1. **TaskRouter** llama a `DecisionEngine.makeIntelligentDecision(task)`
+2. **DecisionEngine** obtiene agentes activos y delega a **SmartDecisionEngine**
+3. **SmartDecisionEngine** ejecuta el pipeline:
+   - Cache → Heuristics → LLM → Fallback
+4. Si `requiresEscalation = true`, se crea escalación en **HumanEscalationService**
+5. **DecisionEngine** convierte `StructuredDecision` a `IntelligentDecision` para compatibilidad
+
+### Conversión de Tipos
+
+| StructuredDecision | IntelligentDecision |
+|--------------------|---------------------|
+| `decisionType: 'assign'` | `assignment: TaskAssignment` |
+| `decisionType: 'subdivide'` | `suggestedActions: [{action: 'subdivide'}]` |
+| `decisionType: 'escalate'` | `suggestedActions: [{action: 'wait_approval'}]` |
+| `confidenceScore` | `analysis.confidence` |
+| `reasoning` | `analysis.intent` |
+| `missingCapabilities` | `missingReport` |
+| `subtasks` | `analysis.suggestedSubtasks` |
+
+### Logging Enriquecido
+
+Cada decisión ahora incluye logs con:
+
+```typescript
+logger.info({
+  taskId: task.id,
+  decisionId: structuredDecision.id,
+  decisionType: structuredDecision.decisionType,   // assign, escalate, subdivide, etc.
+  method: structuredDecision.method,               // heuristic, cached, llm_classify, etc.
+  llmTier: structuredDecision.llmTier,             // short, medium, deep (if LLM used)
+  confidenceScore: structuredDecision.confidenceScore,
+  confidenceLevel: structuredDecision.confidenceLevel,
+  fromCache: structuredDecision.fromCache,         // true/false
+  processingTimeMs: structuredDecision.processingTimeMs,
+  targetAgent: structuredDecision.targetAgent,
+  requiresEscalation: structuredDecision.requiresEscalation,
+}, 'Smart decision made');
+```
+
+### API de DecisionEngine
+
+```typescript
+class DecisionEngine {
+  // Principal - usa SmartDecisionEngine
+  async makeIntelligentDecision(task: TaskDTO): Promise<IntelligentDecision>;
+
+  // Métricas
+  getDecisionMetrics(): DecisionMetrics;
+  getDecisionCacheStats(): { size: number; maxSize: number; hitRate: number };
+
+  // Control
+  clearDecisionCache(): void;
+  updateDecisionConfig(config: Partial<SmartDecisionEngineConfig>): void;
+
+  // Legacy (deprecated)
+  async makeIntelligentDecisionLegacy(task: TaskDTO): Promise<IntelligentDecision>;
+}
+```
+
+### Integración con HITL
+
+Cuando `requiresEscalation = true`, se crea automáticamente una escalación:
+
+```typescript
+// Tipo de escalación según contexto
+- APPROVAL_REQUIRED: default
+- RESOURCE_MISSING: si hay missingCapabilities
+- UNCERTAINTY: si confidenceScore < 0.4
+
+// Prioridad según task.priority y confidence
+- CRITICAL: task.priority >= 4
+- HIGH: task.priority >= 3 || confidenceScore < 0.3
+- NORMAL: default
+```
+
+## 22. Próximos Pasos
+
+1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
+2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada
+3. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
+4. Test integración end-to-end completo
+5. PostgreSQL si producción real
+6. Rate limiting
+7. Probar Telegram real
+8. Implementar canales adicionales (web, api)
+9. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
+10. Persistir TaskMemoryStore (historial de decisiones)
+11. UI Panel para Human Inbox
 
 ---
 

@@ -9,6 +9,39 @@ export { TaskDecomposer, getTaskDecomposer } from './TaskDecomposer.js';
 export { ResourceRetryService, getResourceRetryService } from './ResourceRetryService.js';
 export * from './feedback/index.js';
 
+// Smart Decision Engine exports
+export {
+  SmartDecisionEngine,
+  getSmartDecisionEngine,
+  resetSmartDecisionEngine,
+  // Types
+  type StructuredDecision,
+  type DecisionType,
+  type DecisionMethod,
+  type ConfidenceLevel,
+  type DecisionAction,
+  type AgentScore,
+  type SubtaskPlan,
+  type DecisionMetrics,
+  type HeuristicRule,
+  type HeuristicContext,
+  type HeuristicDecisionResult,
+  // Heuristic utilities
+  evaluateHeuristics,
+  matchCapabilities,
+  findCapabilitySynonyms,
+  CAPABILITY_SYNONYMS,
+  HEURISTIC_RULES,
+  // Prompt tier utilities
+  getPromptBundle,
+  parseResponse,
+  determineTier,
+  PROMPT_TIER,
+  // Constants
+  CONFIDENCE_THRESHOLDS,
+  DECISION_CACHE_CONFIG,
+} from './decision/index.js';
+
 import { getTaskRouter } from './TaskRouter.js';
 import { getAgentManager } from './AgentManager.js';
 import { getActionExecutor } from './ActionExecutor.js';

@@ -882,7 +882,13 @@ export class ResourceRetryService {
         resourcesNeedingRetry,
       };
     } catch (err) {
-      logger.error({ err }, 'Failed to recover ResourceRetryService state');
+      // Handle table not existing gracefully (fresh install)
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      if (errorMsg.includes('no such table') || errorMsg.includes('SQLITE_ERROR')) {
+        logger.warn({ error: errorMsg }, 'ResourceRetryService recovery skipped - table may not exist yet (fresh install)');
+      } else {
+        logger.error({ err }, 'Failed to recover ResourceRetryService state');
+      }
       return {
         pendingDrafts: 0,
         tasksWaiting: 0,

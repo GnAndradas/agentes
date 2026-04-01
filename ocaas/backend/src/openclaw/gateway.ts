@@ -20,8 +20,12 @@ const logger = integrationLogger.child({ component: 'OpenClawGateway' });
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const GENERATION_TIMEOUT = 120000; // 2 minutes for LLM generation
 const STALE_CHECK_INTERVAL = 60000; // 1 minute
-const WS_RECONNECT_DELAY = 5000; // 5 seconds between reconnect attempts
 const WS_PING_INTERVAL = 30000; // 30 seconds ping interval
+
+// WebSocket reconnection with exponential backoff
+const WS_RECONNECT_BASE_DELAY = 1000; // 1 second initial
+const WS_RECONNECT_MAX_DELAY = 60000; // 1 minute max
+const WS_MAX_RECONNECT_ATTEMPTS = 10; // Stop after 10 failures
 
 /**
  * OpenAI-compatible chat completion response
@@ -163,6 +167,10 @@ export class OpenClawGateway {
   private hooksToken?: string;
   private enableGenerationProbe: boolean;
 
+  // WebSocket configuration
+  private wsUrl: string;
+  private wsMode: 'required' | 'optional' | 'disabled';
+
   // Connection state
   private restConnected = false;
   private hooksConnected = false;
@@ -178,11 +186,18 @@ export class OpenClawGateway {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  // WebSocket reconnection state
+  private wsReconnectAttempts = 0;
+  private wsLastCloseCode: number | null = null;
+  private wsLastCloseReason: string | null = null;
+
   constructor() {
     this.baseUrl = config.openclaw.gatewayUrl;
     this.apiKey = config.openclaw.apiKey;
     this.hooksToken = config.openclaw.hooksToken;
     this.enableGenerationProbe = config.openclaw.enableGenerationProbe;
+    this.wsUrl = config.openclaw.wsUrl;
+    this.wsMode = config.openclaw.wsMode;
   }
 
   /**
@@ -703,18 +718,43 @@ export class OpenClawGateway {
   /**
    * Connect to WebSocket RPC for real-time operations
    * Uses OpenClaw Protocol v3 with connect.challenge handshake
+   *
+   * Respects wsMode configuration:
+   * - disabled: never attempt connection
+   * - optional: connect but don't fail if it doesn't work
+   * - required: connect and fail if it doesn't work
    */
   async connectWebSocket(): Promise<boolean> {
+    // Check if WS is disabled
+    if (this.wsMode === 'disabled') {
+      logger.debug('WebSocket disabled by configuration (OPENCLAW_WS_MODE=disabled)');
+      return false;
+    }
+
     if (this.wsConnected && this.ws?.readyState === WebSocket.OPEN) {
       return true;
     }
 
+    // Check max reconnect attempts
+    if (this.wsReconnectAttempts >= WS_MAX_RECONNECT_ATTEMPTS) {
+      logger.warn({
+        attempts: this.wsReconnectAttempts,
+        maxAttempts: WS_MAX_RECONNECT_ATTEMPTS,
+        lastCloseCode: this.wsLastCloseCode,
+      }, 'WebSocket max reconnect attempts reached, giving up');
+      return false;
+    }
+
     return new Promise((resolve) => {
       try {
-        const wsUrl = this.baseUrl.replace(/^http/, 'ws');
-        logger.info({ wsUrl }, 'Connecting to WebSocket RPC');
+        // Use configured wsUrl
+        logger.info({
+          wsUrl: this.wsUrl,
+          wsMode: this.wsMode,
+          attempt: this.wsReconnectAttempts + 1,
+        }, 'Connecting to WebSocket RPC');
 
-        this.ws = new WebSocket(wsUrl);
+        this.ws = new WebSocket(this.wsUrl);
 
         this.ws.on('open', () => {
           logger.debug('WebSocket connection opened, waiting for challenge');
@@ -725,7 +765,29 @@ export class OpenClawGateway {
         });
 
         this.ws.on('close', (code, reason) => {
-          logger.warn({ code, reason: reason.toString() }, 'WebSocket closed');
+          const reasonStr = reason.toString();
+          this.wsLastCloseCode = code;
+          this.wsLastCloseReason = reasonStr;
+
+          // Log with context about what happened
+          const closeInfo = {
+            code,
+            reason: reasonStr,
+            wsUrl: this.wsUrl,
+            wsMode: this.wsMode,
+            attempts: this.wsReconnectAttempts,
+          };
+
+          if (code === 1000) {
+            // Normal close - could be server doesn't support WS or clean shutdown
+            logger.info(closeInfo, 'WebSocket closed normally (code 1000). Server may not support WS protocol.');
+          } else if (code === 1006) {
+            // Abnormal close - connection failed
+            logger.warn(closeInfo, 'WebSocket connection failed (code 1006). Check if server is running and accepts WS.');
+          } else {
+            logger.warn(closeInfo, 'WebSocket closed');
+          }
+
           this.wsConnected = false;
           this.wsSessionId = null;
           this.cleanupWs();
@@ -733,7 +795,7 @@ export class OpenClawGateway {
         });
 
         this.ws.on('error', (err) => {
-          logger.error({ err }, 'WebSocket error');
+          logger.error({ err, wsUrl: this.wsUrl }, 'WebSocket error');
           this.wsConnected = false;
           resolve(false);
         });
@@ -741,14 +803,14 @@ export class OpenClawGateway {
         // Timeout for connection
         setTimeout(() => {
           if (!this.wsConnected) {
-            logger.warn('WebSocket connection timeout');
+            logger.warn({ wsUrl: this.wsUrl, timeout: DEFAULT_TIMEOUT }, 'WebSocket connection timeout');
             this.ws?.close();
             resolve(false);
           }
         }, DEFAULT_TIMEOUT);
 
       } catch (err) {
-        logger.error({ err }, 'Failed to create WebSocket connection');
+        logger.error({ err, wsUrl: this.wsUrl }, 'Failed to create WebSocket connection');
         resolve(false);
       }
     });
@@ -773,6 +835,7 @@ export class OpenClawGateway {
         const ack = message as WsConnectAck;
         this.wsSessionId = ack.sessionId;
         this.wsConnected = true;
+        this.wsReconnectAttempts = 0; // Reset backoff on successful connection
         this.startPingInterval();
         logger.info({ sessionId: ack.sessionId }, 'WebSocket RPC connected');
         connectResolve?.(true);
@@ -900,18 +963,56 @@ export class OpenClawGateway {
   }
 
   /**
-   * Schedule WebSocket reconnection
+   * Schedule WebSocket reconnection with exponential backoff
    */
   private scheduleReconnect(): void {
+    // Don't reconnect if disabled
+    if (this.wsMode === 'disabled') return;
+
+    // Don't schedule if already scheduled
     if (this.reconnectTimeout) return;
+
+    // Check max attempts
+    if (this.wsReconnectAttempts >= WS_MAX_RECONNECT_ATTEMPTS) {
+      logger.info({
+        attempts: this.wsReconnectAttempts,
+        maxAttempts: WS_MAX_RECONNECT_ATTEMPTS,
+      }, 'WebSocket reconnection stopped: max attempts reached');
+      return;
+    }
+
+    // Calculate delay with exponential backoff: 1s, 2s, 4s, 8s, ..., max 60s
+    const delay = Math.min(
+      WS_RECONNECT_BASE_DELAY * Math.pow(2, this.wsReconnectAttempts),
+      WS_RECONNECT_MAX_DELAY
+    );
+
+    this.wsReconnectAttempts++;
+
+    logger.debug({
+      attempt: this.wsReconnectAttempts,
+      delayMs: delay,
+      maxAttempts: WS_MAX_RECONNECT_ATTEMPTS,
+    }, 'Scheduling WebSocket reconnection');
 
     this.reconnectTimeout = setTimeout(async () => {
       this.reconnectTimeout = null;
       if (!this.wsConnected && this.restConnected) {
-        logger.info('Attempting WebSocket reconnection');
-        await this.connectWebSocket();
+        logger.info({ attempt: this.wsReconnectAttempts }, 'Attempting WebSocket reconnection');
+        const connected = await this.connectWebSocket();
+        if (connected) {
+          // Reset attempts on successful connection
+          this.wsReconnectAttempts = 0;
+        }
       }
-    }, WS_RECONNECT_DELAY);
+    }, delay);
+  }
+
+  /**
+   * Reset WebSocket reconnection attempts (call after successful REST connection)
+   */
+  resetWsReconnectAttempts(): void {
+    this.wsReconnectAttempts = 0;
   }
 
   /**

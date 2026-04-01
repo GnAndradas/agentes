@@ -12,6 +12,7 @@ import {
   checkChannelSecretKey,
   checkDirectories,
   checkDatabase,
+  checkDatabaseSchema,
   checkOpenClawConfig,
   checkOpenClawConnection,
   checkLogging,
@@ -147,6 +148,15 @@ export async function bootstrap(options: {
   checks.push(dbCheck);
   if (!options.silent) printCheck(dbCheck);
   if (dbCheck.status === 'fail') criticalFailures.push(dbCheck.message);
+
+  // Verify schema after DB init
+  const schemaCheck = await checkDatabaseSchema();
+  checks.push(schemaCheck);
+  if (!options.silent) printCheck(schemaCheck);
+  if (schemaCheck.status === 'fail') {
+    criticalFailures.push(schemaCheck.message);
+    recommendations.push('Run "npm run db:push" or restart to create missing tables');
+  }
 
   // Phase 4: OpenClaw
   if (!options.silent) log(`\n${colors.bold}Phase 4: OpenClaw${colors.reset}`);

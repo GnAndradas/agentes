@@ -177,19 +177,31 @@ export function checkDirectories(baseDir: string): BootstrapCheck {
 // DATABASE CHECKS
 // =============================================================================
 
+// Critical tables that must exist for OCAAS to function
+const CRITICAL_TABLES = [
+  'tasks',
+  'agents',
+  'skills',
+  'tools',
+  'events',
+  'resource_drafts',  // Required for ManualResourceService
+  'approvals',
+  'agent_feedback',
+];
+
 export async function checkDatabase(): Promise<BootstrapCheck> {
   const startTime = Date.now();
 
   try {
     // Dynamic import to avoid loading DB at module level
-    // Using initDatabase to verify DB is accessible
+    // Using initDatabase to verify DB is accessible and create tables
     const { initDatabase } = await import('../db/index.js');
     await initDatabase();
 
     return {
       name: 'database',
       status: 'ok',
-      message: 'Database connection verified',
+      message: 'Database initialized and connected',
       durationMs: Date.now() - startTime,
     };
   } catch (err) {
@@ -197,6 +209,79 @@ export async function checkDatabase(): Promise<BootstrapCheck> {
       name: 'database',
       status: 'fail',
       message: `Database error: ${err instanceof Error ? err.message : 'unknown'}`,
+      durationMs: Date.now() - startTime,
+    };
+  }
+}
+
+/**
+ * Check that critical tables exist in the database
+ * This is a deeper validation than just database connectivity
+ */
+export async function checkDatabaseSchema(): Promise<BootstrapCheck> {
+  const startTime = Date.now();
+
+  try {
+    const Database = (await import('better-sqlite3')).default;
+    const { config } = await import('../config/index.js');
+
+    const dbPath = config.database.url;
+    const sqlite = new Database(dbPath, { readonly: true });
+
+    try {
+      // Get all tables
+      const tables = sqlite.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+      `).all() as Array<{ name: string }>;
+
+      const existingTables = new Set(tables.map(t => t.name));
+      const missingTables = CRITICAL_TABLES.filter(t => !existingTables.has(t));
+
+      if (missingTables.length > 0) {
+        return {
+          name: 'database_schema',
+          status: 'fail',
+          message: `Missing critical tables: ${missingTables.join(', ')}`,
+          durationMs: Date.now() - startTime,
+          details: {
+            missingTables,
+            existingTables: Array.from(existingTables),
+            criticalTables: CRITICAL_TABLES,
+          },
+        };
+      }
+
+      return {
+        name: 'database_schema',
+        status: 'ok',
+        message: `All ${CRITICAL_TABLES.length} critical tables present`,
+        durationMs: Date.now() - startTime,
+        details: {
+          tableCount: existingTables.size,
+          criticalTables: CRITICAL_TABLES,
+        },
+      };
+    } finally {
+      sqlite.close();
+    }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'unknown';
+
+    // Handle case where database file doesn't exist yet
+    if (errorMsg.includes('SQLITE_CANTOPEN') || errorMsg.includes('unable to open')) {
+      return {
+        name: 'database_schema',
+        status: 'fail',
+        message: 'Database file does not exist - run initDatabase first',
+        durationMs: Date.now() - startTime,
+      };
+    }
+
+    return {
+      name: 'database_schema',
+      status: 'fail',
+      message: `Schema check error: ${errorMsg}`,
       durationMs: Date.now() - startTime,
     };
   }

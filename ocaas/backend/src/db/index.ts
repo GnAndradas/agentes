@@ -211,6 +211,63 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_agent_feedback_task ON agent_feedback(task_id);
     CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent ON agent_feedback(agent_id);
     CREATE INDEX IF NOT EXISTS idx_agent_feedback_processed ON agent_feedback(processed);
+
+    -- Resource drafts table (for ManualResourceService)
+    CREATE TABLE IF NOT EXISTS resource_drafts (
+      id TEXT PRIMARY KEY,
+      resource_type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      content TEXT NOT NULL,
+      validation_result TEXT,
+      submitted_at INTEGER,
+      submitted_by TEXT,
+      approved_at INTEGER,
+      approved_by TEXT,
+      rejected_at INTEGER,
+      rejected_by TEXT,
+      rejection_reason TEXT,
+      activated_at INTEGER,
+      active_resource_id TEXT,
+      parent_draft_id TEXT,
+      revision INTEGER NOT NULL DEFAULT 1,
+      metadata TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      created_by TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_resource_drafts_type ON resource_drafts(resource_type);
+    CREATE INDEX IF NOT EXISTS idx_resource_drafts_status ON resource_drafts(status);
+    CREATE INDEX IF NOT EXISTS idx_resource_drafts_slug ON resource_drafts(resource_type, slug);
+
+    -- Execution checkpoints table (for resilience)
+    CREATE TABLE IF NOT EXISTS execution_checkpoints (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      state TEXT NOT NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_task ON execution_checkpoints(task_id);
+
+    -- Execution leases table (for resilience)
+    CREATE TABLE IF NOT EXISTS execution_leases (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL UNIQUE,
+      holder_id TEXT NOT NULL,
+      acquired_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      renewed_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_leases_task ON execution_leases(task_id);
+    CREATE INDEX IF NOT EXISTS idx_leases_expires ON execution_leases(expires_at);
   `);
 
   logger.info('Database initialized');

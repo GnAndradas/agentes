@@ -16,6 +16,14 @@ const envSchema = z.object({
   OPENCLAW_HOOKS_TOKEN: z.string().optional(),
   // Enable generation probe during diagnostics (tests actual AI generation)
   OPENCLAW_ENABLE_GENERATION_PROBE: z.coerce.boolean().default(false),
+  // WebSocket URL (optional - defaults to ws:// version of GATEWAY_URL)
+  // Set explicitly if WS endpoint differs from REST
+  OPENCLAW_WS_URL: z.string().optional(),
+  // WebSocket mode: 'required' | 'optional' | 'disabled'
+  // - required: fail if WS cannot connect
+  // - optional: degrade gracefully if WS fails (default)
+  // - disabled: never attempt WS connection
+  OPENCLAW_WS_MODE: z.enum(['required', 'optional', 'disabled']).default('optional'),
 
   API_SECRET_KEY: z.string().min(16).default('dev-secret-key-min-16'),
 

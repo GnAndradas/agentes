@@ -197,6 +197,30 @@ describe('Bootstrap Checks', () => {
       fs.rmSync(tempDir, { recursive: true });
     });
   });
+
+  describe('checkDatabaseSchema', () => {
+    it('should fail when database file does not exist', async () => {
+      // This test runs without DB setup, so it should fail gracefully
+      const { checkDatabaseSchema } = await import('../src/bootstrap/checks.js');
+
+      // Mock config to use non-existent path
+      vi.mock('../src/config/index.js', () => ({
+        config: {
+          database: {
+            url: '/tmp/nonexistent-db-test-' + Date.now() + '.db',
+          },
+        },
+      }));
+
+      // Re-import after mock
+      const checksModule = await import('../src/bootstrap/checks.js');
+      const result = await checksModule.checkDatabaseSchema();
+
+      // Should fail because DB doesn't exist
+      expect(result.status).toBe('fail');
+      expect(result.message).toMatch(/does not exist|Schema check error/);
+    });
+  });
 });
 
 describe('Bootstrap Result', () => {

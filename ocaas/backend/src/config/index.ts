@@ -39,6 +39,10 @@ export const config = {
     hooksToken: env.OPENCLAW_HOOKS_TOKEN || env.OPENCLAW_API_KEY,
     // Enable generation probe in diagnostics
     enableGenerationProbe: env.OPENCLAW_ENABLE_GENERATION_PROBE,
+    // WebSocket URL - defaults to ws:// version of gatewayUrl
+    wsUrl: env.OPENCLAW_WS_URL || env.OPENCLAW_GATEWAY_URL.replace(/^http/, 'ws'),
+    // WebSocket mode: 'required' | 'optional' | 'disabled'
+    wsMode: env.OPENCLAW_WS_MODE,
   },
   security: {
     apiSecretKey: env.API_SECRET_KEY,

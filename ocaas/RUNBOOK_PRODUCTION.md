@@ -100,6 +100,16 @@ LOG_LEVEL=info
 # Channel Security (usa API_SECRET_KEY si no está)
 CHANNEL_SECRET_KEY=your-channel-secret-key
 
+# WebSocket Mode: required | optional | disabled
+# - optional (default): degrade gracefully if WS fails
+# - disabled: never attempt WS connection (REST-only mode)
+# - required: fail if WS cannot connect
+OPENCLAW_WS_MODE=optional
+
+# WebSocket URL (default: derived from OPENCLAW_GATEWAY_URL)
+# Set explicitly if WS endpoint differs from REST
+# OPENCLAW_WS_URL=ws://localhost:18789
+
 # Telegram (si se usa)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
@@ -260,6 +270,40 @@ mv backend/data/ocaas.db backend/data/ocaas.db.bak
 npm run db:push
 ```
 
+### Error: "no such table: resource_drafts" (o cualquier tabla)
+
+Este error indica una instalación incompleta o DB creada antes de agregar nuevas tablas.
+
+```bash
+# Opción 1: Reiniciar backend (initDatabase crea las tablas)
+npm run start
+
+# Opción 2: Ejecutar doctor para verificar
+npm run doctor
+
+# Si persiste, recrear DB:
+rm backend/data/ocaas.db
+npm run start
+```
+
+### WebSocket cierra con code 1000 (loop de reconexión)
+
+El servidor OpenClaw puede no soportar el protocolo WS de OCAAS, o el WS endpoint no existe.
+
+```bash
+# Opción 1: Usar modo REST-only
+# En .env agregar:
+OPENCLAW_WS_MODE=disabled
+
+# Opción 2: Verificar URL correcta
+# El WS URL se deriva de GATEWAY_URL por defecto
+# Si es diferente, especificar explícitamente:
+OPENCLAW_WS_URL=ws://your-ws-endpoint
+
+# Nota: REST OK + WS OFF = sistema DEGRADED, NO "Backend Off"
+# El sistema sigue funcionando con REST.
+```
+
 ### Error: "Directory not writable"
 
 ```bash
@@ -398,7 +442,37 @@ curl localhost:3001/api/system/gateway | jq '.data.websocket'
 
 # Esperado con WS activo:
 # { "connected": true, "sessionId": "..." }
+
+# Esperado con WS deshabilitado o fallido:
+# { "connected": false }
+# Esto es OK si REST funciona - sistema opera en modo DEGRADED
 ```
+
+### REST-only Mode (sin WebSocket)
+
+Si OpenClaw no soporta WebSocket o no lo necesitas:
+
+```bash
+# En .env agregar:
+OPENCLAW_WS_MODE=disabled
+
+# Verificar en gateway status:
+curl localhost:3001/api/system/gateway | jq '.data'
+# Debe mostrar: rest.reachable: true, websocket.connected: false
+# Estado: DEGRADED (funcional, sin WS features)
+```
+
+**Features que requieren WebSocket:**
+- Listar sesiones activas en tiempo real
+- Abort de sesiones
+- Cron jobs
+- Eventos en tiempo real de OpenClaw
+
+**Features que funcionan sin WebSocket:**
+- Generación AI (REST /v1/chat/completions)
+- Notificaciones via webhooks
+- Todas las APIs de OCAAS
+- Tasks, agents, skills, tools
 
 ## 10. Comandos de Operación
 

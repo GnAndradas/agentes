@@ -9,7 +9,22 @@
  *   npm run smoke-test -- --json
  */
 
-import 'dotenv/config';
+// Load .env with fallback paths for robustness
+import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
+
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), 'backend', '.env'),
+  resolve(import.meta.dirname, '..', '.env'),
+];
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    loadDotenv({ path: envPath });
+    break;
+  }
+}
 
 // ANSI colors
 const colors = {
@@ -224,7 +239,7 @@ async function testCreateTask(): Promise<SmokeTestResult> {
         title: '[SMOKE TEST] System validation task',
         description: 'Automated smoke test - can be safely deleted',
         type: 'internal',
-        priority: 'low',
+        priority: 1, // low priority as number (1-5 scale)
         metadata: {
           smokeTest: true,
           createdAt: new Date().toISOString(),
@@ -351,7 +366,11 @@ async function testChannelIngest(skip: boolean): Promise<SmokeTestResult> {
 
   try {
     // Just test the endpoint is accessible (don't actually ingest)
-    const response = await fetchWithTimeout(`${API_BASE}/api/channels/test/users/smoke-test/tasks`);
+    const response = await fetchWithTimeout(`${API_BASE}/api/channels/test/users/smoke-test/tasks`, {
+      headers: {
+        'X-CHANNEL-SECRET': channelKey,
+      },
+    });
 
     // We expect 200 even if no tasks - this tests the route exists
     if (response.ok || response.status === 404) {

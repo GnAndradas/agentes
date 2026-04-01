@@ -10,11 +10,19 @@ import { initWebSocket, shutdownWebSocket } from './websocket/index.js';
 import { initChannelBridge, shutdownChannelBridge } from './services/ChannelBridge.js';
 import { createApp } from './app.js';
 import { createLogger } from './utils/logger.js';
+import { validateOrExit } from './bootstrap/validate.js';
 
 const logger = createLogger('main');
 
 async function main() {
   try {
+    // Validate startup configuration before doing anything else
+    await validateOrExit({
+      info: (msg) => logger.info(msg),
+      error: (msg) => logger.error(msg),
+      warn: (msg) => logger.warn(msg),
+    });
+
     // Initialize database
     await initDatabase();
 

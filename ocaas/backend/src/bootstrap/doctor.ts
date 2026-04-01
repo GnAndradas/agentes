@@ -4,6 +4,24 @@
  * Comprehensive system health check and troubleshooting tool.
  */
 
+// Load .env FIRST before any other imports that might need env vars
+import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
+
+// Try multiple .env locations for robustness
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), 'backend', '.env'),
+  resolve(import.meta.dirname, '..', '..', '.env'),
+];
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    loadDotenv({ path: envPath });
+    break;
+  }
+}
+
 import path from 'path';
 import fs from 'fs';
 import type { DoctorResult, BootstrapCheck, CheckStatus } from './types.js';

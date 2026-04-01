@@ -1408,7 +1408,93 @@ Las decisiones ahora emiten eventos con información de costes:
 TOTAL Decision Engine: 106 tests (62 + 44)
 ```
 
-## 23. Próximos Pasos
+## 23. Deploy Hardening
+
+### Problema Resuelto
+Scripts npm (doctor, bootstrap, smoke-test) no cargaban .env automáticamente, requiriendo `export $(cat .env | xargs)` manual.
+
+### Solución Implementada
+
+#### Auto-carga de .env
+Todos los scripts CLI ahora cargan .env automáticamente al inicio:
+
+```typescript
+// En doctor.ts, startup.ts, smoke-test.ts
+import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
+
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), 'backend', '.env'),
+  resolve(import.meta.dirname, '..', '..', '.env'),
+];
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    loadDotenv({ path: envPath });
+    break;
+  }
+}
+```
+
+#### Validación de Startup
+Nuevo módulo `bootstrap/validate.ts` ejecutado antes de iniciar:
+
+```typescript
+// Validaciones:
+// 1. OPENCLAW_GATEWAY_URL - obligatorio, formato URL válido
+// 2. API_SECRET_KEY - obligatorio, mínimo 16 caracteres
+// 3. Puerto disponible (no en uso)
+// 4. Directorios logs/ y data/ existen y son escribibles
+// 5. Acceso a DB (crea directorio si no existe)
+
+await validateOrExit(logger);  // En index.ts antes de initDatabase()
+```
+
+#### Smoke Test Corregido
+- `priority` enviado como `number` (1-5), no string
+- Header `X-CHANNEL-SECRET` incluido en test de canales
+
+#### Deploy Script
+Nuevo `scripts/deploy_production.sh`:
+
+```bash
+./scripts/deploy_production.sh           # Deploy completo
+./scripts/deploy_production.sh --skip-build  # Sin rebuild
+./scripts/deploy_production.sh --clean   # Limpia node_modules/dist
+```
+
+Funcionalidad:
+1. Valida Node.js v18+
+2. Valida .env existe y variables críticas
+3. Crea directorios logs/ y data/
+4. npm install
+5. npm run build
+6. Detiene proceso existente en puerto
+7. Inicia servicio con nohup
+8. Valida health check
+9. Ejecuta smoke test
+
+#### Archivos Modificados/Creados
+
+| Archivo | Cambio |
+|---------|--------|
+| `bootstrap/doctor.ts` | Auto-carga .env |
+| `bootstrap/startup.ts` | Auto-carga .env |
+| `scripts/smoke-test.ts` | Auto-carga .env, priority como number, X-CHANNEL-SECRET |
+| `bootstrap/validate.ts` | **NUEVO** - Validación de startup |
+| `index.ts` | Llama validateOrExit() |
+| `scripts/deploy_production.sh` | **NUEVO** - Script de deploy |
+
+### Resultado
+El sistema ahora:
+- Arranca sin pasos manuales ocultos
+- Funciona sin `export` manual de .env
+- Pasa smoke test correctamente
+- Valida configuración antes de iniciar
+- Proporciona logs claros de errores de configuración
+
+## 24. Próximos Pasos
 
 1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
 2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Sparkles, Trash2, Edit2, Wrench, Play } from 'lucide-react';
-import { skillApi } from '../lib/api';
+import { Plus, Sparkles, Trash2, Edit2, Wrench, Play, Users, X } from 'lucide-react';
+import { skillApi, agentApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
+import type { Agent } from '../types';
 import {
   Button,
   Badge,
@@ -41,10 +42,39 @@ export function Skills() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [executingSkill, setExecutingSkill] = useState<Skill | null>(null);
+  const [managingAgentsFor, setManagingAgentsFor] = useState<Skill | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['skills'],
     queryFn: () => skillApi.list({ expand: 'toolCount' }),
+  });
+
+  // Load all agents for the manage agents modal
+  const { data: agentsData } = useQuery({
+    queryKey: ['agents'],
+    queryFn: agentApi.list,
+    enabled: !!managingAgentsFor,
+  });
+
+  // Load skills for each agent to know which have this skill
+  const { data: agentSkillsMap } = useQuery({
+    queryKey: ['agents-skills-map', managingAgentsFor?.id],
+    queryFn: async () => {
+      if (!agentsData?.agents || !managingAgentsFor) return {};
+      const map: Record<string, Skill[]> = {};
+      await Promise.all(
+        agentsData.agents.map(async (agent: Agent) => {
+          try {
+            const skills = await agentApi.getSkills(agent.id);
+            map[agent.id] = skills;
+          } catch {
+            map[agent.id] = [];
+          }
+        })
+      );
+      return map;
+    },
+    enabled: !!managingAgentsFor && !!agentsData?.agents,
   });
 
   const createMutation = useMutation({
@@ -96,6 +126,33 @@ export function Skills() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['skills'] });
       addNotification({ type: 'success', title: 'Skill deleted' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to delete skill', message: err.message });
+    },
+  });
+
+  const assignToAgentMutation = useMutation({
+    mutationFn: ({ skillId, agentId }: { skillId: string; agentId: string }) =>
+      skillApi.assignToAgent(skillId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents-skills-map'] });
+      addNotification({ type: 'success', title: 'Skill assigned to agent' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to assign skill', message: err.message });
+    },
+  });
+
+  const unassignFromAgentMutation = useMutation({
+    mutationFn: ({ skillId, agentId }: { skillId: string; agentId: string }) =>
+      skillApi.unassignFromAgent(skillId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents-skills-map'] });
+      addNotification({ type: 'info', title: 'Skill unassigned from agent' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to unassign skill', message: err.message });
     },
   });
 
@@ -202,6 +259,14 @@ export function Skills() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        onClick={() => setManagingAgentsFor(skill)}
+                        title="Manage assigned agents"
+                      >
+                        <Users className="w-4 h-4 text-dark-400" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setEditingSkill(skill)}
                         title="Edit skill"
                       >
@@ -280,6 +345,93 @@ export function Skills() {
             skill={executingSkill}
             onClose={() => setExecutingSkill(null)}
           />
+        )}
+      </Modal>
+
+      {/* Manage Agents Modal */}
+      <Modal
+        isOpen={!!managingAgentsFor}
+        onClose={() => setManagingAgentsFor(null)}
+        title={`Agents using: ${managingAgentsFor?.name}`}
+        size="lg"
+      >
+        {managingAgentsFor && (
+          <div className="space-y-4">
+            <p className="text-dark-400 text-sm">
+              Manage which agents have access to this skill.
+            </p>
+
+            {!agentsData?.agents ? (
+              <p className="text-dark-500 text-sm py-4 text-center">Loading agents...</p>
+            ) : agentsData.agents.length === 0 ? (
+              <p className="text-dark-500 text-sm py-4 text-center">No agents exist yet</p>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {agentsData.agents.map((agent: Agent) => {
+                  const agentSkills = agentSkillsMap?.[agent.id] || [];
+                  const hasThisSkill = agentSkills.some((s: Skill) => s.id === managingAgentsFor.id);
+                  const isPending = assignToAgentMutation.isPending || unassignFromAgentMutation.isPending;
+
+                  return (
+                    <div
+                      key={agent.id}
+                      className={`flex items-center justify-between p-3 rounded-lg transition-colors ${
+                        hasThisSkill ? 'bg-primary-900/20 border border-primary-700/30' : 'bg-dark-800 hover:bg-dark-750'
+                      }`}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{agent.name}</span>
+                          <Badge variant={agent.status === 'active' ? 'active' : 'inactive'} className="text-xs">
+                            {agent.status}
+                          </Badge>
+                          {hasThisSkill && (
+                            <Badge variant="success" className="text-xs">Has skill</Badge>
+                          )}
+                        </div>
+                        {agent.description && (
+                          <p className="text-dark-400 text-sm mt-1">{agent.description}</p>
+                        )}
+                      </div>
+                      {hasThisSkill ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => unassignFromAgentMutation.mutate({
+                            skillId: managingAgentsFor.id,
+                            agentId: agent.id,
+                          })}
+                          disabled={isPending}
+                          title="Remove skill from agent"
+                        >
+                          <X className="w-4 h-4 text-red-400" />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => assignToAgentMutation.mutate({
+                            skillId: managingAgentsFor.id,
+                            agentId: agent.id,
+                          })}
+                          disabled={isPending}
+                        >
+                          <Plus className="w-4 h-4" />
+                          Assign
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2 border-t border-dark-700">
+              <Button variant="secondary" onClick={() => setManagingAgentsFor(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
         )}
       </Modal>
     </div>

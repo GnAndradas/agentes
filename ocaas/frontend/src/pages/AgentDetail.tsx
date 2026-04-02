@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Power, PowerOff, Trash2, Edit2 } from 'lucide-react';
-import { agentApi, taskApi } from '../lib/api';
+import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X } from 'lucide-react';
+import { agentApi, taskApi, skillApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
+import type { Skill } from '../types';
 import {
   Button,
   Badge,
@@ -52,6 +53,7 @@ export function AgentDetail() {
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
   const [showEdit, setShowEdit] = useState(false);
+  const [showAssignSkill, setShowAssignSkill] = useState(false);
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -69,6 +71,20 @@ export function AgentDetail() {
     queryKey: ['tasks', 'agent', id],
     queryFn: () => taskApi.list({ agentId: id }),
     enabled: !!id,
+  });
+
+  // Skills assigned to this agent
+  const { data: assignedSkills, isLoading: skillsLoading } = useQuery({
+    queryKey: ['agents', id, 'skills'],
+    queryFn: () => agentApi.getSkills(id!),
+    enabled: !!id,
+  });
+
+  // All skills (for assignment modal)
+  const { data: allSkillsData } = useQuery({
+    queryKey: ['skills'],
+    queryFn: () => skillApi.list(),
+    enabled: showAssignSkill,
   });
 
   const activateMutation = useMutation({
@@ -107,6 +123,29 @@ export function AgentDetail() {
     },
     onError: (err: Error) => {
       addNotification({ type: 'error', title: 'Failed to update agent', message: err.message });
+    },
+  });
+
+  const assignSkillMutation = useMutation({
+    mutationFn: (skillId: string) => skillApi.assignToAgent(skillId, id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', id, 'skills'] });
+      setShowAssignSkill(false);
+      addNotification({ type: 'success', title: 'Skill assigned' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to assign skill', message: err.message });
+    },
+  });
+
+  const unassignSkillMutation = useMutation({
+    mutationFn: (skillId: string) => skillApi.unassignFromAgent(skillId, id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', id, 'skills'] });
+      addNotification({ type: 'info', title: 'Skill unassigned' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to unassign skill', message: err.message });
     },
   });
 
@@ -240,6 +279,65 @@ export function AgentDetail() {
         </Card>
       </div>
 
+      {/* Assigned Skills */}
+      <Card>
+        <CardHeader
+          title="Assigned Skills"
+          action={
+            <Button size="sm" onClick={() => setShowAssignSkill(true)}>
+              <Plus className="w-4 h-4" />
+              Assign Skill
+            </Button>
+          }
+        />
+        {skillsLoading ? (
+          <p className="text-dark-400 text-sm">Loading skills...</p>
+        ) : !assignedSkills || assignedSkills.length === 0 ? (
+          <div className="text-center py-6">
+            <Sparkles className="w-8 h-8 text-dark-500 mx-auto mb-2" />
+            <p className="text-dark-400">No skills assigned</p>
+            <p className="text-dark-500 text-sm">Assign skills to give this agent capabilities</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {assignedSkills.map((skill: Skill) => (
+              <div
+                key={skill.id}
+                className="flex items-center justify-between p-3 bg-dark-800 rounded-lg hover:bg-dark-750 transition-colors"
+              >
+                <div
+                  className="flex-1 cursor-pointer"
+                  onClick={() => navigate(`/skills`)}
+                >
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-primary-400" />
+                    <span className="font-medium">{skill.name}</span>
+                    <Badge variant={skill.status === 'active' ? 'active' : 'inactive'} className="text-xs">
+                      {skill.status}
+                    </Badge>
+                  </div>
+                  {skill.description && (
+                    <p className="text-dark-400 text-sm mt-1 ml-6">{skill.description}</p>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    unassignSkillMutation.mutate(skill.id);
+                  }}
+                  loading={unassignSkillMutation.isPending}
+                  title="Unassign skill"
+                >
+                  <X className="w-4 h-4 text-dark-400 hover:text-red-400" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Card>
         <CardHeader title="Recent Tasks" />
         {tasks.length === 0 ? (
@@ -320,6 +418,56 @@ export function AgentDetail() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Assign Skill Modal */}
+      <Modal
+        isOpen={showAssignSkill}
+        onClose={() => setShowAssignSkill(false)}
+        title="Assign Skill to Agent"
+      >
+        <div className="space-y-4">
+          <p className="text-dark-400 text-sm">
+            Select a skill to assign to <strong>{agent.name}</strong>
+          </p>
+          {!allSkillsData?.skills || allSkillsData.skills.length === 0 ? (
+            <p className="text-dark-500 text-sm py-4 text-center">No skills available</p>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {allSkillsData.skills
+                .filter((skill: Skill) => !assignedSkills?.some((s: Skill) => s.id === skill.id))
+                .map((skill: Skill) => (
+                  <div
+                    key={skill.id}
+                    className="flex items-center justify-between p-3 bg-dark-800 rounded-lg hover:bg-dark-750 cursor-pointer transition-colors"
+                    onClick={() => assignSkillMutation.mutate(skill.id)}
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-primary-400" />
+                        <span className="font-medium">{skill.name}</span>
+                        <Badge variant={skill.status === 'active' ? 'active' : 'inactive'} className="text-xs">
+                          {skill.status}
+                        </Badge>
+                      </div>
+                      {skill.description && (
+                        <p className="text-dark-400 text-sm mt-1 ml-6">{skill.description}</p>
+                      )}
+                    </div>
+                    <Plus className="w-4 h-4 text-dark-400" />
+                  </div>
+                ))}
+              {allSkillsData.skills.filter((skill: Skill) => !assignedSkills?.some((s: Skill) => s.id === skill.id)).length === 0 && (
+                <p className="text-dark-500 text-sm py-4 text-center">All skills are already assigned</p>
+              )}
+            </div>
+          )}
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" onClick={() => setShowAssignSkill(false)}>
+              Close
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

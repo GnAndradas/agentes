@@ -108,6 +108,9 @@ export function Tools() {
       queryClient.invalidateQueries({ queryKey: ['tools'] });
       addNotification({ type: 'success', title: 'Tool deleted' });
     },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to delete tool', message: err.message });
+    },
   });
 
   const handleCreate = (data: Partial<Tool>) => {

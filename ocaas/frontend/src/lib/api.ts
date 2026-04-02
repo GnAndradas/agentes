@@ -22,6 +22,17 @@ async function request<T>(
     throw new Error(error.message || error.error || 'Request failed');
   }
 
+  // Handle 204 No Content - don't try to parse JSON
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  // Handle empty responses (Content-Length: 0)
+  const contentLength = response.headers.get('content-length');
+  if (contentLength === '0') {
+    return undefined as T;
+  }
+
   return response.json();
 }
 
@@ -71,6 +82,15 @@ export const agentApi = {
   delete: (id: string) => api.delete(`/agents/${id}`),
   activate: (id: string) => api.post(`/agents/${id}/activate`),
   deactivate: (id: string) => api.post(`/agents/${id}/deactivate`),
+  // Agent-Skill assignments
+  getSkills: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').Skill[]>>(`/agents/${id}/skills`);
+    return res.data;
+  },
+  getTools: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').Tool[]>>(`/agents/${id}/tools`);
+    return res.data;
+  },
 };
 
 // Task API
@@ -116,7 +136,12 @@ export const skillApi = {
     return res.data;
   },
   delete: (id: string) => api.delete(`/skills/${id}`),
-  // sync: () => api.post('/skills/sync'), // TODO: Backend route not implemented
+
+  // Skill-Agent assignments
+  assignToAgent: (skillId: string, agentId: string) =>
+    api.post<{ success: boolean }>(`/skills/${skillId}/assign`, { agentId }),
+  unassignFromAgent: (skillId: string, agentId: string) =>
+    api.delete(`/skills/${skillId}/assign/${agentId}`),
 
   // Skill-Tool composition
   getTools: async (id: string, expand?: boolean) => {

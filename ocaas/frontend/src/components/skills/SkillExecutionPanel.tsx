@@ -29,6 +29,19 @@ import type {
   ExecutionMode,
 } from '../../types';
 
+// Type for detailed error output from API tools
+interface ApiToolErrorOutput {
+  errorType?: string;
+  url?: string;
+  method?: string;
+  statusCode?: number;
+  statusText?: string;
+  contentType?: string;
+  hint?: string;
+  responseBody?: string;
+  responsePreview?: string;
+}
+
 interface SkillExecutionPanelProps {
   skill: Skill;
   onClose?: () => void;
@@ -362,16 +375,69 @@ export function SkillExecutionPanel({ skill, onClose }: SkillExecutionPanelProps
                   </button>
 
                   {expandedTools.has(tr.toolId) && (
-                    <div className="p-3 pt-0 border-t border-dark-800 space-y-2">
+                    <div className="p-3 pt-0 border-t border-dark-800 space-y-3">
                       {tr.error && (
-                        <div className="text-sm text-red-400">
-                          <span className="font-medium">Error:</span> {tr.error}
+                        <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                          <div className="text-sm text-red-400 font-medium mb-1">Error</div>
+                          <div className="text-sm text-red-300">{tr.error}</div>
+
+                          {/* Detailed error info from output */}
+                          {tr.output && typeof tr.output === 'object' && 'errorType' in tr.output && (() => {
+                            const errOutput = tr.output as ApiToolErrorOutput;
+                            return (
+                              <div className="mt-3 pt-3 border-t border-red-800/50 space-y-2 text-xs">
+                                {errOutput.errorType && (
+                                  <div className="flex gap-2">
+                                    <span className="text-red-400/70">Type:</span>
+                                    <span className="text-red-300 font-mono">{errOutput.errorType}</span>
+                                  </div>
+                                )}
+                                {errOutput.url && (
+                                  <div className="flex gap-2">
+                                    <span className="text-red-400/70">URL:</span>
+                                    <span className="text-red-300 font-mono break-all">{errOutput.url}</span>
+                                  </div>
+                                )}
+                                {errOutput.method && (
+                                  <div className="flex gap-2">
+                                    <span className="text-red-400/70">Method:</span>
+                                    <span className="text-red-300 font-mono">{errOutput.method}</span>
+                                  </div>
+                                )}
+                                {errOutput.statusCode && (
+                                  <div className="flex gap-2">
+                                    <span className="text-red-400/70">Status:</span>
+                                    <span className="text-red-300 font-mono">{errOutput.statusCode} {errOutput.statusText || ''}</span>
+                                  </div>
+                                )}
+                                {errOutput.contentType && (
+                                  <div className="flex gap-2">
+                                    <span className="text-red-400/70">Content-Type:</span>
+                                    <span className="text-red-300 font-mono">{errOutput.contentType}</span>
+                                  </div>
+                                )}
+                                {errOutput.hint && (
+                                  <div className="mt-2 p-2 bg-yellow-900/20 border border-yellow-800/50 rounded text-yellow-300">
+                                    💡 {errOutput.hint}
+                                  </div>
+                                )}
+                                {(errOutput.responseBody || errOutput.responsePreview) && (
+                                  <div className="mt-2">
+                                    <span className="text-red-400/70 block mb-1">Response:</span>
+                                    <pre className="p-2 bg-dark-950 rounded text-red-300/80 overflow-x-auto max-h-32 overflow-y-auto">
+                                      {errOutput.responseBody || errOutput.responsePreview}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
-                      {tr.output && (
+                      {tr.output && tr.status === 'success' && (
                         <div className="text-sm">
                           <span className="text-dark-400 font-medium">Output:</span>
-                          <pre className="mt-1 p-2 bg-dark-800 rounded text-xs overflow-x-auto">
+                          <pre className="mt-1 p-2 bg-dark-800 rounded text-xs overflow-x-auto max-h-48 overflow-y-auto">
                             {JSON.stringify(tr.output, null, 2)}
                           </pre>
                         </div>

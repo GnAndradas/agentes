@@ -381,6 +381,7 @@ export class ToolInvoker {
     timeoutMs: number = DEFAULT_TIMEOUT_MS
   ): Promise<ToolExecutionResult> {
     const startedAt = nowTimestamp();
+    const method = config.method || 'GET';
 
     // Build URL with template substitution
     let url = config.url || '';
@@ -393,6 +394,30 @@ export class ToolInvoker {
         params.set(key, this.substituteTemplate(template, input));
       }
       url += (url.includes('?') ? '&' : '?') + params.toString();
+    }
+
+    // Validate URL
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      const completedAt = nowTimestamp();
+      return {
+        toolId: tool.id,
+        toolName: tool.name,
+        status: EXECUTION_STATUS.FAILED,
+        error: `Invalid URL: "${url}"`,
+        output: {
+          errorType: 'invalid_url',
+          url,
+          suggestion: 'Check that the URL is complete and properly formatted (e.g., https://api.example.com/endpoint)',
+        },
+        startedAt,
+        completedAt,
+        durationMs: completedAt - startedAt,
+        required: true,
+        orderIndex: 0,
+      };
     }
 
     // Build headers
@@ -420,14 +445,14 @@ export class ToolInvoker {
     let body: string | undefined;
     if (config.bodyTemplate) {
       body = this.substituteTemplate(config.bodyTemplate, input);
-    } else if (config.method !== 'GET' && config.method !== 'HEAD') {
+    } else if (method !== 'GET' && method !== 'HEAD') {
       body = JSON.stringify(input);
     }
 
     logger.debug({
       toolId: tool.id,
       url,
-      method: config.method || 'GET',
+      method,
     }, 'Executing API tool');
 
     try {
@@ -435,7 +460,7 @@ export class ToolInvoker {
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const response = await fetch(url, {
-        method: config.method || 'GET',
+        method,
         headers,
         body,
         signal: controller.signal,
@@ -445,15 +470,45 @@ export class ToolInvoker {
       clearTimeout(timeoutId);
 
       const completedAt = nowTimestamp();
+      const contentType = response.headers.get('content-type') || '';
+      const responseType = config.responseType || 'json';
 
+      // Handle non-OK responses with detailed error
       if (!response.ok) {
-        const errorBody = await response.text();
+        const errorBody = await response.text().catch(() => '(could not read response body)');
+        const truncatedBody = errorBody.length > 500 ? errorBody.slice(0, 500) + '...' : errorBody;
+
+        // Detect common error patterns
+        let errorHint = '';
+        if (response.status === 401) {
+          errorHint = 'Check authentication credentials (API key, token, etc.)';
+        } else if (response.status === 403) {
+          errorHint = 'Access forbidden - check permissions or API key scopes';
+        } else if (response.status === 404) {
+          errorHint = 'Endpoint not found - verify the URL path is correct';
+        } else if (response.status === 405) {
+          errorHint = `Method ${method} not allowed - check if endpoint supports this HTTP method`;
+        } else if (response.status === 429) {
+          errorHint = 'Rate limited - too many requests, try again later';
+        } else if (response.status >= 500) {
+          errorHint = 'Server error - the remote API is having issues';
+        }
+
         return {
           toolId: tool.id,
           toolName: tool.name,
           status: EXECUTION_STATUS.FAILED,
-          error: `HTTP ${response.status}: ${response.statusText}`,
-          output: { statusCode: response.status, body: errorBody },
+          error: `HTTP ${response.status} ${response.statusText} - ${method} ${parsedUrl.pathname}`,
+          output: {
+            errorType: 'http_error',
+            statusCode: response.status,
+            statusText: response.statusText,
+            url: url,
+            method,
+            contentType,
+            responseBody: truncatedBody,
+            hint: errorHint,
+          },
           startedAt,
           completedAt,
           durationMs: completedAt - startedAt,
@@ -462,22 +517,98 @@ export class ToolInvoker {
         };
       }
 
-      // Parse response based on expected type
+      // Parse response based on expected type with content-type awareness
       let output: Record<string, unknown>;
-      const responseType = config.responseType || 'json';
+      const responseText = await response.text();
 
-      switch (responseType) {
-        case 'json':
-          output = (await response.json()) as Record<string, unknown>;
-          break;
-        case 'text':
-          output = { text: await response.text() };
-          break;
-        case 'binary':
-          output = { binary: Buffer.from(await response.arrayBuffer()).toString('base64') };
-          break;
-        default:
-          output = (await response.json()) as Record<string, unknown>;
+      // Auto-detect response handling
+      if (responseType === 'json' || responseType === undefined) {
+        // Check if response looks like JSON
+        const isJsonContentType = contentType.includes('application/json');
+        const looksLikeJson = responseText.trim().startsWith('{') || responseText.trim().startsWith('[');
+
+        if (!isJsonContentType && !looksLikeJson) {
+          // Response is not JSON but we expected JSON
+          const truncatedResponse = responseText.length > 300 ? responseText.slice(0, 300) + '...' : responseText;
+
+          // Check for common HTML response (API returning error page)
+          if (contentType.includes('text/html') || responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+            return {
+              toolId: tool.id,
+              toolName: tool.name,
+              status: EXECUTION_STATUS.FAILED,
+              error: `Received HTML instead of JSON - endpoint may be incorrect or returning an error page`,
+              output: {
+                errorType: 'unexpected_content_type',
+                expectedType: 'application/json',
+                receivedType: contentType || 'text/html',
+                url,
+                method,
+                responsePreview: truncatedResponse,
+                hint: 'The URL may be pointing to a web page instead of an API endpoint',
+              },
+              startedAt,
+              completedAt,
+              durationMs: completedAt - startedAt,
+              required: true,
+              orderIndex: 0,
+            };
+          }
+
+          // Other non-JSON response
+          return {
+            toolId: tool.id,
+            toolName: tool.name,
+            status: EXECUTION_STATUS.FAILED,
+            error: `Expected JSON but received ${contentType || 'unknown content type'}`,
+            output: {
+              errorType: 'unexpected_content_type',
+              expectedType: 'application/json',
+              receivedType: contentType,
+              url,
+              method,
+              responsePreview: truncatedResponse,
+              hint: 'Set responseType to "text" in tool config if this endpoint returns plain text',
+            },
+            startedAt,
+            completedAt,
+            durationMs: completedAt - startedAt,
+            required: true,
+            orderIndex: 0,
+          };
+        }
+
+        // Try to parse JSON
+        try {
+          output = JSON.parse(responseText) as Record<string, unknown>;
+        } catch (parseErr) {
+          const truncatedResponse = responseText.length > 300 ? responseText.slice(0, 300) + '...' : responseText;
+          return {
+            toolId: tool.id,
+            toolName: tool.name,
+            status: EXECUTION_STATUS.FAILED,
+            error: `Failed to parse JSON response: ${parseErr instanceof Error ? parseErr.message : 'Invalid JSON'}`,
+            output: {
+              errorType: 'json_parse_error',
+              contentType,
+              url,
+              method,
+              responsePreview: truncatedResponse,
+              hint: 'The response claims to be JSON but contains invalid JSON syntax',
+            },
+            startedAt,
+            completedAt,
+            durationMs: completedAt - startedAt,
+            required: true,
+            orderIndex: 0,
+          };
+        }
+      } else if (responseType === 'text') {
+        output = { text: responseText };
+      } else if (responseType === 'binary') {
+        output = { binary: Buffer.from(responseText).toString('base64') };
+      } else {
+        output = { text: responseText };
       }
 
       return {
@@ -493,13 +624,65 @@ export class ToolInvoker {
       };
     } catch (err) {
       const completedAt = nowTimestamp();
-      const error = err instanceof Error ? err.message : String(err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorName = err instanceof Error ? err.name : 'Error';
+
+      // Build detailed error based on error type
+      let errorType = 'unknown';
+      let error = errorMessage;
+      let hint = '';
+
+      if (errorName === 'AbortError' || errorMessage.includes('abort')) {
+        errorType = 'timeout';
+        error = `Request timed out after ${timeoutMs}ms`;
+        hint = 'The API took too long to respond. Try increasing the timeout or check if the endpoint is slow.';
+      } else if (errorMessage.includes('ECONNREFUSED')) {
+        errorType = 'connection_refused';
+        error = `Connection refused to ${parsedUrl.host}`;
+        hint = 'The server is not accepting connections. Check if the host/port is correct and the server is running.';
+      } else if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+        errorType = 'dns_error';
+        error = `Could not resolve hostname: ${parsedUrl.hostname}`;
+        hint = 'The domain name does not exist or DNS resolution failed. Check the URL for typos.';
+      } else if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('ENETUNREACH')) {
+        errorType = 'network_error';
+        error = `Network unreachable or connection timed out to ${parsedUrl.host}`;
+        hint = 'Check your network connection and firewall settings.';
+      } else if (errorMessage.includes('ECONNRESET')) {
+        errorType = 'connection_reset';
+        error = `Connection was reset by ${parsedUrl.host}`;
+        hint = 'The server closed the connection unexpectedly. This might be a server-side issue.';
+      } else if (errorMessage.includes('certificate') || errorMessage.includes('SSL') || errorMessage.includes('TLS')) {
+        errorType = 'ssl_error';
+        error = `SSL/TLS error connecting to ${parsedUrl.host}`;
+        hint = 'Certificate validation failed. Check if the server has a valid SSL certificate.';
+      } else if (errorMessage.includes('fetch failed') || errorMessage.includes('Failed to fetch')) {
+        errorType = 'fetch_failed';
+        error = `Failed to connect to ${url}`;
+        hint = 'Generic network failure. Check the URL, network connectivity, and CORS settings.';
+      }
+
+      logger.error({
+        err,
+        toolId: tool.id,
+        url,
+        method,
+        errorType,
+      }, 'API tool invocation failed');
 
       return {
         toolId: tool.id,
         toolName: tool.name,
         status: EXECUTION_STATUS.FAILED,
-        error: error.includes('abort') ? `API call timed out after ${timeoutMs}ms` : error,
+        error,
+        output: {
+          errorType,
+          url,
+          method,
+          host: parsedUrl.host,
+          originalError: errorMessage,
+          hint,
+        },
         startedAt,
         completedAt,
         durationMs: completedAt - startedAt,

@@ -10,6 +10,7 @@ import { Tools } from './pages/Tools';
 import { Generator } from './pages/Generator';
 import { Generations } from './pages/Generations';
 import { GenerationDetail } from './pages/GenerationDetail';
+import { Organization } from './pages/Organization';
 import { Settings } from './pages/Settings';
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="generator" element={<Generator />} />
           <Route path="generations" element={<Generations />} />
           <Route path="generations/:id" element={<GenerationDetail />} />
+          <Route path="organization" element={<Organization />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

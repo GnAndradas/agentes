@@ -14,6 +14,8 @@ import { getSystemDiagnosticsService, getTaskTimelineService } from '../../syste
 // All other methods use the adapter
 import { getGateway } from '../../openclaw/gateway.js';
 import { getRuntimeInfo, getRuntimeSummary, checkEnvironment } from '../../utils/runtime.js';
+import { getJobSafetyService } from '../../execution/JobSafetyService.js';
+import { queryLogs, getErrorLogs, getRecentLogs } from '../../utils/dbLogger.js';
 
 /**
  * Backend health check - includes runtime metadata for observability
@@ -492,6 +494,126 @@ export async function allProblems(_req: FastifyRequest, reply: FastifyReply) {
         blocked: blocked.length,
         total: stuck.length + highRetry.length + blocked.length,
       },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// =============================================================================
+// SAFETY & LOGS (Production Hardening)
+// =============================================================================
+
+/**
+ * GET /api/system/safety
+ * Job safety status (failsafe, retries, whitelist)
+ */
+export async function getSafetyStatus(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const safety = getJobSafetyService();
+    const failsafe = safety.getFailsafeState();
+    const whitelist = safety.getWhitelist();
+
+    return reply.send({
+      data: {
+        failsafe: {
+          active: failsafe.active,
+          reason: failsafe.reason,
+          activatedAt: failsafe.activatedAt,
+          consecutiveFailures: failsafe.consecutiveFailures,
+        },
+        toolWhitelist: {
+          enabled: whitelist.length > 0,
+          tools: whitelist,
+        },
+      },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * POST /api/system/safety/failsafe/deactivate
+ * Manually deactivate failsafe mode
+ */
+export async function deactivateFailsafe(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const safety = getJobSafetyService();
+    safety.deactivateFailsafe();
+    return reply.send({ data: { deactivated: true } });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/logs
+ * Query system logs
+ */
+export async function getLogs(req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const query = req.query as {
+      level?: string;
+      source?: string;
+      jobId?: string;
+      limit?: string;
+    };
+
+    const logs = queryLogs({
+      level: query.level as 'debug' | 'info' | 'warn' | 'error' | 'fatal' | undefined,
+      source: query.source,
+      jobId: query.jobId,
+      limit: query.limit ? parseInt(query.limit, 10) : 100,
+    });
+
+    return reply.send({
+      data: logs,
+      count: logs.length,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/logs/errors
+ * Get recent error logs
+ */
+export async function getLogsErrors(req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const query = req.query as { limit?: string };
+    const logs = getErrorLogs(query.limit ? parseInt(query.limit, 10) : 50);
+
+    return reply.send({
+      data: logs,
+      count: logs.length,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * GET /api/system/logs/recent
+ * Get recent logs (last N minutes)
+ */
+export async function getLogsRecent(req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const query = req.query as { minutes?: string; limit?: string };
+    const logs = getRecentLogs(
+      query.minutes ? parseInt(query.minutes, 10) : 60,
+      query.limit ? parseInt(query.limit, 10) : 200
+    );
+
+    return reply.send({
+      data: logs,
+      count: logs.length,
     });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);

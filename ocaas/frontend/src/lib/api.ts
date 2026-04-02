@@ -436,3 +436,95 @@ export const eventApi = {
     return { events: res.data };
   },
 };
+
+// Organization API
+export const orgApi = {
+  // Work Profiles
+  listProfiles: async () => {
+    const res = await api.get<DataResponse<import('../types').WorkProfile[]>>('/org/profiles');
+    return res.data;
+  },
+  getProfile: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').WorkProfile>>(`/org/profiles/${id}`);
+    return res.data;
+  },
+
+  // Hierarchy
+  listHierarchy: async () => {
+    const res = await api.get<DataResponse<import('../types').AgentOrgProfile[]>>('/org/hierarchy');
+    return res.data;
+  },
+  getHierarchyTree: async (rootAgentId?: string) => {
+    const query = rootAgentId ? `?rootAgentId=${rootAgentId}` : '';
+    const res = await api.get<DataResponse<import('../types').HierarchyNode[]>>(`/org/hierarchy/tree${query}`);
+    return res.data;
+  },
+  getAgentProfile: async (agentId: string) => {
+    const res = await api.get<DataResponse<import('../types').AgentOrgProfile>>(`/org/hierarchy/${agentId}`);
+    return res.data;
+  },
+  upsertAgentProfile: async (agentId: string, data: {
+    roleType: import('../types').RoleType;
+    supervisorAgentId?: string | null;
+    workProfileId: string;
+    department?: string;
+  }) => {
+    const res = await api.put<DataResponse<import('../types').AgentOrgProfile>>(`/org/hierarchy/${agentId}`, data);
+    return res.data;
+  },
+  deleteAgentProfile: async (agentId: string) => {
+    await api.delete(`/org/hierarchy/${agentId}`);
+  },
+  getEscalationChain: async (agentId: string) => {
+    const res = await api.get<DataResponse<Array<{ agentId: string; roleType: import('../types').RoleType }>>>(`/org/hierarchy/${agentId}/escalation`);
+    return res.data;
+  },
+  getSubordinates: async (agentId: string) => {
+    const res = await api.get<DataResponse<import('../types').AgentOrgProfile[]>>(`/org/hierarchy/${agentId}/subordinates`);
+    return res.data;
+  },
+  getEffectivePolicies: async (agentId: string) => {
+    const res = await api.get<DataResponse<import('../types').EffectivePolicies>>(`/org/policies/${agentId}/effective`);
+    return res.data;
+  },
+};
+
+// Jobs API
+export const jobApi = {
+  list: async (params?: { status?: import('../types').JobStatus; taskId?: string; agentId?: string; limit?: number }) => {
+    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
+    const res = await api.get<DataResponse<import('../types').JobSummary[]>>(`/jobs${query}`);
+    return res.data;
+  },
+  get: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').JobSummary & { payload: unknown; response: unknown; events: unknown[] }>>(`/jobs/${id}`);
+    return res.data;
+  },
+  getByTask: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').JobSummary[]>>(`/jobs/task/${taskId}`);
+    return res.data;
+  },
+  getByAgent: async (agentId: string) => {
+    const res = await api.get<DataResponse<Array<{ id: string; taskId: string; goal: string; status: import('../types').JobStatus; createdAt: number }>>>(`/jobs/agent/${agentId}`);
+    return res.data;
+  },
+  getStats: async () => {
+    const res = await api.get<DataResponse<import('../types').JobStats>>('/jobs/stats');
+    return res.data;
+  },
+  getActive: async () => {
+    const res = await api.get<DataResponse<Array<{ id: string; taskId: string; agentId: string; agentName: string; goal: string; sessionId?: string; createdAt: number; runningFor: number }>>>('/jobs/active');
+    return res.data;
+  },
+  getBlocked: async () => {
+    const res = await api.get<DataResponse<Array<{ id: string; taskId: string; agentId: string; agentName: string; goal: string; blocked: import('../types').JobBlocked; createdAt: number }>>>('/jobs/blocked');
+    return res.data;
+  },
+  abort: async (id: string) => {
+    await api.post(`/jobs/${id}/abort`);
+  },
+  retry: async (id: string) => {
+    const res = await api.post<DataResponse<{ newJobId: string; dispatched: boolean }>>(`/jobs/${id}/retry`);
+    return res.data;
+  },
+};

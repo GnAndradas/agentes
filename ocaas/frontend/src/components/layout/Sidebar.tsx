@@ -8,6 +8,7 @@ import {
   Wrench,
   Wand2,
   History,
+  Network,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,7 @@ const navItems = [
   { to: '/tools', icon: Wrench, label: 'Tools' },
   { to: '/generator', icon: Wand2, label: 'Generator' },
   { to: '/generations', icon: History, label: 'Generations' },
+  { to: '/organization', icon: Network, label: 'Organization' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

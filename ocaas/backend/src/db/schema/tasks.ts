@@ -19,6 +19,7 @@ export const tasks = sqliteTable('tasks', {
   retryCount: integer('retry_count').notNull().default(0),
   maxRetries: integer('max_retries').notNull().default(3),
   metadata: text('metadata'), // JSON
+  delegationHistory: text('delegation_history'), // JSON: DelegationRecord[]
   startedAt: integer('started_at'),
   completedAt: integer('completed_at'),
   createdAt: integer('created_at').notNull(),

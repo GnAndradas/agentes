@@ -86,6 +86,17 @@ export interface Agent {
   updatedAt: number;
 }
 
+/**
+ * Delegation record for task assignment history
+ */
+export interface DelegationRecord {
+  fromAgentId: string | null;
+  toAgentId: string;
+  reason: 'initial' | 'escalation' | 'delegation' | 'reassignment' | 'failure_recovery';
+  timestamp: number;
+  jobId?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -104,6 +115,7 @@ export interface Task {
   output?: Record<string, unknown>;
   error?: string;
   metadata?: Record<string, unknown>;
+  delegationHistory?: DelegationRecord[];
   startedAt?: number;
   completedAt?: number;
   createdAt: number;
@@ -406,4 +418,145 @@ export interface SkillValidationResult {
   warnings: { code: string; message: string; toolId?: string; field?: string }[];
   toolsChecked: number;
   toolsWithIssues: number;
+}
+
+// =============================================================================
+// ORGANIZATION TYPES
+// =============================================================================
+
+export type RoleType = 'ceo' | 'manager' | 'supervisor' | 'worker' | 'specialist';
+
+export interface AgentOrgProfile {
+  agentId: string;
+  roleType: RoleType;
+  supervisorAgentId: string | null;
+  workProfileId: string;
+  department: string | null;
+  escalationPolicy: EscalationPolicy | null;
+  autonomyPolicy: OrgAutonomyPolicy | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface EscalationPolicy {
+  canEscalate: boolean;
+  maxRetriesBeforeEscalate: number;
+  escalateOnErrors: string[];
+  escalateTimeoutMs: number;
+  skipToHumanIfNoSupervisor: boolean;
+}
+
+export interface OrgAutonomyPolicy {
+  canCreateResources: boolean;
+  canDelegate: boolean;
+  canSplitTasks: boolean;
+  canEscalateToHuman: boolean;
+  maxComplexity: number;
+  maxPriority: number;
+  canApproveSubordinates: boolean;
+}
+
+export interface WorkProfile {
+  id: string;
+  name: string;
+  description: string;
+  preset: 'conservative' | 'balanced' | 'aggressive' | 'human_first' | 'autonomous_first' | 'custom';
+  editable: boolean;
+  retry: { maxRetries: number; retryDelayMs: number; backoffMultiplier: number };
+  delegation: { aggressiveness: number; preferDelegation: boolean; maxDepth: number };
+  splitting: { enabled: boolean; minComplexityToSplit: number; maxSubtasks: number };
+  resourceCreation: { autoCreate: boolean; allowedTypes: ('agent' | 'skill' | 'tool')[]; requireApproval: boolean };
+  escalation: { triggers: string[]; failureThreshold: number; timeoutThreshold: number; notifyHuman: boolean };
+  humanApproval: { priorityThreshold: number; complexityThreshold: number; costThreshold: number };
+}
+
+export interface HierarchyNode {
+  agentId: string;
+  roleType: RoleType;
+  subordinates: HierarchyNode[];
+}
+
+export interface EffectivePolicies {
+  autonomy: OrgAutonomyPolicy;
+  escalation: EscalationPolicy;
+}
+
+// =============================================================================
+// JOB TYPES
+// =============================================================================
+
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'timeout';
+
+export interface JobBlocked {
+  reason: string;
+  description: string;
+  missing: Array<{
+    type: 'tool' | 'skill' | 'capability' | 'permission' | 'data';
+    identifier: string;
+    reason: string;
+    required: boolean;
+  }>;
+  suggestions: Array<{
+    type: 'create_tool' | 'create_skill' | 'request_permission' | 'provide_data' | 'manual_action';
+    target: string;
+    description: string;
+    canAutoGenerate: boolean;
+    priority: 'required' | 'recommended' | 'optional';
+  }>;
+  canAutoResolve: boolean;
+  requiresHuman: boolean;
+}
+
+export interface JobError {
+  code: string;
+  message: string;
+  retryable: boolean;
+  suggestedAction?: string;
+}
+
+export interface JobResult {
+  output?: string;
+  actionsSummary?: string;
+  toolsUsed?: string[];
+}
+
+export interface JobSummary {
+  id: string;
+  taskId: string;
+  agentId: string;
+  agentName: string;
+  agentRole: RoleType;
+  goal: string;
+  status: JobStatus;
+  sessionId?: string;
+  result: JobResult | null;
+  error?: JobError;
+  blocked?: JobBlocked;
+  metrics?: { executionTimeMs: number; toolCalls?: number };
+  eventsCount: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+export interface JobStats {
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+  blocked: number;
+  cancelled: number;
+  timeout: number;
+}
+
+// Simplified job format returned by getJobsByAgent
+export interface AgentJobSummary {
+  id: string;
+  taskId: string;
+  goal: string;
+  status: JobStatus;
+  sessionId?: string;
+  createdAt: number;
+  completedAt?: number;
 }

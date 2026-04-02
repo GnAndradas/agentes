@@ -57,6 +57,7 @@ export async function initDatabase(): Promise<void> {
       retry_count INTEGER NOT NULL DEFAULT 0,
       max_retries INTEGER NOT NULL DEFAULT 3,
       metadata TEXT,
+      delegation_history TEXT,
       started_at INTEGER,
       completed_at INTEGER,
       created_at INTEGER NOT NULL,
@@ -326,13 +327,37 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_escalations_type ON human_escalations(type);
     CREATE INDEX IF NOT EXISTS idx_escalations_task ON human_escalations(task_id);
     CREATE INDEX IF NOT EXISTS idx_escalations_priority ON human_escalations(priority, status);
+
+    -- Jobs table (execution records for OpenClaw runtime)
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      agent_name TEXT,
+      agent_role TEXT,
+      goal TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      session_id TEXT,
+      payload TEXT NOT NULL,
+      response TEXT,
+      events TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_jobs_task ON jobs(task_id);
+    CREATE INDEX IF NOT EXISTS idx_jobs_agent ON jobs(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
   `);
 
   // Verify critical tables exist after initialization
   const criticalTables = [
     'tasks', 'agents', 'skills', 'tools', 'skill_tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
-    'task_checkpoints', 'execution_leases', 'human_escalations',
+    'task_checkpoints', 'execution_leases', 'human_escalations', 'jobs',
   ];
 
   const existingTables = sqlite.prepare(`

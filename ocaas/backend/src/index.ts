@@ -11,6 +11,9 @@ import { initChannelBridge, shutdownChannelBridge } from './services/ChannelBrid
 import { createApp } from './app.js';
 import { createLogger } from './utils/logger.js';
 import { validateOrExit } from './bootstrap/validate.js';
+import { runProductionChecks } from './bootstrap/productionChecks.js';
+import { getJobSafetyService } from './execution/JobSafetyService.js';
+import { cleanupOldLogs } from './utils/dbLogger.js';
 
 const logger = createLogger('main');
 
@@ -35,6 +38,13 @@ async function main() {
 
     // Initialize OpenClaw adapter
     await initOpenClaw();
+
+    // Initialize Job Safety Service (production hardening)
+    const jobSafety = getJobSafetyService();
+    jobSafety.initialize();
+
+    // Run production checks
+    await runProductionChecks();
 
     // Initialize generator
     initGenerator();
@@ -72,9 +82,18 @@ async function main() {
 
     logger.info(`Server running at http://${config.server.host}:${config.server.port}`);
 
+    // Periodic log cleanup (every 24 hours)
+    setInterval(() => {
+      const deleted = cleanupOldLogs(7);
+      if (deleted > 0) {
+        logger.info({ deleted }, 'Cleaned up old logs');
+      }
+    }, 24 * 60 * 60 * 1000);
+
     // Graceful shutdown
     const shutdown = async () => {
       logger.info('Shutting down...');
+      jobSafety.shutdown();
       shutdownChannelBridge();
       await shutdownOrchestrator();
       shutdownWebSocket();

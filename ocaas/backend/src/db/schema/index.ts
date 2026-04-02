@@ -12,3 +12,5 @@ export * from './feedback.js';
 export * from './drafts.js';
 export * from './checkpoints.js';
 export * from './escalations.js';
+export * from './jobs.js';
+export * from './logs.js';

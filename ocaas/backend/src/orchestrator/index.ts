@@ -9,6 +9,15 @@ export { TaskDecomposer, getTaskDecomposer } from './TaskDecomposer.js';
 export { ResourceRetryService, getResourceRetryService } from './ResourceRetryService.js';
 export * from './feedback/index.js';
 
+// Organization-aware decision engine
+export {
+  OrgAwareDecisionEngine,
+  getOrgAwareDecisionEngine,
+  type OrgAwareDecision,
+  type OrgDecisionConfig,
+  type OrgDecisionMode,
+} from './OrgAwareDecisionEngine.js';
+
 // Smart Decision Engine exports
 export {
   SmartDecisionEngine,

@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, XCircle, RotateCcw, Clock, CheckCircle, AlertCircle, GitBranch, FolderTree } from 'lucide-react';
-import { taskApi } from '../lib/api';
+import { ArrowLeft, XCircle, RotateCcw, Clock, CheckCircle, AlertCircle, GitBranch, FolderTree, Zap, User, Network } from 'lucide-react';
+import { DelegationHistory } from '../components/DelegationHistory';
+import { taskApi, jobApi, agentApi, orgApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
 import { SubtasksPanel } from '../components/SubtasksPanel';
+import { JobStatusPanel, BlockedJobView } from '../components/jobs';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
 
@@ -40,11 +43,35 @@ export function TaskDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const { data: task, isLoading } = useQuery({
     queryKey: ['tasks', id],
     queryFn: () => taskApi.get(id!),
     enabled: !!id,
+  });
+
+  // Fetch jobs for this task
+  const { data: jobs } = useQuery({
+    queryKey: ['jobs', 'task', id],
+    queryFn: () => jobApi.getByTask(id!),
+    enabled: !!id,
+    refetchInterval: 5000, // Poll for updates
+  });
+
+  // Fetch agent info if assigned
+  const { data: agent } = useQuery({
+    queryKey: ['agents', task?.agentId],
+    queryFn: () => agentApi.get(task!.agentId!),
+    enabled: !!task?.agentId,
+  });
+
+  // Fetch agent org profile
+  const { data: agentOrgProfile } = useQuery({
+    queryKey: ['org', 'profile', task?.agentId],
+    queryFn: () => orgApi.getAgentProfile(task!.agentId!),
+    enabled: !!task?.agentId,
+    retry: false,
   });
 
   const cancelMutation = useMutation({
@@ -178,29 +205,57 @@ export function TaskDetail() {
                 {priorityLabels[task.priority] || task.priority}
               </Badge>
             </div>
-            <div>
+            <div className="col-span-2">
               <p className="text-sm text-dark-400">Agent</p>
-              <p className="text-sm mt-1">
-                {task.agentId ? (
-                  <a
-                    href={`/agents/${task.agentId}`}
-                    className="text-primary-400 hover:underline"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      navigate(`/agents/${task.agentId}`);
-                    }}
-                  >
-                    {task.agentId}
-                  </a>
-                ) : (
-                  'Unassigned'
-                )}
-              </p>
+              {task.agentId ? (
+                <div className="flex items-center gap-3 mt-2 p-3 bg-dark-800 rounded-lg">
+                  <User className="w-5 h-5 text-dark-400" />
+                  <div className="flex-1 min-w-0">
+                    <a
+                      href={`/agents/${task.agentId}`}
+                      className="font-medium text-primary-400 hover:underline"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        navigate(`/agents/${task.agentId}`);
+                      }}
+                    >
+                      {agent?.name || task.agentId}
+                    </a>
+                    <div className="flex items-center gap-2 mt-1">
+                      {agent && (
+                        <>
+                          <Badge variant="default" className="text-xs">{agent.type}</Badge>
+                          <Badge
+                            variant={agent.status === 'active' ? 'active' : agent.status === 'busy' ? 'pending' : 'inactive'}
+                            className="text-xs"
+                          >
+                            {agent.status}
+                          </Badge>
+                        </>
+                      )}
+                      {agentOrgProfile && (
+                        <Badge variant="default" className="text-xs">
+                          <Network className="w-3 h-3 mr-1" />
+                          {agentOrgProfile.roleType}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm mt-1 text-dark-500">Unassigned</p>
+              )}
             </div>
             {task.description && (
               <div className="col-span-2">
                 <p className="text-sm text-dark-400">Description</p>
                 <p className="text-sm mt-1">{task.description}</p>
+              </div>
+            )}
+            {task.delegationHistory && task.delegationHistory.length > 1 && (
+              <div className="col-span-2">
+                <p className="text-sm text-dark-400 mb-2">Delegation History</p>
+                <DelegationHistory history={task.delegationHistory} />
               </div>
             )}
             <div>
@@ -242,6 +297,95 @@ export function TaskDetail() {
           <CardHeader title="Error" />
           <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
             <p className="text-red-400 font-mono text-sm">{task.error}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* Jobs Section */}
+      {jobs && jobs.length > 0 && (
+        <Card>
+          <CardHeader
+            title={
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-primary-400" />
+                Jobs ({jobs.length})
+              </div>
+            }
+          />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 p-4">
+            <div>
+              <JobStatusPanel
+                jobs={jobs}
+                selectedJobId={selectedJobId}
+                onSelectJob={setSelectedJobId}
+              />
+            </div>
+            <div>
+              {/* Show blocked job details if selected */}
+              {selectedJobId && (() => {
+                const selectedJob = jobs.find(j => j.id === selectedJobId);
+                if (selectedJob?.blocked) {
+                  return (
+                    <BlockedJobView
+                      blocked={selectedJob.blocked}
+                      jobId={selectedJob.id}
+                      onApproveGeneration={(suggestion) => {
+                        addNotification({
+                          type: 'info',
+                          title: 'Generation triggered',
+                          message: `Creating ${suggestion.target}...`,
+                        });
+                        // TODO: Integrate with generation API
+                      }}
+                      onReject={async () => {
+                        await jobApi.abort(selectedJob.id);
+                        queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                        addNotification({ type: 'info', title: 'Job cancelled' });
+                      }}
+                    />
+                  );
+                }
+                if (selectedJob?.result?.output) {
+                  return (
+                    <Card className="h-full">
+                      <CardHeader title="Job Output" />
+                      <pre className="text-xs font-mono bg-dark-900 p-3 rounded-lg overflow-auto max-h-64">
+                        {selectedJob.result.output}
+                      </pre>
+                    </Card>
+                  );
+                }
+                if (selectedJob?.error) {
+                  return (
+                    <Card className="h-full border-red-500/30">
+                      <CardHeader title="Job Error" />
+                      <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                        <p className="text-red-400 font-mono text-sm">{selectedJob.error.message}</p>
+                        {selectedJob.error.retryable && (
+                          <Button
+                            size="sm"
+                            className="mt-2"
+                            onClick={async () => {
+                              await jobApi.retry(selectedJob.id);
+                              queryClient.invalidateQueries({ queryKey: ['jobs'] });
+                              addNotification({ type: 'success', title: 'Job retried' });
+                            }}
+                          >
+                            <RotateCcw className="w-3 h-3 mr-1" />
+                            Retry
+                          </Button>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                }
+                return (
+                  <div className="text-center py-8 text-dark-400">
+                    <p>Select a job to see details</p>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </Card>
       )}

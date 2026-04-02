@@ -14,6 +14,7 @@ import { channelRoutes } from './channels/routes.js';
 import { escalationRoutes } from './escalations/routes.js';
 import orgRoutes from './org/routes.js';
 import { resourceRoutes } from './resources/routes.js';
+import { jobRoutes } from './jobs/routes.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   // Root-level health endpoint for quick checks
@@ -35,4 +36,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(escalationRoutes, { prefix: '/api/escalations' });
   await app.register(orgRoutes, { prefix: '/api/org' });
   await app.register(resourceRoutes, { prefix: '/api/resources' });
+  await app.register(jobRoutes, { prefix: '/api/jobs' });
 }

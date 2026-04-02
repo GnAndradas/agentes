@@ -1,4 +1,4 @@
-export type ApprovalType = 'task' | 'agent' | 'skill' | 'tool';
+export type ApprovalType = 'task' | 'agent' | 'skill' | 'tool' | 'generation' | 'permission' | 'job_retry';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
 export interface ApprovalDTO {

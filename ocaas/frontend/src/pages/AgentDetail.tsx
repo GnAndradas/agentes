@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X } from 'lucide-react';
-import { agentApi, taskApi, skillApi } from '../lib/api';
+import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X, Zap, Crown, Briefcase, Users, User, Wrench } from 'lucide-react';
+import { agentApi, taskApi, skillApi, jobApi, orgApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
-import type { Skill } from '../types';
+import type { Skill, JobStatus } from '../types';
 import {
   Button,
   Badge,
@@ -85,6 +85,22 @@ export function AgentDetail() {
     queryKey: ['skills'],
     queryFn: () => skillApi.list(),
     enabled: showAssignSkill,
+  });
+
+  // Jobs for this agent
+  const { data: agentJobs } = useQuery({
+    queryKey: ['jobs', 'agent', id],
+    queryFn: () => jobApi.getByAgent(id!),
+    enabled: !!id,
+    refetchInterval: 5000,
+  });
+
+  // Agent org profile
+  const { data: orgProfile } = useQuery({
+    queryKey: ['org', 'profile', id],
+    queryFn: () => orgApi.getAgentProfile(id!),
+    enabled: !!id,
+    retry: false,
   });
 
   const activateMutation = useMutation({
@@ -278,6 +294,97 @@ export function AgentDetail() {
           )}
         </Card>
       </div>
+
+      {/* Organization Profile */}
+      {orgProfile && (
+        <Card>
+          <CardHeader title="Organization Profile" />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-sm text-dark-400">Role</p>
+              <div className="flex items-center gap-2 mt-1">
+                {orgProfile.roleType === 'ceo' && <Crown className="w-4 h-4 text-yellow-400" />}
+                {orgProfile.roleType === 'manager' && <Briefcase className="w-4 h-4 text-blue-400" />}
+                {orgProfile.roleType === 'supervisor' && <Users className="w-4 h-4 text-green-400" />}
+                {orgProfile.roleType === 'worker' && <User className="w-4 h-4 text-dark-400" />}
+                {orgProfile.roleType === 'specialist' && <Wrench className="w-4 h-4 text-purple-400" />}
+                <Badge variant="default" className="capitalize">{orgProfile.roleType}</Badge>
+              </div>
+            </div>
+            {orgProfile.supervisorAgentId && (
+              <div>
+                <p className="text-sm text-dark-400">Reports To</p>
+                <a
+                  href={`/agents/${orgProfile.supervisorAgentId}`}
+                  className="text-primary-400 hover:underline text-sm mt-1 block"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(`/agents/${orgProfile.supervisorAgentId}`);
+                  }}
+                >
+                  {orgProfile.supervisorAgentId}
+                </a>
+              </div>
+            )}
+            {orgProfile.department && (
+              <div>
+                <p className="text-sm text-dark-400">Department</p>
+                <p className="text-sm mt-1">{orgProfile.department}</p>
+              </div>
+            )}
+            {orgProfile.autonomyPolicy && (
+              <div>
+                <p className="text-sm text-dark-400">Autonomy</p>
+                <Badge
+                  variant={orgProfile.autonomyPolicy.canDelegate ? 'active' : 'pending'}
+                  className="mt-1"
+                >
+                  {orgProfile.autonomyPolicy.canDelegate ? 'Can Delegate' : 'Restricted'}
+                </Badge>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* Active Jobs */}
+      <Card>
+        <CardHeader title={`Jobs ${agentJobs?.length ? `(${agentJobs.length})` : ''}`} />
+        {!agentJobs || agentJobs.length === 0 ? (
+          <div className="text-center py-6">
+            <Zap className="w-8 h-8 text-dark-500 mx-auto mb-2" />
+            <p className="text-dark-400">No jobs recorded</p>
+            <p className="text-dark-500 text-sm">Jobs will appear when tasks are executed</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {agentJobs.slice(0, 10).map((job) => {
+              const statusColors: Record<JobStatus, string> = {
+                pending: 'bg-dark-700 text-dark-300',
+                running: 'bg-blue-500/20 text-blue-400',
+                completed: 'bg-green-500/20 text-green-400',
+                failed: 'bg-red-500/20 text-red-400',
+                blocked: 'bg-yellow-500/20 text-yellow-400',
+                cancelled: 'bg-dark-700 text-dark-400',
+                timeout: 'bg-orange-500/20 text-orange-400',
+              };
+              return (
+                <div
+                  key={job.id}
+                  className="flex items-center justify-between p-3 bg-dark-800 rounded-lg hover:bg-dark-750 cursor-pointer"
+                  onClick={() => navigate(`/tasks/${job.taskId}`)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{job.goal}</p>
+                    <p className="text-xs text-dark-500">Task: {job.taskId.slice(0, 8)}...</p>
+                  </div>
+                  <Badge className={statusColors[job.status]}>{job.status}</Badge>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
 
       {/* Assigned Skills */}
       <Card>

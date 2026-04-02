@@ -38,4 +38,11 @@ export async function systemRoutes(fastify: FastifyInstance) {
   fastify.get('/system/problems/stuck', h.stuckTasks);
   fastify.get('/system/problems/high-retry', h.highRetryTasks);
   fastify.get('/system/problems/blocked', h.blockedTasks);
+
+  // Safety & logs (production hardening)
+  fastify.get('/system/safety', h.getSafetyStatus);
+  fastify.post('/system/safety/failsafe/deactivate', h.deactivateFailsafe);
+  fastify.get('/system/logs', h.getLogs);
+  fastify.get('/system/logs/errors', h.getLogsErrors);
+  fastify.get('/system/logs/recent', h.getLogsRecent);
 }

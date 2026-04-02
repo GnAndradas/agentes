@@ -30,6 +30,17 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 export const TaskPrioritySchema = z.number().min(1).max(4);
 export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
 
+/**
+ * Delegation record for task assignment history
+ */
+export interface DelegationRecord {
+  fromAgentId: string | null;  // null = initial assignment
+  toAgentId: string;
+  reason: 'initial' | 'escalation' | 'delegation' | 'reassignment' | 'failure_recovery';
+  timestamp: number;
+  jobId?: string;  // Job that triggered the delegation
+}
+
 export interface TaskDTO {
   id: string;
   title: string;
@@ -49,6 +60,7 @@ export interface TaskDTO {
   output?: Record<string, unknown>;
   error?: string;
   metadata?: Record<string, unknown>;
+  delegationHistory?: DelegationRecord[];
   startedAt?: number;
   completedAt?: number;
   createdAt: number;

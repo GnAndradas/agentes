@@ -33,14 +33,14 @@ export function CardHeader({
   description,
   action,
 }: {
-  title: string;
+  title: ReactNode;
   description?: string;
   action?: ReactNode;
 }) {
   return (
     <div className="flex items-start justify-between mb-4">
       <div>
-        <h3 className="text-lg font-semibold">{title}</h3>
+        <h3 className="text-lg font-semibold flex items-center gap-2">{title}</h3>
         {description && (
           <p className="text-sm text-dark-400 mt-1">{description}</p>
         )}

@@ -169,7 +169,7 @@ export class SkillService {
 
   async unassignFromAgent(skillId: string, agentId: string): Promise<void> {
     await db.delete(schema.agentSkills).where(
-      eq(schema.agentSkills.skillId, skillId)
+      and(eq(schema.agentSkills.skillId, skillId), eq(schema.agentSkills.agentId, agentId))
     );
   }
 

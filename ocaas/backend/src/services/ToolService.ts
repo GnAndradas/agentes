@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { createLogger } from '../utils/logger.js';
 import { NotFoundError, ConflictError } from '../utils/errors.js';
@@ -187,7 +187,9 @@ export class ToolService {
   }
 
   async unassignFromAgent(toolId: string, agentId: string): Promise<void> {
-    await db.delete(schema.agentTools).where(eq(schema.agentTools.toolId, toolId));
+    await db.delete(schema.agentTools).where(
+      and(eq(schema.agentTools.toolId, toolId), eq(schema.agentTools.agentId, agentId))
+    );
   }
 
   async getAgentTools(agentId: string): Promise<ToolDTO[]> {

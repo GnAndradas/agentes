@@ -73,20 +73,25 @@ export function StatusBar() {
     setMonitorOpen,
   } = useAppStore();
 
-  // Check backend health periodically (OCAAS server)
-  const { data: backendHealthy } = useQuery({
+  // Check backend health periodically (OCAAS server) - now returns runtime info
+  const { data: backendHealth } = useQuery({
     queryKey: ['system', 'health'],
     queryFn: async () => {
       try {
-        await systemApi.health();
-        return true;
+        return await systemApi.health();
       } catch {
-        return false;
+        return null;
       }
     },
     refetchInterval: 10000, // Every 10 seconds
     retry: false,
   });
+
+  const backendHealthy = !!backendHealth;
+  const backendVersion = backendHealth?.version;
+  const backendUptime = backendHealth?.uptime;
+  const backendEnv = backendHealth?.environment;
+  const backendCommit = backendHealth?.commit;
 
   // Check gateway status (OpenClaw) - HONEST: makes real requests
   const { data: gatewayStatus } = useQuery({
@@ -173,11 +178,23 @@ export function StatusBar() {
           </div>
 
           {/* Backend health (OCAAS server) */}
-          <div className="flex items-center gap-1.5" title="OCAAS Backend">
+          <div
+            className="flex items-center gap-1.5"
+            title={
+              backendHealthy
+                ? `OCAAS Backend v${backendVersion || '?'}${backendCommit ? ` (${backendCommit})` : ''}\nUptime: ${backendUptime || '?'}\nEnv: ${backendEnv || '?'}`
+                : 'OCAAS Backend disconnected'
+            }
+          >
             {backendHealthy ? (
               <>
                 <Zap className="w-3.5 h-3.5 text-green-400" />
-                <span className="text-dark-400">Backend</span>
+                <span className="text-dark-400">
+                  Backend
+                  {backendVersion && (
+                    <span className="ml-1 text-dark-500 text-[10px]">v{backendVersion}</span>
+                  )}
+                </span>
               </>
             ) : (
               <>
@@ -320,21 +337,43 @@ export function StatusBar() {
           </button>
         </div>
 
-        {/* Toggle button */}
-        <button
-          onClick={toggleStatusBar}
-          className="flex items-center gap-1 px-2 py-0.5 hover:bg-dark-800 rounded text-dark-400 hover:text-dark-200"
-          title={statusBarVisible ? 'Hide activity log' : 'Show activity log'}
-        >
-          {activities.length > 0 && (
-            <span className="text-dark-500">{activities.length}</span>
+        <div className="flex items-center gap-3">
+          {/* Environment badge - only show if not development */}
+          {backendEnv && backendEnv !== 'development' && (
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase ${
+                backendEnv === 'production'
+                  ? 'bg-green-900/50 text-green-400 border border-green-800/50'
+                  : 'bg-yellow-900/50 text-yellow-400 border border-yellow-800/50'
+              }`}
+            >
+              {backendEnv}
+            </span>
           )}
-          {statusBarVisible ? (
-            <ChevronDown className="w-3.5 h-3.5" />
-          ) : (
-            <ChevronUp className="w-3.5 h-3.5" />
+
+          {/* Uptime indicator */}
+          {backendUptime && (
+            <span className="text-dark-500" title={`Backend uptime: ${backendUptime}`}>
+              {backendUptime}
+            </span>
           )}
-        </button>
+
+          {/* Toggle button */}
+          <button
+            onClick={toggleStatusBar}
+            className="flex items-center gap-1 px-2 py-0.5 hover:bg-dark-800 rounded text-dark-400 hover:text-dark-200"
+            title={statusBarVisible ? 'Hide activity log' : 'Show activity log'}
+          >
+            {activities.length > 0 && (
+              <span className="text-dark-500">{activities.length}</span>
+            )}
+            {statusBarVisible ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronUp className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

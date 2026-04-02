@@ -7,8 +7,10 @@ export async function rootHealthRoute(fastify: FastifyInstance) {
 }
 
 export async function systemRoutes(fastify: FastifyInstance) {
-  // Backend health
+  // Backend health & runtime
   fastify.get('/system/health', h.health);
+  fastify.get('/system/runtime', h.runtimeInfo);
+  fastify.get('/system/environment', h.environmentCheck);
   fastify.get('/system/stats', h.stats);
   fastify.get('/system/events', h.events);
 

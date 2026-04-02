@@ -13,12 +13,56 @@ import { getSystemDiagnosticsService, getTaskTimelineService } from '../../syste
 // NOTE: Gateway import kept ONLY for getDiagnostic() which needs full diagnostic object
 // All other methods use the adapter
 import { getGateway } from '../../openclaw/gateway.js';
+import { getRuntimeInfo, getRuntimeSummary, checkEnvironment } from '../../utils/runtime.js';
 
 /**
- * Backend health check - just checks if OCAAS backend is running
+ * Backend health check - includes runtime metadata for observability
  */
 export async function health(_req: FastifyRequest, reply: FastifyReply) {
-  return reply.send({ status: 'ok', timestamp: Date.now() });
+  const summary = getRuntimeSummary();
+  return reply.send({
+    status: 'ok',
+    timestamp: Date.now(),
+    ...summary,
+  });
+}
+
+/**
+ * Full runtime info - detailed system information
+ * GET /api/system/runtime
+ */
+export async function runtimeInfo(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const info = getRuntimeInfo();
+    const envCheck = checkEnvironment();
+
+    return reply.send({
+      data: {
+        ...info,
+        environment: envCheck,
+      },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * Environment check - detect runtime issues
+ * GET /api/system/environment
+ */
+export async function environmentCheck(req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const query = req.query as { refresh?: string };
+    const forceRefresh = query.refresh === 'true';
+    const envCheck = checkEnvironment(forceRefresh);
+
+    return reply.send({ data: envCheck });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
 }
 
 /**

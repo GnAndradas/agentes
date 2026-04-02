@@ -306,10 +306,52 @@ export interface QuickStatus {
   };
 }
 
+// Runtime/Health types
+export interface HealthResponse {
+  status: string;
+  timestamp: number;
+  version: string;
+  environment: string;
+  uptime: string;
+  nodeVersion: string;
+  pid: number;
+  commit: string | null;
+  healthy: boolean;
+}
+
+export interface RuntimeInfo {
+  app: { name: string; version: string; environment: string };
+  build: { timestamp: number | null; commitHash: string | null; commitDate: string | null; branch: string | null; dirty: boolean };
+  process: { pid: number; uptime: number; uptimeHuman: string; startedAt: number; nodeVersion: string; platform: string; arch: string; cwd: string };
+  memory: { heapUsedMB: number; heapTotalMB: number; rssMB: number };
+  environment: EnvironmentCheck;
+}
+
+export interface EnvironmentCheck {
+  timestamp: number;
+  checks: Array<{ name: string; status: 'ok' | 'warning' | 'error'; message: string; details?: Record<string, unknown> }>;
+  healthy: boolean;
+  criticalIssues: string[];
+  warnings: string[];
+}
+
 // System API
 export const systemApi = {
-  // Backend health (OCAAS server)
-  health: () => api.get<{ status: string; timestamp: number }>('/system/health'),
+  // Backend health with runtime summary
+  health: () => api.get<HealthResponse>('/system/health'),
+
+  // Full runtime info
+  runtime: async () => {
+    const res = await api.get<DataResponse<RuntimeInfo>>('/system/runtime');
+    return res.data;
+  },
+
+  // Environment check
+  environment: async (refresh?: boolean) => {
+    const query = refresh ? '?refresh=true' : '';
+    const res = await api.get<DataResponse<EnvironmentCheck>>(`/system/environment${query}`);
+    return res.data;
+  },
 
   // Quick gateway status (for polling) - HONEST: makes real requests
   gatewayStatus: async () => {

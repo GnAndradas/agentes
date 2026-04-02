@@ -17,6 +17,11 @@ import { getAgentGenerator } from '../generator/AgentGenerator.js';
 import { getSkillGenerator } from '../generator/SkillGenerator.js';
 import { getToolGenerator } from '../generator/ToolGenerator.js';
 import type { GenerationType } from '../types/domain.js';
+import { initResourceService, ResourceService } from '../resources/index.js';
+import {
+  initSkillExecutionService,
+  SkillExecutionService,
+} from '../skills/execution/index.js';
 
 export interface Services {
   eventService: EventService;
@@ -31,6 +36,8 @@ export interface Services {
   approvalService: ApprovalService;
   notificationService: NotificationService;
   activationWorkflow: ActivationWorkflowService;
+  resourceService: ResourceService;
+  skillExecutionService: SkillExecutionService;
 }
 
 let instance: Services | null = null;
@@ -83,6 +90,16 @@ export function initServices(): Services {
     }
   });
 
+  // Initialize unified resource service
+  const resourceService = initResourceService(skillService, toolService);
+
+  // Initialize skill execution service
+  const skillExecutionService = initSkillExecutionService(
+    skillService,
+    toolService,
+    eventService
+  );
+
   instance = {
     eventService,
     agentService,
@@ -96,6 +113,8 @@ export function initServices(): Services {
     approvalService,
     notificationService,
     activationWorkflow,
+    resourceService,
+    skillExecutionService,
   };
 
   return instance;
@@ -119,4 +138,6 @@ export {
   ApprovalService,
   NotificationService,
   ActivationWorkflowService,
+  ResourceService,
+  SkillExecutionService,
 };

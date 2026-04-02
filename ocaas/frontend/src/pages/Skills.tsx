@@ -1,14 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Sparkles, Trash2 } from 'lucide-react';
+import { Plus, Sparkles, Trash2, Edit2, Wrench, Play } from 'lucide-react';
 import { skillApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
   Button,
   Badge,
   Modal,
-  Input,
-  Textarea,
   Select,
   Table,
   TableHead,
@@ -20,7 +18,10 @@ import {
   CardHeader,
   EmptyState,
 } from '../components/ui';
+import { SkillEditor } from '../components/skills/SkillEditor';
+import { SkillExecutionPanel } from '../components/skills/SkillExecutionPanel';
 import { fromTimestamp } from '../lib/date';
+import type { Skill, SkillToolLink } from '../types';
 
 const statusOptions = [
   { value: 'active', label: 'Active' },
@@ -38,25 +39,25 @@ export function Skills() {
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    description: '',
-    version: '1.0.0',
-    path: '',
-    status: 'active',
-  });
+  const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
+  const [executingSkill, setExecutingSkill] = useState<Skill | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['skills'],
-    queryFn: skillApi.list,
+    queryFn: () => skillApi.list({ expand: 'toolCount' }),
   });
 
   const createMutation = useMutation({
-    mutationFn: skillApi.create,
+    mutationFn: async ({ skill, tools }: { skill: Partial<Skill>; tools?: SkillToolLink[] }) => {
+      const created = await skillApi.create(skill);
+      if (tools && tools.length > 0) {
+        await skillApi.setTools(created.id, tools);
+      }
+      return created;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['skills'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', version: '1.0.0', path: '', status: 'active' });
       addNotification({ type: 'success', title: 'Skill created' });
     },
     onError: (err: Error) => {
@@ -64,14 +65,23 @@ export function Skills() {
     },
   });
 
-  // NOTE: Sync functionality commented out - backend route not implemented
-  // const syncMutation = useMutation({
-  //   mutationFn: skillApi.sync,
-  //   onSuccess: () => {
-  //     queryClient.invalidateQueries({ queryKey: ['skills'] });
-  //     addNotification({ type: 'success', title: 'Skills synchronized' });
-  //   },
-  // });
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, skill, tools }: { id: string; skill: Partial<Skill>; tools?: SkillToolLink[] }) => {
+      const updated = await skillApi.update(id, skill);
+      if (tools !== undefined) {
+        await skillApi.setTools(id, tools);
+      }
+      return updated;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      setEditingSkill(null);
+      addNotification({ type: 'success', title: 'Skill updated' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to update skill', message: err.message });
+    },
+  });
 
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: 'active' | 'inactive' | 'deprecated' }) =>
@@ -89,15 +99,14 @@ export function Skills() {
     },
   });
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    createMutation.mutate({
-      name: form.name,
-      description: form.description,
-      version: form.version,
-      path: form.path,
-      status: form.status as 'active' | 'inactive' | 'deprecated',
-    });
+  const handleCreate = (skillData: Partial<Skill>, tools?: SkillToolLink[]) => {
+    createMutation.mutate({ skill: skillData, tools });
+  };
+
+  const handleUpdate = (skillData: Partial<Skill>, tools?: SkillToolLink[]) => {
+    if (editingSkill) {
+      updateMutation.mutate({ id: editingSkill.id, skill: skillData, tools });
+    }
   };
 
   const skills = data?.skills || [];
@@ -111,24 +120,12 @@ export function Skills() {
       <Card>
         <CardHeader
           title="Skills"
-          description="Manage reusable agent skills"
+          description="Manage reusable agent skills composed of tools"
           action={
-            <div className="flex items-center gap-3">
-              {/* Sync button disabled - backend route not implemented
-              <Button
-                variant="secondary"
-                onClick={() => syncMutation.mutate()}
-                loading={syncMutation.isPending}
-              >
-                <RefreshCw className="w-4 h-4" />
-                Sync
-              </Button>
-              */}
-              <Button onClick={() => setShowCreate(true)}>
-                <Plus className="w-4 h-4" />
-                New Skill
-              </Button>
-            </div>
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus className="w-4 h-4" />
+              New Skill
+            </Button>
           }
         />
 
@@ -152,6 +149,7 @@ export function Skills() {
               <TableRow>
                 <TableHeader>Name</TableHeader>
                 <TableHeader>Version</TableHeader>
+                <TableHeader>Tools</TableHeader>
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Synced</TableHeader>
                 <TableHeader className="text-right">Actions</TableHeader>
@@ -161,13 +159,26 @@ export function Skills() {
               {skills.map((skill) => (
                 <TableRow key={skill.id}>
                   <TableCell>
-                    <div>
-                      <p className="font-medium">{skill.name}</p>
-                      <p className="text-dark-500 text-xs">{skill.description}</p>
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-dark-900 rounded-lg">
+                        <Sparkles className="w-4 h-4 text-dark-400" />
+                      </div>
+                      <div>
+                        <p className="font-medium">{skill.name}</p>
+                        <p className="text-dark-500 text-xs truncate max-w-[200px]">
+                          {skill.description || skill.path}
+                        </p>
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
                     <Badge>{skill.version}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1 text-dark-400">
+                      <Wrench className="w-3 h-3" />
+                      <span className="text-sm">{skill.toolCount ?? 0}</span>
+                    </div>
                   </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant[skill.status]}>
@@ -179,6 +190,23 @@ export function Skills() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setExecutingSkill(skill)}
+                        title="Execute skill"
+                        disabled={skill.status !== 'active' || (skill.toolCount ?? 0) === 0}
+                      >
+                        <Play className="w-4 h-4 text-green-400" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditingSkill(skill)}
+                        title="Edit skill"
+                      >
+                        <Edit2 className="w-4 h-4 text-dark-400" />
+                      </Button>
                       <Select
                         value={skill.status}
                         onChange={(e) =>
@@ -209,56 +237,50 @@ export function Skills() {
         )}
       </Card>
 
+      {/* Create Modal */}
       <Modal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
         title="Create Skill"
-        size="lg"
+        size="xl"
       >
-        <form onSubmit={handleCreate} className="space-y-4">
-          <Input
-            label="Name"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            required
+        <SkillEditor
+          onSave={handleCreate}
+          onCancel={() => setShowCreate(false)}
+          loading={createMutation.isPending}
+        />
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal
+        isOpen={!!editingSkill}
+        onClose={() => setEditingSkill(null)}
+        title={`Edit Skill: ${editingSkill?.name}`}
+        size="xl"
+      >
+        {editingSkill && (
+          <SkillEditor
+            skill={editingSkill}
+            onSave={handleUpdate}
+            onCancel={() => setEditingSkill(null)}
+            loading={updateMutation.isPending}
           />
-          <Textarea
-            label="Description"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
+        )}
+      </Modal>
+
+      {/* Execute Modal */}
+      <Modal
+        isOpen={!!executingSkill}
+        onClose={() => setExecutingSkill(null)}
+        title={`Execute Skill: ${executingSkill?.name}`}
+        size="xl"
+      >
+        {executingSkill && (
+          <SkillExecutionPanel
+            skill={executingSkill}
+            onClose={() => setExecutingSkill(null)}
           />
-          <Input
-            label="Version"
-            value={form.version}
-            onChange={(e) => setForm({ ...form, version: e.target.value })}
-            placeholder="1.0.0"
-          />
-          <Input
-            label="Path"
-            value={form.path}
-            onChange={(e) => setForm({ ...form, path: e.target.value })}
-            placeholder="/skills/my-skill"
-            required
-          />
-          <Select
-            label="Status"
-            value={form.status}
-            onChange={(e) => setForm({ ...form, status: e.target.value })}
-            options={statusOptions}
-          />
-          <div className="flex justify-end gap-3 pt-4">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setShowCreate(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" loading={createMutation.isPending}>
-              Create
-            </Button>
-          </div>
-        </form>
+        )}
       </Modal>
     </div>
   );

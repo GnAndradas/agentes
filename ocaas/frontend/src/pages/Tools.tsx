@@ -1,14 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Wrench, Trash2, Terminal, Code, Globe } from 'lucide-react';
+import { Plus, Wrench, Trash2, Terminal, Code, Globe, Edit2, CheckCircle } from 'lucide-react';
 import { toolApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
   Button,
   Badge,
   Modal,
-  Input,
-  Textarea,
   Select,
   Table,
   TableHead,
@@ -20,13 +18,9 @@ import {
   CardHeader,
   EmptyState,
 } from '../components/ui';
+import { ToolEditor } from '../components/tools/ToolEditor';
 import { fromTimestamp } from '../lib/date';
-
-const typeOptions = [
-  { value: 'script', label: 'Script' },
-  { value: 'binary', label: 'Binary' },
-  { value: 'api', label: 'API' },
-];
+import type { Tool } from '../types';
 
 const statusOptions = [
   { value: 'active', label: 'Active' },
@@ -50,14 +44,7 @@ export function Tools() {
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    description: '',
-    version: '1.0.0',
-    path: '',
-    type: 'script',
-    status: 'active',
-  });
+  const [editingTool, setEditingTool] = useState<Tool | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['tools'],
@@ -69,11 +56,22 @@ export function Tools() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tools'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', version: '1.0.0', path: '', type: 'script', status: 'active' });
       addNotification({ type: 'success', title: 'Tool created' });
     },
     onError: (err: Error) => {
       addNotification({ type: 'error', title: 'Failed to create tool', message: err.message });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<Tool> }) => toolApi.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tools'] });
+      setEditingTool(null);
+      addNotification({ type: 'success', title: 'Tool updated' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to update tool', message: err.message });
     },
   });
 
@@ -85,6 +83,25 @@ export function Tools() {
     },
   });
 
+  const validateMutation = useMutation({
+    mutationFn: toolApi.validateExisting,
+    onSuccess: (result) => {
+      if (result.valid) {
+        addNotification({
+          type: 'success',
+          title: 'Validation Passed',
+          message: `Score: ${result.score}/100`,
+        });
+      } else {
+        addNotification({
+          type: 'warning',
+          title: 'Validation Issues',
+          message: `${result.issues.filter(i => i.severity === 'error').length} errors found`,
+        });
+      }
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: toolApi.delete,
     onSuccess: () => {
@@ -93,16 +110,14 @@ export function Tools() {
     },
   });
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    createMutation.mutate({
-      name: form.name,
-      description: form.description,
-      version: form.version,
-      path: form.path,
-      type: form.type as 'script' | 'binary' | 'api',
-      status: form.status as 'active' | 'inactive' | 'deprecated',
-    });
+  const handleCreate = (data: Partial<Tool>) => {
+    createMutation.mutate(data);
+  };
+
+  const handleUpdate = (data: Partial<Tool>) => {
+    if (editingTool) {
+      updateMutation.mutate({ id: editingTool.id, data });
+    }
   };
 
   const tools = data?.tools || [];
@@ -164,7 +179,9 @@ export function Tools() {
                         </div>
                         <div>
                           <p className="font-medium">{tool.name}</p>
-                          <p className="text-dark-500 text-xs">{tool.description}</p>
+                          <p className="text-dark-500 text-xs truncate max-w-[200px]">
+                            {tool.description || tool.path}
+                          </p>
                         </div>
                       </div>
                     </TableCell>
@@ -187,6 +204,23 @@ export function Tools() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEditingTool(tool)}
+                          title="Edit tool"
+                        >
+                          <Edit2 className="w-4 h-4 text-dark-400" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => validateMutation.mutate(tool.id)}
+                          title="Validate tool"
+                          loading={validateMutation.isPending && validateMutation.variables === tool.id}
+                        >
+                          <CheckCircle className="w-4 h-4 text-dark-400" />
+                        </Button>
                         <Select
                           value={tool.status}
                           onChange={(e) =>
@@ -218,62 +252,35 @@ export function Tools() {
         )}
       </Card>
 
+      {/* Create Modal */}
       <Modal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
         title="Create Tool"
-        size="lg"
+        size="xl"
       >
-        <form onSubmit={handleCreate} className="space-y-4">
-          <Input
-            label="Name"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            required
+        <ToolEditor
+          onSave={handleCreate}
+          onCancel={() => setShowCreate(false)}
+          loading={createMutation.isPending}
+        />
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal
+        isOpen={!!editingTool}
+        onClose={() => setEditingTool(null)}
+        title={`Edit Tool: ${editingTool?.name}`}
+        size="xl"
+      >
+        {editingTool && (
+          <ToolEditor
+            tool={editingTool}
+            onSave={handleUpdate}
+            onCancel={() => setEditingTool(null)}
+            loading={updateMutation.isPending}
           />
-          <Textarea
-            label="Description"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-          />
-          <Input
-            label="Version"
-            value={form.version}
-            onChange={(e) => setForm({ ...form, version: e.target.value })}
-            placeholder="1.0.0"
-          />
-          <Input
-            label="Path"
-            value={form.path}
-            onChange={(e) => setForm({ ...form, path: e.target.value })}
-            placeholder="/tools/my-tool"
-            required
-          />
-          <Select
-            label="Type"
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
-            options={typeOptions}
-          />
-          <Select
-            label="Status"
-            value={form.status}
-            onChange={(e) => setForm({ ...form, status: e.target.value })}
-            options={statusOptions}
-          />
-          <div className="flex justify-end gap-3 pt-4">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setShowCreate(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" loading={createMutation.isPending}>
-              Create
-            </Button>
-          </div>
-        </form>
+        )}
       </Modal>
     </div>
   );

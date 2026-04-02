@@ -59,6 +59,25 @@ export interface TaskDTO {
 export const SkillStatusSchema = z.enum(['active', 'inactive', 'deprecated']);
 export type SkillStatus = z.infer<typeof SkillStatusSchema>;
 
+/**
+ * Skill-Tool link representing a tool associated with a skill
+ */
+export interface SkillToolLink {
+  toolId: string;
+  orderIndex: number;
+  required: boolean;
+  role?: string;
+  config?: Record<string, unknown>;
+  createdAt: number;
+}
+
+/**
+ * Skill-Tool link with expanded tool details
+ */
+export interface SkillToolExpanded extends SkillToolLink {
+  tool: ToolDTO;
+}
+
 export interface SkillDTO {
   id: string;
   name: string;
@@ -69,6 +88,9 @@ export interface SkillDTO {
   capabilities?: string[];
   requirements?: string[];
   config?: Record<string, unknown>;
+  // Tool composition (optional - populated when requested)
+  linkedTools?: SkillToolLink[];
+  toolCount?: number;
   syncedAt?: number;
   createdAt: number;
   updatedAt: number;

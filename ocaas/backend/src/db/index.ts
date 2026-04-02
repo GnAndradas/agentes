@@ -110,6 +110,21 @@ export async function initDatabase(): Promise<void> {
       PRIMARY KEY (agent_id, tool_id)
     );
 
+    -- Skill-Tools composition table
+    CREATE TABLE IF NOT EXISTS skill_tools (
+      skill_id TEXT NOT NULL,
+      tool_id TEXT NOT NULL,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      required INTEGER NOT NULL DEFAULT 1,
+      role TEXT,
+      config TEXT,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (skill_id, tool_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_skill_tools_skill ON skill_tools(skill_id);
+    CREATE INDEX IF NOT EXISTS idx_skill_tools_tool ON skill_tools(tool_id);
+
     CREATE TABLE IF NOT EXISTS permissions (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
@@ -315,7 +330,7 @@ export async function initDatabase(): Promise<void> {
 
   // Verify critical tables exist after initialization
   const criticalTables = [
-    'tasks', 'agents', 'skills', 'tools', 'events',
+    'tasks', 'agents', 'skills', 'tools', 'skill_tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
     'task_checkpoints', 'execution_leases', 'human_escalations',
   ];

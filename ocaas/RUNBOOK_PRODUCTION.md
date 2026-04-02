@@ -210,6 +210,7 @@ npm run smoke-test
 | OpenClaw | `curl localhost:3001/api/system/gateway` | `connected: true` |
 | Tasks API | `curl localhost:3001/api/tasks` | Array (puede estar vacío) |
 | Agents API | `curl localhost:3001/api/agents` | Array (puede estar vacío) |
+| Resources API | `curl localhost:3001/api/resources` | `{skills:[], tools:[], total:N}` |
 
 ### Smoke test automático:
 
@@ -1694,7 +1695,350 @@ cd /opt/ocaas && npm run smoke-test
 | Permisos correctos | `ls -la /opt/ocaas/.env` | `-rw-------` (600) |
 | Logs escribibles | `touch /opt/ocaas/logs/test && rm /opt/ocaas/logs/test` | Sin error |
 
-## 21. Notas finales de operación
+## 21. Tool Validation (NEW)
+
+El sistema de validación de tools permite verificar configuraciones antes de crear o actualizar herramientas.
+
+### Endpoints de Validación
+
+```bash
+# Validar tool antes de crear
+curl -X POST localhost:3001/api/tools/validate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-api-tool",
+    "path": "/tools/my-api",
+    "type": "api",
+    "config": {
+      "method": "POST",
+      "url": "https://api.example.com/endpoint"
+    }
+  }'
+
+# Validar tool existente por ID
+curl -X POST localhost:3001/api/tools/tool_abc123/validate
+
+# Validar solo config (sin crear tool)
+curl -X POST localhost:3001/api/tools/validate-config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "script",
+    "config": {
+      "runtime": "node",
+      "entrypoint": "index.js"
+    }
+  }'
+```
+
+### Respuesta de Validación
+
+```json
+{
+  "data": {
+    "valid": true,
+    "score": 85,
+    "issues": [
+      {
+        "field": "description",
+        "message": "Tool has no description",
+        "severity": "warning"
+      }
+    ],
+    "suggestions": [
+      "Add a description to improve discoverability",
+      "Consider adding version for tracking"
+    ]
+  }
+}
+```
+
+### Tipos de Tool y Campos de Config
+
+| Tipo | Campos Principales | Uso |
+|------|-------------------|-----|
+| `script` | entrypoint, runtime, envVars, timeoutMs | Scripts Node.js, Python, Bash |
+| `binary` | binaryPath, argsTemplate, shell | Ejecutables externos |
+| `api` | method, url, headers, auth, bodyTemplate | Llamadas HTTP |
+
+### Script Tool Config
+
+```json
+{
+  "entrypoint": "main.js",
+  "runtime": "node",
+  "argsTemplate": "--input {{input}} --format json",
+  "workingDirectory": "/opt/tools/my-tool",
+  "envVars": { "NODE_ENV": "production" },
+  "timeoutMs": 30000,
+  "captureStderr": true
+}
+```
+
+### Binary Tool Config
+
+```json
+{
+  "binaryPath": "/usr/bin/ffmpeg",
+  "argsTemplate": "-i {{input}} -o {{output}}",
+  "shell": false,
+  "timeoutMs": 60000
+}
+```
+
+### API Tool Config
+
+```json
+{
+  "method": "POST",
+  "url": "https://api.example.com/process",
+  "headers": { "Content-Type": "application/json" },
+  "bodyTemplate": "{\"data\": \"{{input}}\"}",
+  "auth": {
+    "type": "bearer",
+    "value": "{{env.API_TOKEN}}"
+  },
+  "timeoutMs": 10000,
+  "followRedirects": true,
+  "responseType": "json"
+}
+```
+
+### Validaciones Realizadas
+
+| Categoría | Severidad | Checks |
+|-----------|-----------|--------|
+| **Requeridos** | error | name no vacío, path no vacío |
+| **Config válida** | error | Campos conocidos para el tipo, valores válidos |
+| **Schemas** | warning | inputSchema/outputSchema son JSON Schema válidos |
+| **Recomendaciones** | info | description, version, runtime (scripts), url (API) |
+
+### Integración con Frontend
+
+El Tool Editor en el frontend incluye:
+- Formularios específicos por tipo de tool
+- Validación en tiempo real al cambiar campos
+- Visualización de issues y sugerencias
+- Botón de validación antes de guardar
+
+### Troubleshooting Tools
+
+```bash
+# Ver todos los tools con estado
+curl localhost:3001/api/tools | jq '.tools[] | {name, type, status}'
+
+# Validar un tool específico
+TOOL_ID="tool_abc123"
+curl -X POST "localhost:3001/api/tools/$TOOL_ID/validate" | jq
+
+# Ver config de un tool
+curl "localhost:3001/api/tools/$TOOL_ID" | jq '.data.config'
+```
+
+## 22. Skill-Tool Composition (NEW)
+
+Las skills pueden componerse de múltiples tools para crear capacidades complejas.
+
+### Endpoints de Composición
+
+```bash
+# Obtener tools de una skill
+curl localhost:3001/api/skills/skill_123/tools
+
+# Obtener tools con detalles expandidos
+curl localhost:3001/api/skills/skill_123/tools?expand=tool
+
+# Agregar un tool a una skill
+curl -X POST localhost:3001/api/skills/skill_123/tools \
+  -H "Content-Type: application/json" \
+  -d '{
+    "toolId": "tool_456",
+    "orderIndex": 0,
+    "required": true,
+    "role": "primary"
+  }'
+
+# Reemplazar todos los tools de una skill
+curl -X PUT localhost:3001/api/skills/skill_123/tools \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tools": [
+      {"toolId": "tool_1", "orderIndex": 0, "required": true},
+      {"toolId": "tool_2", "orderIndex": 1, "role": "fallback"}
+    ]
+  }'
+
+# Actualizar link de un tool
+curl -X PATCH localhost:3001/api/skills/skill_123/tools/tool_456 \
+  -H "Content-Type: application/json" \
+  -d '{"orderIndex": 5, "required": false}'
+
+# Eliminar un tool de una skill
+curl -X DELETE localhost:3001/api/skills/skill_123/tools/tool_456
+```
+
+### Estructura del Link
+
+```json
+{
+  "toolId": "tool_456",
+  "orderIndex": 0,
+  "required": true,
+  "role": "primary",
+  "config": { "timeout": 30000 },
+  "createdAt": 1700000000
+}
+```
+
+| Campo | Descripción |
+|-------|-------------|
+| `toolId` | ID del tool (requerido) |
+| `orderIndex` | Orden de ejecución (0-based) |
+| `required` | Si el tool es obligatorio (default: true) |
+| `role` | Rol del tool: primary, fallback, preprocessing, etc. |
+| `config` | Config override específico para este skill |
+
+### Listar Skills con Tool Count
+
+```bash
+# Lista de skills con cantidad de tools
+curl localhost:3001/api/skills?expand=toolCount | jq '.data[] | {name, toolCount}'
+```
+
+### Troubleshooting Skills
+
+```bash
+# Ver todas las skills con estado y tools
+curl localhost:3001/api/skills?expand=toolCount | jq '.data[] | {name, status, toolCount}'
+
+# Ver tools de una skill específica
+SKILL_ID="skill_123"
+curl "localhost:3001/api/skills/$SKILL_ID/tools?expand=tool" | jq
+
+# Warning: skills activas sin tools
+curl localhost:3001/api/skills?expand=toolCount | jq '.data[] | select(.status=="active" and .toolCount==0)'
+```
+
+## 23. Skill Execution
+
+Ejecutar skills como pipelines de tools directamente, sin pasar por agentes.
+
+### API Endpoints
+
+```bash
+# Preview de ejecución (ver pipeline, blockers, warnings)
+curl localhost:3001/api/skills/skill_123/execution-preview | jq
+
+# Validar ejecución sin ejecutar
+curl -X POST localhost:3001/api/skills/skill_123/validate-execution \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"userId": "123"}}'
+
+# Dry run (simula sin efectos)
+curl -X POST localhost:3001/api/skills/skill_123/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "dry_run",
+    "input": {"query": "test"}
+  }'
+
+# Ejecutar realmente
+curl -X POST localhost:3001/api/skills/skill_123/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "run",
+    "input": {"query": "process this"},
+    "context": {"env": "production"},
+    "timeoutMs": 60000,
+    "stopOnError": true,
+    "caller": {"type": "user", "id": "admin", "name": "Admin User"}
+  }'
+```
+
+### Modos de Ejecución
+
+| Modo | Comportamiento |
+|------|----------------|
+| `run` | Ejecuta tools realmente |
+| `validate` | Valida inputs y disponibilidad de tools |
+| `dry_run` | Simula ejecución sin side effects |
+
+### Estructura de Respuesta
+
+```json
+{
+  "data": {
+    "executionId": "abc123",
+    "skillId": "skill_123",
+    "skillName": "Data Processing",
+    "mode": "run",
+    "status": "success",
+    "toolResults": [
+      {
+        "toolId": "tool_1",
+        "toolName": "Fetch Data",
+        "status": "success",
+        "output": {"records": 100},
+        "durationMs": 1200,
+        "required": true,
+        "orderIndex": 0
+      },
+      {
+        "toolId": "tool_2",
+        "toolName": "Transform",
+        "status": "success",
+        "output": {"transformed": true},
+        "durationMs": 500,
+        "required": true,
+        "orderIndex": 1
+      }
+    ],
+    "output": {"records": 100, "transformed": true},
+    "toolsExecuted": 2,
+    "toolsSucceeded": 2,
+    "toolsFailed": 0,
+    "toolsSkipped": 0,
+    "totalDurationMs": 1700,
+    "startedAt": 1700000000000,
+    "completedAt": 1700000001700
+  }
+}
+```
+
+### Troubleshooting Ejecución
+
+```bash
+# Ver si una skill puede ejecutarse
+SKILL_ID="skill_123"
+curl "localhost:3001/api/skills/$SKILL_ID/execution-preview" | jq '{canExecute, blockers, warnings}'
+
+# Ver pipeline ordenado
+curl "localhost:3001/api/skills/$SKILL_ID/execution-preview" | jq '.data.pipeline[] | {order: .orderIndex, name: .toolName, required}'
+
+# Validar antes de ejecutar
+curl -X POST "localhost:3001/api/skills/$SKILL_ID/validate-execution" \
+  -H "Content-Type: application/json" \
+  -d '{"input": {}}' | jq '{valid, errors, warnings}'
+```
+
+### Comportamiento de Errores
+
+| Escenario | Resultado |
+|-----------|-----------|
+| Tool requerido falla | Pipeline falla, tools restantes skipped |
+| Tool opcional falla | Continúa con siguiente tool |
+| Timeout excedido | Pipeline falla con error de timeout |
+| stopOnError: false | Continúa incluso si required tools fallan |
+
+### Frontend
+
+En la página de Skills, cada skill activa con tools tiene un botón verde de "Execute":
+1. Click en Execute abre panel de ejecución
+2. Ver Preview del pipeline
+3. Escribir input JSON
+4. Validate → Dry Run → Execute
+5. Ver resultados expandibles por tool
+
+## 24. Notas finales de operación
 
 - Ejecutar siempre como usuario no root
 - Mantener permisos mínimos necesarios

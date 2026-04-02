@@ -2,6 +2,7 @@ export * from './agents.js';
 export * from './tasks.js';
 export * from './skills.js';
 export * from './tools.js';
+export * from './skillTools.js';
 export * from './permissions.js';
 export * from './generations.js';
 export * from './events.js';

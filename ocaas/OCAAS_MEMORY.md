@@ -1,6 +1,6 @@
 # OCAAS - Sistema de Memoria
 
-> Documento de referencia técnica. Actualizado: 2026-04-01
+> Documento de referencia técnica. Actualizado: 2026-04-02
 
 ## 1. Visión General
 
@@ -157,9 +157,11 @@ TELEGRAM_ALLOWED_USER_IDS=<opcional>
 ✅ task-timeline.test.ts          - 34 tests
 ✅ human-escalation.test.ts       - 41 tests
 ✅ DecisionEngine.integration.test.ts - 18 tests
-✅ CostOptimization.test.ts       - 44 tests (NEW)
+✅ CostOptimization.test.ts       - 44 tests
+✅ ToolValidation.test.ts         - 34 tests (NEW)
+✅ ResourceLayer.test.ts          - 19 tests
 
-TOTAL: 505+ tests passing
+TOTAL: 577+ tests passing
 ```
 
 ## 7. ResourceRetryService Hardening
@@ -1494,19 +1496,535 @@ El sistema ahora:
 - Valida configuración antes de iniciar
 - Proporciona logs claros de errores de configuración
 
-## 24. Próximos Pasos
+## 24. Resource Layer
+
+### Objetivo
+Capa de abstracción unificada para Skills y Tools sin romper endpoints existentes.
+
+### Arquitectura
+
+```
+                    ┌─────────────────────┐
+                    │   /api/resources    │  ← NUEVO endpoint unificado
+                    └──────────┬──────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │   ResourceService   │  ← Facade sobre servicios existentes
+                    └──────────┬──────────┘
+                               │
+           ┌───────────────────┴───────────────────┐
+           │                                       │
+┌──────────▼──────────┐              ┌─────────────▼─────────────┐
+│    SkillService     │              │       ToolService         │
+│  /api/skills (sin   │              │    /api/tools (sin        │
+│     cambios)        │              │       cambios)            │
+└─────────────────────┘              └───────────────────────────┘
+```
+
+### Tipos Unificados
+
+```typescript
+type ResourceType = 'skill' | 'tool';
+
+interface BaseResource {
+  id: string;
+  type: ResourceType;
+  name: string;
+  description?: string;
+  version: string;
+  status: string;
+  path: string;
+  config?: Record<string, unknown>;
+  syncedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface SkillResource extends BaseResource {
+  type: 'skill';
+  capabilities?: string[];
+  requirements?: string[];
+}
+
+interface ToolResource extends BaseResource {
+  type: 'tool';
+  toolType: ToolType;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  executionCount: number;
+  lastExecutedAt?: number;
+}
+```
+
+### Endpoints
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/api/resources` | GET | Lista todos (skills + tools) |
+| `/api/resources/:id` | GET | Obtener recurso por ID |
+| `/api/resources/counts` | GET | Conteos por tipo |
+| `/api/resources/search?q=` | GET | Buscar por nombre |
+| `/api/resources/agent/:agentId` | GET | Recursos de un agente |
+
+**Nota**: `/api/skills` y `/api/tools` siguen funcionando sin cambios.
+
+### Archivos
+
+```
+backend/src/resources/
+├── index.ts           # Exports públicos
+├── ResourceTypes.ts   # Tipos unificados
+├── ResourceMapper.ts  # Transformación DTO → Resource
+└── ResourceService.ts # Servicio unificado
+
+backend/src/api/resources/
+├── routes.ts          # Rutas Fastify
+└── handlers.ts        # Handlers
+
+backend/tests/resources/
+└── ResourceLayer.test.ts  # 19 tests
+```
+
+### Uso
+
+```typescript
+import { getResourceService } from './resources/index.js';
+
+// Obtener todos los recursos
+const { skills, tools, total } = await getResourceService().getAllResources();
+
+// Filtrar por tipo
+const skillsOnly = await getResourceService().getResourcesByType('skill');
+
+// Buscar
+const results = await getResourceService().searchByName('parser');
+
+// Type guards
+import { isSkillResource, isToolResource } from './resources/index.js';
+if (isSkillResource(resource)) {
+  console.log(resource.capabilities);
+}
+```
+
+### Tests
+
+```
+✅ ResourceLayer.test.ts - 19 tests
+  - ResourceTypes: 7 tests
+  - ResourceMapper: 8 tests
+  - Integration: 4 tests
+```
+
+## 25. Tool Enhancement (Typed Configs & Validation)
+
+### Objetivo
+Convertir Tools en entidades de primera clase con configuraciones tipadas y validación completa.
+
+### Tipos de Tool
+
+| Tipo | Descripción | Campos Config |
+|------|-------------|---------------|
+| `script` | Scripts ejecutables (Node.js, Python, etc.) | entrypoint, runtime, envVars, timeoutMs |
+| `binary` | Ejecutables binarios | binaryPath, argsTemplate, shell |
+| `api` | Llamadas HTTP a APIs externas | method, url, headers, auth, bodyTemplate |
+
+### Configuraciones Tipadas
+
+```typescript
+// ScriptToolConfig
+interface ScriptToolConfig {
+  entrypoint?: string;      // 'index.js', 'main.py'
+  runtime?: string;         // 'node', 'python3', 'bash'
+  argsTemplate?: string;    // '--input {{input}}'
+  workingDirectory?: string;
+  envVars?: Record<string, string>;
+  timeoutMs?: number;       // default: 30000
+  captureStderr?: boolean;  // default: true
+}
+
+// BinaryToolConfig
+interface BinaryToolConfig {
+  binaryPath?: string;      // '/usr/bin/tool'
+  argsTemplate?: string;
+  workingDirectory?: string;
+  envVars?: Record<string, string>;
+  shell?: boolean;          // default: false
+  timeoutMs?: number;
+}
+
+// ApiToolConfig
+interface ApiToolConfig {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  url?: string;
+  headers?: Record<string, string>;
+  bodyTemplate?: string;
+  queryTemplate?: Record<string, string>;
+  timeoutMs?: number;
+  followRedirects?: boolean;
+  responseType?: 'json' | 'text' | 'binary';
+  auth?: {
+    type: 'bearer' | 'basic' | 'api_key';
+    value?: string;
+    headerName?: string;  // Para api_key
+  };
+}
+```
+
+### ToolValidationService
+
+Servicio de validación con scoring y sugerencias:
+
+```typescript
+interface ToolValidationResult {
+  valid: boolean;
+  score: number;           // 0-100
+  issues: ValidationIssue[];
+  suggestions: string[];
+}
+
+interface ValidationIssue {
+  field: string;
+  message: string;
+  severity: 'error' | 'warning' | 'info';
+  code?: string;
+}
+```
+
+### API Endpoints
+
+```
+POST /api/tools/validate              - Validar tool antes de crear
+POST /api/tools/validate-config       - Validar solo config
+POST /api/tools/:id/validate          - Validar tool existente
+```
+
+### Validaciones Realizadas
+
+| Categoría | Checks |
+|-----------|--------|
+| **Requeridos** | name, path no vacíos |
+| **Config** | Campos válidos para el tipo, sin campos desconocidos |
+| **Schemas** | inputSchema/outputSchema son JSON Schema válidos |
+| **Recomendaciones** | description, version, runtime (para scripts), url (para API) |
+
+### Frontend Tool Editor
+
+Componente `<ToolEditor>` con formularios específicos por tipo:
+
+```tsx
+<ToolEditor
+  tool={existingTool}      // undefined para crear
+  onSave={handleSave}
+  onCancel={handleCancel}
+  loading={isPending}
+/>
+```
+
+Incluye:
+- Selector de tipo con icono
+- Formulario base (name, path, description, version)
+- Formulario de config según tipo seleccionado
+- Validación en tiempo real
+- Visualización de issues y sugerencias
+
+### Archivos
+
+```
+backend/src/types/tool-config.ts           # Tipos y Zod schemas
+backend/src/services/ToolValidationService.ts  # Servicio de validación
+backend/src/api/tools/schemas.ts           # Schemas actualizados
+backend/src/api/tools/handlers.ts          # Handlers de validación
+backend/src/api/tools/routes.ts            # Rutas de validación
+
+frontend/src/types/index.ts                # Tipos de config
+frontend/src/lib/api.ts                    # API de validación
+frontend/src/components/tools/ToolEditor.tsx  # Editor con forms
+
+backend/tests/tools/ToolValidation.test.ts    # 34 tests
+```
+
+### Compatibilidad
+
+- **Backwards compatible**: Config vacío/null sigue siendo válido
+- **Flexible**: Acepta configs legacy sin tipo estricto
+- **Progresivo**: Las validaciones son warnings, no errores bloqueantes
+
+### Tests
+
+```
+✅ ToolValidation.test.ts - 34 tests
+  - Tool Config Types: 11 tests
+  - ToolValidationService: 14 tests
+  - Zod Schemas: 9 tests
+✅ SkillTools.test.ts - 19 tests (NEW)
+  - Skill Tool Link types
+  - Validation, Ordering, Duplicates
+  - Roles, Config overrides
+```
+
+## 26. Skill-Tool Composition
+
+### Objetivo
+Convertir Skills en entidades funcionales mediante composición de Tools.
+
+### Tabla skill_tools
+
+```sql
+CREATE TABLE skill_tools (
+  skill_id TEXT NOT NULL,
+  tool_id TEXT NOT NULL,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  required INTEGER NOT NULL DEFAULT 1,
+  role TEXT,
+  config TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (skill_id, tool_id)
+);
+```
+
+### Modelo SkillToolLink
+
+```typescript
+interface SkillToolLink {
+  toolId: string;
+  orderIndex: number;      // Orden de ejecución
+  required: boolean;       // Si el tool es obligatorio
+  role?: string;           // 'primary', 'fallback', 'preprocessing', etc.
+  config?: Record<string, unknown>;  // Config override para este tool
+  createdAt: number;
+}
+```
+
+### API Endpoints
+
+```
+GET    /api/skills/:id/tools         - Get linked tools
+PUT    /api/skills/:id/tools         - Replace all tools
+POST   /api/skills/:id/tools         - Add a tool
+PATCH  /api/skills/:id/tools/:toolId - Update tool link
+DELETE /api/skills/:id/tools/:toolId - Remove tool
+```
+
+### Ejemplos de Uso
+
+```bash
+# Obtener tools de una skill (con detalles expandidos)
+curl localhost:3001/api/skills/skill_123/tools?expand=tool
+
+# Asociar un tool a una skill
+curl -X POST localhost:3001/api/skills/skill_123/tools \
+  -H "Content-Type: application/json" \
+  -d '{"toolId": "tool_456", "orderIndex": 0, "required": true}'
+
+# Reemplazar todos los tools
+curl -X PUT localhost:3001/api/skills/skill_123/tools \
+  -H "Content-Type: application/json" \
+  -d '{"tools": [
+    {"toolId": "tool_1", "orderIndex": 0},
+    {"toolId": "tool_2", "orderIndex": 1, "role": "fallback"}
+  ]}'
+```
+
+### Frontend SkillEditor
+
+Componente `<SkillEditor>` con:
+
+- Formulario base (name, path, description, version, capabilities, requirements)
+- Selector de tools disponibles
+- Lista de tools asociados con drag/reorder
+- Toggle required/optional por tool
+- Campo de rol opcional
+
+### Validaciones
+
+| Validación | Descripción |
+|------------|-------------|
+| toolId existe | El tool referenciado debe existir en DB |
+| Sin duplicados | No repetir mismo tool en una skill |
+| Orden consistente | orderIndex mantiene secuencia lógica |
+| Skill vacía | Skills sin tools emiten warning (no error) |
+
+### Archivos
+
+```
+backend/src/db/schema/skillTools.ts       # Drizzle schema
+backend/src/db/index.ts                   # Migración tabla
+backend/src/types/domain.ts               # SkillToolLink, SkillToolExpanded
+backend/src/services/SkillService.ts      # Métodos skill-tool
+backend/src/api/skills/schemas.ts         # Zod schemas para API
+backend/src/api/skills/handlers.ts        # Handlers skill tools
+backend/src/api/skills/routes.ts          # Rutas skill tools
+
+frontend/src/types/index.ts               # Tipos frontend
+frontend/src/lib/api.ts                   # API client métodos
+frontend/src/components/skills/SkillEditor.tsx  # Editor con tools
+frontend/src/pages/Skills.tsx             # Página actualizada
+
+backend/tests/skills/SkillTools.test.ts   # 19 tests
+```
+
+### Compatibilidad
+
+- **Backwards compatible**: Skills sin tools siguen funcionando
+- **Incremental**: Composición es opcional, no requerida
+- **No invasivo**: No toca TaskRouter ni ejecución actual
+
+## 27. Skill Execution System
+
+Sistema de ejecución de Skills como pipelines de Tools, sin romper el flujo actual del sistema.
+
+### Arquitectura
+
+```
+POST /api/skills/:id/execute
+         ↓
+SkillExecutionService.execute()
+         ↓
+┌─────────────────────────────────┐
+│ PipelineContext                  │
+│ - executionId                    │
+│ - currentOutput (chained)        │
+│ - log entries                    │
+│ - stopOnError flag              │
+└─────────────────────────────────┘
+         ↓
+ToolInvoker.invoke() [for each tool in order]
+         ↓
+┌─────────────────────────────────┐
+│ Tool Type                        │
+│ - script: spawn(runtime, entry)  │
+│ - binary: spawn(path, args)      │
+│ - api: fetch(url, options)       │
+└─────────────────────────────────┘
+         ↓
+SkillExecutionResult
+```
+
+### Modos de Ejecución
+
+| Modo | Comportamiento |
+|------|----------------|
+| `run` | Ejecuta los tools realmente |
+| `validate` | Solo valida inputs y disponibilidad |
+| `dry_run` | Simula ejecución sin side effects |
+
+### API Endpoints
+
+```
+POST /api/skills/:id/execute
+Body: { mode, input, context, timeoutMs, stopOnError, caller }
+Response: SkillExecutionResult
+
+POST /api/skills/:id/validate-execution
+Body: { input }
+Response: SkillValidationResult
+
+GET /api/skills/:id/execution-preview
+Response: SkillExecutionPreview (pipeline, blockers, warnings)
+```
+
+### Tipos
+
+```typescript
+interface SkillExecutionResult {
+  executionId: string;
+  skillId: string;
+  skillName: string;
+  mode: 'run' | 'validate' | 'dry_run';
+  status: 'success' | 'failed' | 'cancelled';
+  toolResults: ToolExecutionResult[];
+  output?: Record<string, unknown>;
+  error?: string;
+  toolsExecuted: number;
+  toolsSucceeded: number;
+  toolsFailed: number;
+  toolsSkipped: number;
+  totalDurationMs: number;
+}
+
+interface ToolExecutionResult {
+  toolId: string;
+  toolName: string;
+  status: 'success' | 'failed' | 'skipped';
+  output?: Record<string, unknown>;
+  error?: string;
+  durationMs: number;
+  required: boolean;
+  role?: string;
+  orderIndex: number;
+}
+```
+
+### Output Chaining
+
+Los outputs se acumulan secuencialmente:
+```
+Tool 1 output: { step1: 'done', value: 10 }
+Tool 2 input:  { step1: 'done', value: 10 }  (output from Tool 1)
+Tool 2 output: { step2: 'done', result: 20 }
+Final output:  { step1: 'done', value: 10, step2: 'done', result: 20 }
+```
+
+### Error Handling
+
+| Escenario | Comportamiento |
+|-----------|----------------|
+| Required tool fails | Pipeline fails, remaining tools skipped |
+| Optional tool fails | Continue with next tool |
+| Timeout | Pipeline fails with timeout error |
+| stopOnError: false | Continue even if required tools fail |
+
+### Frontend
+
+- **SkillExecutionPanel**: Preview, validate, dry-run, execute
+- **Skills page**: Execute button (green play icon)
+- Input editor with JSON validation
+- Real-time pipeline visualization
+- Collapsible tool result details
+
+### Archivos
+
+```
+backend/src/skills/execution/
+├── index.ts                    # Exports
+├── SkillExecutionTypes.ts      # All types
+├── SkillExecutionService.ts    # Main service
+└── ToolInvoker.ts              # Tool invocation abstraction
+
+backend/src/api/skills/
+├── schemas.ts                  # ExecuteSkillSchema, ValidateExecutionSchema
+├── handlers.ts                 # executeSkill, validateExecution, getExecutionPreview
+└── routes.ts                   # Routes added
+
+frontend/src/components/skills/
+└── SkillExecutionPanel.tsx     # Execution UI
+
+backend/tests/skills/
+└── SkillExecution.test.ts      # 26 tests
+```
+
+### Compatibilidad
+
+- **No invasivo**: No modifica TaskRouter ni ejecución de agentes
+- **Independiente**: Skills se pueden ejecutar sin agentes
+- **Seguro**: Dry-run y validate para pre-validación
+
+## 28. Próximos Pasos
 
 1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
 2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada
-3. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
-4. Test integración end-to-end completo
-5. PostgreSQL si producción real
-6. Rate limiting
-7. Probar Telegram real
-8. Implementar canales adicionales (web, api)
-9. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
-10. Persistir TaskMemoryStore (historial de decisiones)
-11. UI Panel para Human Inbox
+3. ~~Tool Enhancement con typed configs~~ ✅ Completado
+4. ~~Skill-Tool Composition~~ ✅ Completado
+5. ~~Skill Execution System~~ ✅ Completado
+6. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
+7. Test integración end-to-end completo
+8. PostgreSQL si producción real
+9. Rate limiting
+10. Probar Telegram real
+11. Implementar canales adicionales (web, api)
+12. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
+13. Persistir TaskMemoryStore (historial de decisiones)
+14. UI Panel para Human Inbox
 
 ---
 

@@ -98,8 +98,9 @@ export const taskApi = {
 
 // Skill API
 export const skillApi = {
-  list: async () => {
-    const res = await api.get<DataResponse<import('../types').Skill[]>>('/skills');
+  list: async (options?: { expand?: 'toolCount' | 'tools' }) => {
+    const query = options?.expand ? `?expand=${options.expand}` : '';
+    const res = await api.get<DataResponse<import('../types').Skill[]>>(`/skills${query}`);
     return { skills: res.data };
   },
   get: async (id: string) => {
@@ -116,6 +117,51 @@ export const skillApi = {
   },
   delete: (id: string) => api.delete(`/skills/${id}`),
   // sync: () => api.post('/skills/sync'), // TODO: Backend route not implemented
+
+  // Skill-Tool composition
+  getTools: async (id: string, expand?: boolean) => {
+    const query = expand ? '?expand=tool' : '';
+    const res = await api.get<DataResponse<import('../types').SkillToolLink[] | import('../types').SkillToolExpanded[]>>(`/skills/${id}/tools${query}`);
+    return res.data;
+  },
+  getToolsExpanded: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').SkillToolExpanded[]>>(`/skills/${id}/tools?expand=tool`);
+    return res.data;
+  },
+  setTools: async (id: string, tools: Array<{ toolId: string; orderIndex?: number; required?: boolean; role?: string; config?: Record<string, unknown> }>) => {
+    const res = await api.put<DataResponse<import('../types').SkillToolLink[]>>(`/skills/${id}/tools`, { tools });
+    return res.data;
+  },
+  addTool: async (id: string, data: { toolId: string; orderIndex?: number; required?: boolean; role?: string; config?: Record<string, unknown> }) => {
+    const res = await api.post<DataResponse<import('../types').SkillToolLink>>(`/skills/${id}/tools`, data);
+    return res.data;
+  },
+  updateToolLink: async (skillId: string, toolId: string, data: { orderIndex?: number; required?: boolean; role?: string; config?: Record<string, unknown> }) => {
+    const res = await api.patch<DataResponse<import('../types').SkillToolLink>>(`/skills/${skillId}/tools/${toolId}`, data);
+    return res.data;
+  },
+  removeTool: (skillId: string, toolId: string) => api.delete(`/skills/${skillId}/tools/${toolId}`),
+
+  // Skill Execution
+  execute: async (id: string, options?: {
+    mode?: import('../types').ExecutionMode;
+    input?: Record<string, unknown>;
+    context?: Record<string, unknown>;
+    timeoutMs?: number;
+    stopOnError?: boolean;
+    caller?: { type: 'agent' | 'user' | 'system'; id: string; name?: string };
+  }) => {
+    const res = await api.post<DataResponse<import('../types').SkillExecutionResult>>(`/skills/${id}/execute`, options || {});
+    return res.data;
+  },
+  validateExecution: async (id: string, input?: Record<string, unknown>) => {
+    const res = await api.post<DataResponse<import('../types').SkillValidationResult>>(`/skills/${id}/validate-execution`, { input });
+    return res.data;
+  },
+  getExecutionPreview: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').SkillExecutionPreview>>(`/skills/${id}/execution-preview`);
+    return res.data;
+  },
 };
 
 // Tool API
@@ -137,6 +183,19 @@ export const toolApi = {
     return res.data;
   },
   delete: (id: string) => api.delete(`/tools/${id}`),
+  // Validation endpoints
+  validate: async (data: Partial<import('../types').Tool>) => {
+    const res = await api.post<DataResponse<import('../types').ToolValidationResult>>('/tools/validate', data);
+    return res.data;
+  },
+  validateExisting: async (id: string) => {
+    const res = await api.post<DataResponse<import('../types').ToolValidationResult & { toolId: string; toolName: string }>>(`/tools/${id}/validate`);
+    return res.data;
+  },
+  validateConfig: async (type: import('../types').ToolType, config: unknown) => {
+    const res = await api.post<DataResponse<{ valid: boolean; config?: unknown; errors?: string[] }>>('/tools/validate-config', { type, config });
+    return res.data;
+  },
 };
 
 // Generation API

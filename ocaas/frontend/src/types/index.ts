@@ -15,6 +15,60 @@ export type SkillStatus = 'active' | 'inactive' | 'deprecated';
 export type ToolType = 'script' | 'binary' | 'api';
 export type ToolStatus = 'active' | 'inactive' | 'deprecated';
 
+// Tool config types by tool type
+export interface ScriptToolConfig {
+  entrypoint?: string;
+  runtime?: string;
+  argsTemplate?: string;
+  workingDirectory?: string;
+  envVars?: Record<string, string>;
+  timeoutMs?: number;
+  captureStderr?: boolean;
+}
+
+export interface BinaryToolConfig {
+  binaryPath?: string;
+  argsTemplate?: string;
+  workingDirectory?: string;
+  envVars?: Record<string, string>;
+  timeoutMs?: number;
+  shell?: boolean;
+}
+
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+export interface ApiToolConfig {
+  method?: HttpMethod;
+  url?: string;
+  headers?: Record<string, string>;
+  bodyTemplate?: string;
+  queryTemplate?: Record<string, string>;
+  timeoutMs?: number;
+  followRedirects?: boolean;
+  responseType?: 'json' | 'text' | 'binary';
+  auth?: {
+    type: 'bearer' | 'basic' | 'api_key';
+    value?: string;
+    headerName?: string;
+  };
+}
+
+export type ToolConfig = ScriptToolConfig | BinaryToolConfig | ApiToolConfig;
+
+// Validation result types
+export interface ToolValidationIssue {
+  field: string;
+  message: string;
+  severity: 'error' | 'warning' | 'info';
+}
+
+export interface ToolValidationResult {
+  valid: boolean;
+  score: number;
+  issues: ToolValidationIssue[];
+  suggestions: string[];
+}
+
 export type GenerationStatus = 'draft' | 'generated' | 'pending_approval' | 'approved' | 'rejected' | 'active' | 'failed';
 export type GenerationType = 'agent' | 'skill' | 'tool';
 
@@ -56,6 +110,25 @@ export interface Task {
   updatedAt: number;
 }
 
+/**
+ * Skill-Tool link representing a tool associated with a skill
+ */
+export interface SkillToolLink {
+  toolId: string;
+  orderIndex: number;
+  required: boolean;
+  role?: string;
+  config?: Record<string, unknown>;
+  createdAt: number;
+}
+
+/**
+ * Skill-Tool link with expanded tool details
+ */
+export interface SkillToolExpanded extends SkillToolLink {
+  tool: Tool;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -66,6 +139,9 @@ export interface Skill {
   capabilities?: string[];
   requirements?: string[];
   config?: Record<string, unknown>;
+  // Tool composition (optional - populated when requested)
+  linkedTools?: SkillToolLink[];
+  toolCount?: number;
   syncedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -257,4 +333,77 @@ export interface SystemEvent {
   resourceId?: string;
   data?: Record<string, unknown>;
   createdAt: number;
+}
+
+// =============================================================================
+// SKILL EXECUTION TYPES
+// =============================================================================
+
+export type ExecutionMode = 'run' | 'validate' | 'dry_run';
+export type ExecutionStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'cancelled';
+
+export interface ToolExecutionResult {
+  toolId: string;
+  toolName: string;
+  status: ExecutionStatus;
+  output?: Record<string, unknown>;
+  error?: string;
+  errorStack?: string;
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+  required: boolean;
+  role?: string;
+  orderIndex: number;
+}
+
+export interface SkillExecutionResult {
+  executionId: string;
+  skillId: string;
+  skillName: string;
+  mode: ExecutionMode;
+  status: ExecutionStatus;
+  toolResults: ToolExecutionResult[];
+  output?: Record<string, unknown>;
+  error?: string;
+  toolsExecuted: number;
+  toolsSucceeded: number;
+  toolsFailed: number;
+  toolsSkipped: number;
+  totalDurationMs: number;
+  startedAt: number;
+  completedAt: number;
+  caller?: {
+    type: 'agent' | 'user' | 'system';
+    id: string;
+    name?: string;
+  };
+}
+
+export interface SkillExecutionPreview {
+  skillId: string;
+  skillName: string;
+  canExecute: boolean;
+  blockers: string[];
+  warnings: string[];
+  pipeline: {
+    orderIndex: number;
+    toolId: string;
+    toolName: string;
+    toolType: string;
+    required: boolean;
+    role?: string;
+    status: 'active' | 'inactive' | 'deprecated' | 'missing';
+    estimatedDurationMs?: number;
+  }[];
+  estimatedTotalDurationMs?: number;
+}
+
+export interface SkillValidationResult {
+  valid: boolean;
+  skillId: string;
+  errors: { code: string; message: string; toolId?: string; field?: string }[];
+  warnings: { code: string; message: string; toolId?: string; field?: string }[];
+  toolsChecked: number;
+  toolsWithIssues: number;
 }

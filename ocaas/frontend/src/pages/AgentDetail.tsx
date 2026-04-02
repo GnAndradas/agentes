@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Power, PowerOff, Trash2 } from 'lucide-react';
+import { ArrowLeft, Power, PowerOff, Trash2, Edit2 } from 'lucide-react';
 import { agentApi, taskApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -14,8 +15,19 @@ import {
   TableRow,
   TableHeader,
   TableCell,
+  Modal,
+  Input,
+  Textarea,
+  Select,
 } from '../components/ui';
 import { fromTimestamp } from '../lib/date';
+import type { Agent } from '../types';
+
+const typeOptions = [
+  { value: 'general', label: 'General' },
+  { value: 'specialist', label: 'Specialist' },
+  { value: 'orchestrator', label: 'Orchestrator' },
+];
 
 const statusVariant = {
   active: 'active',
@@ -39,6 +51,13 @@ export function AgentDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
+  const [showEdit, setShowEdit] = useState(false);
+  const [form, setForm] = useState({
+    name: '',
+    description: '',
+    type: 'general',
+    capabilities: '',
+  });
 
   const { data: agent, isLoading } = useQuery({
     queryKey: ['agents', id],
@@ -74,7 +93,47 @@ export function AgentDetail() {
       addNotification({ type: 'success', title: 'Agent deleted' });
       navigate('/agents');
     },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to delete agent', message: err.message });
+    },
   });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: Partial<Agent>) => agentApi.update(id!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', id] });
+      setShowEdit(false);
+      addNotification({ type: 'success', title: 'Agent updated' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to update agent', message: err.message });
+    },
+  });
+
+  const handleEdit = () => {
+    if (!agent) return;
+    setForm({
+      name: agent.name,
+      description: agent.description ?? '',
+      type: agent.type,
+      capabilities: agent.capabilities?.join(', ') ?? '',
+    });
+    setShowEdit(true);
+  };
+
+  const handleUpdate = (e: React.FormEvent) => {
+    e.preventDefault();
+    const capabilities = form.capabilities
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    updateMutation.mutate({
+      name: form.name,
+      description: form.description,
+      type: form.type as Agent['type'],
+      capabilities,
+    });
+  };
 
   if (isLoading) {
     return <div className="text-center py-8 text-dark-400">Loading...</div>;
@@ -101,6 +160,13 @@ export function AgentDetail() {
           <p className="text-dark-400">{agent.description}</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={handleEdit}
+          >
+            <Edit2 className="w-4 h-4" />
+            Edit
+          </Button>
           {agent.status === 'active' ? (
             <Button
               variant="secondary"
@@ -208,6 +274,53 @@ export function AgentDetail() {
           </Table>
         )}
       </Card>
+
+      {/* Edit Modal */}
+      <Modal
+        isOpen={showEdit}
+        onClose={() => setShowEdit(false)}
+        title={`Edit Agent: ${agent.name}`}
+        size="lg"
+      >
+        <form onSubmit={handleUpdate} className="space-y-4">
+          <Input
+            label="Name"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            required
+          />
+          <Textarea
+            label="Description"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+          <Select
+            label="Type"
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+            options={typeOptions}
+          />
+          <Input
+            label="Capabilities"
+            value={form.capabilities}
+            onChange={(e) => setForm({ ...form, capabilities: e.target.value })}
+            placeholder="coding, research, analysis"
+          />
+          <p className="text-dark-500 text-xs -mt-2">Comma-separated list</p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setShowEdit(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" loading={updateMutation.isPending}>
+              Save Changes
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

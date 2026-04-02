@@ -2009,22 +2009,69 @@ backend/tests/skills/
 - **Independiente**: Skills se pueden ejecutar sin agentes
 - **Seguro**: Dry-run y validate para pre-validación
 
-## 28. Próximos Pasos
+## 28. Frontend ↔ Backend Integration Fix
+
+Corrección de desalineación entre frontend y backend.
+
+### Problemas Corregidos
+
+| Problema | Causa | Solución |
+|----------|-------|----------|
+| `POST /api/tools/validate` 404 | Rutas estáticas después de parametrizadas | Reordenar en routes.ts |
+| `POST /api/tools/:id/validate` 404 | Mismo problema de orden | Rutas estáticas primero |
+| Editar Agent falla | No había UI de edición | Añadir modal Edit en Agents.tsx |
+| Delete Agent 400 | Faltaba manejo de error en frontend | Añadir onError handler |
+
+### Orden Correcto de Rutas Fastify
+
+```typescript
+// IMPORTANTE: Rutas estáticas ANTES de parametrizadas
+fastify.post('/validate', h.validateNew);      // ✅ Primero
+fastify.post('/validate-config', h.validateConfig);
+fastify.get('/:id', h.get);                    // Después
+fastify.post('/:id/validate', h.validateExisting);
+```
+
+### Archivos Modificados
+
+```
+backend/src/api/tools/routes.ts     # Reordenar rutas
+frontend/src/pages/Agents.tsx       # Añadir edición
+frontend/src/pages/AgentDetail.tsx  # Añadir edición
+backend/tests/integration/APIIntegration.test.ts  # 19 tests
+```
+
+### Operaciones UI Funcionando
+
+| Operación | Página | Endpoint |
+|-----------|--------|----------|
+| Crear Agent | /agents | POST /api/agents |
+| Editar Agent | /agents, /agents/:id | PATCH /api/agents/:id |
+| Activar Agent | /agents, /agents/:id | POST /api/agents/:id/activate |
+| Desactivar Agent | /agents, /agents/:id | POST /api/agents/:id/deactivate |
+| Borrar Agent | /agents, /agents/:id | DELETE /api/agents/:id |
+| Cargar Skill Tools | SkillEditor | GET /api/skills/:id/tools?expand=tool |
+| Guardar Skill Tools | SkillEditor | PUT /api/skills/:id/tools |
+| Validar Tool | ToolEditor | POST /api/tools/validate |
+| Validar Tool existente | ToolEditor | POST /api/tools/:id/validate |
+
+## 29. Próximos Pasos
 
 1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
 2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada
 3. ~~Tool Enhancement con typed configs~~ ✅ Completado
 4. ~~Skill-Tool Composition~~ ✅ Completado
 5. ~~Skill Execution System~~ ✅ Completado
-6. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
-7. Test integración end-to-end completo
-8. PostgreSQL si producción real
-9. Rate limiting
-10. Probar Telegram real
-11. Implementar canales adicionales (web, api)
-12. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
-13. Persistir TaskMemoryStore (historial de decisiones)
-14. UI Panel para Human Inbox
+6. ~~Frontend ↔ Backend Integration Fix~~ ✅ Completado
+7. Integrar OrganizationalPolicyService con DecisionEngine/TaskRouter
+8. Test integración end-to-end completo
+9. PostgreSQL si producción real
+10. Rate limiting
+11. Probar Telegram real
+12. Implementar canales adicionales (web, api)
+13. Persistir AgentHierarchyStore y WorkProfileStore (configuración org)
+14. Persistir TaskMemoryStore (historial de decisiones)
+15. UI Panel para Human Inbox
 
 ---
 

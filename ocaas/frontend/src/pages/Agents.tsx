@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Bot, Power, PowerOff, Trash2 } from 'lucide-react';
+import { Plus, Bot, Power, PowerOff, Trash2, Edit2 } from 'lucide-react';
 import { agentApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -41,10 +41,12 @@ export function Agents() {
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
   const [showCreate, setShowCreate] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [form, setForm] = useState({
     name: '',
     description: '',
     type: 'general',
+    capabilities: '',
   });
 
   const { data, isLoading } = useQuery({
@@ -57,11 +59,23 @@ export function Agents() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', type: 'general' });
+      setForm({ name: '', description: '', type: 'general', capabilities: '' });
       addNotification({ type: 'success', title: 'Agent created' });
     },
     onError: (err: Error) => {
       addNotification({ type: 'error', title: 'Failed to create agent', message: err.message });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<Agent> }) => agentApi.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      setEditingAgent(null);
+      addNotification({ type: 'success', title: 'Agent updated' });
+    },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to update agent', message: err.message });
     },
   });
 
@@ -87,16 +101,51 @@ export function Agents() {
       queryClient.invalidateQueries({ queryKey: ['agents'] });
       addNotification({ type: 'success', title: 'Agent deleted' });
     },
+    onError: (err: Error) => {
+      addNotification({ type: 'error', title: 'Failed to delete agent', message: err.message });
+    },
   });
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
+    const capabilities = form.capabilities
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
     createMutation.mutate({
       name: form.name,
       description: form.description,
       type: form.type as Agent['type'],
-      capabilities: [],
+      capabilities,
       config: {},
+    });
+  };
+
+  const handleEdit = (agent: Agent) => {
+    setEditingAgent(agent);
+    setForm({
+      name: agent.name,
+      description: agent.description ?? '',
+      type: agent.type,
+      capabilities: agent.capabilities?.join(', ') ?? '',
+    });
+  };
+
+  const handleUpdate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAgent) return;
+    const capabilities = form.capabilities
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    updateMutation.mutate({
+      id: editingAgent.id,
+      data: {
+        name: form.name,
+        description: form.description,
+        type: form.type as Agent['type'],
+        capabilities,
+      },
     });
   };
 
@@ -170,6 +219,17 @@ export function Agents() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEdit(agent);
+                        }}
+                        title="Edit agent"
+                      >
+                        <Edit2 className="w-4 h-4 text-dark-400" />
+                      </Button>
                       {agent.status === 'active' ? (
                         <Button
                           variant="ghost"
@@ -178,6 +238,7 @@ export function Agents() {
                             e.stopPropagation();
                             deactivateMutation.mutate(agent.id);
                           }}
+                          title="Deactivate agent"
                         >
                           <PowerOff className="w-4 h-4" />
                         </Button>
@@ -189,6 +250,7 @@ export function Agents() {
                             e.stopPropagation();
                             activateMutation.mutate(agent.id);
                           }}
+                          title="Activate agent"
                         >
                           <Power className="w-4 h-4" />
                         </Button>
@@ -202,6 +264,7 @@ export function Agents() {
                             deleteMutation.mutate(agent.id);
                           }
                         }}
+                        title="Delete agent"
                       >
                         <Trash2 className="w-4 h-4 text-red-400" />
                       </Button>
@@ -214,6 +277,7 @@ export function Agents() {
         )}
       </Card>
 
+      {/* Create Modal */}
       <Modal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
@@ -231,7 +295,6 @@ export function Agents() {
             label="Description"
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
-            required
           />
           <Select
             label="Type"
@@ -239,6 +302,13 @@ export function Agents() {
             onChange={(e) => setForm({ ...form, type: e.target.value })}
             options={typeOptions}
           />
+          <Input
+            label="Capabilities"
+            value={form.capabilities}
+            onChange={(e) => setForm({ ...form, capabilities: e.target.value })}
+            placeholder="coding, research, analysis"
+          />
+          <p className="text-dark-500 text-xs -mt-2">Comma-separated list</p>
           <div className="flex justify-end gap-3 pt-4">
             <Button
               type="button"
@@ -249,6 +319,53 @@ export function Agents() {
             </Button>
             <Button type="submit" loading={createMutation.isPending}>
               Create
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal
+        isOpen={!!editingAgent}
+        onClose={() => setEditingAgent(null)}
+        title={`Edit Agent: ${editingAgent?.name}`}
+        size="lg"
+      >
+        <form onSubmit={handleUpdate} className="space-y-4">
+          <Input
+            label="Name"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            required
+          />
+          <Textarea
+            label="Description"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+          <Select
+            label="Type"
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+            options={typeOptions}
+          />
+          <Input
+            label="Capabilities"
+            value={form.capabilities}
+            onChange={(e) => setForm({ ...form, capabilities: e.target.value })}
+            placeholder="coding, research, analysis"
+          />
+          <p className="text-dark-500 text-xs -mt-2">Comma-separated list</p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setEditingAgent(null)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" loading={updateMutation.isPending}>
+              Save Changes
             </Button>
           </div>
         </form>

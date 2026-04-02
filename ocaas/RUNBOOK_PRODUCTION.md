@@ -2038,7 +2038,66 @@ En la página de Skills, cada skill activa con tools tiene un botón verde de "E
 4. Validate → Dry Run → Execute
 5. Ver resultados expandibles por tool
 
-## 24. Notas finales de operación
+## 24. Frontend ↔ Backend Integration
+
+### Orden Correcto de Rutas
+
+IMPORTANTE: En Fastify, las rutas estáticas deben definirse ANTES de las parametrizadas.
+
+```typescript
+// ✅ CORRECTO
+fastify.post('/validate', h.validateNew);       // Ruta estática primero
+fastify.get('/:id', h.get);                     // Rutas parametrizadas después
+
+// ❌ INCORRECTO
+fastify.get('/:id', h.get);                     // "validate" se trata como :id
+fastify.post('/validate', h.validateNew);       // Esta ruta nunca se alcanza
+```
+
+### API Endpoints Principales
+
+**Agents:**
+```bash
+GET /api/agents                     # Listar agents
+POST /api/agents                    # Crear agent
+PATCH /api/agents/:id               # Actualizar agent
+DELETE /api/agents/:id              # Borrar agent
+POST /api/agents/:id/activate       # Activar agent
+POST /api/agents/:id/deactivate     # Desactivar agent
+```
+
+**Skills con Tools:**
+```bash
+GET /api/skills/:id/tools           # Listar tools de skill
+GET /api/skills/:id/tools?expand=tool  # Con detalles de tool
+PUT /api/skills/:id/tools           # Reemplazar todos los tools
+POST /api/skills/:id/tools          # Añadir tool
+PATCH /api/skills/:id/tools/:toolId # Actualizar link
+DELETE /api/skills/:id/tools/:toolId  # Quitar tool
+```
+
+**Tool Validation:**
+```bash
+POST /api/tools/validate            # Validar sin guardar
+POST /api/tools/validate-config     # Validar solo config
+POST /api/tools/:id/validate        # Validar tool existente
+```
+
+### Troubleshooting
+
+```bash
+# Verificar que las rutas responden
+curl localhost:3001/api/agents | jq '.data | length'
+curl -X POST localhost:3001/api/tools/validate \
+  -H "Content-Type: application/json" \
+  -d '{"name":"test","path":"/test","type":"script"}' | jq
+
+# Si /api/tools/validate devuelve 404
+# → Verificar orden de rutas en backend/src/api/tools/routes.ts
+# → Las rutas estáticas deben ir ANTES de las parametrizadas
+```
+
+## 25. Notas finales de operación
 
 - Ejecutar siempre como usuario no root
 - Mantener permisos mínimos necesarios

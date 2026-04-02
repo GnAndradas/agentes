@@ -13,6 +13,7 @@
     "dev:backend": "npm run dev -w backend",
     "dev:frontend": "npm run dev -w frontend",
     "build": "npm run build -w backend && npm run build -w frontend",
+    "build:check": "bash scripts/check-build-sync.sh",
     "start": "npm run start -w backend",
     "db:generate": "npm run db:generate -w backend",
     "db:push": "npm run db:push -w backend",

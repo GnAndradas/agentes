@@ -29,7 +29,14 @@
       "Bash(done)",
       "Bash(while read f)",
       "Bash(do grep -q '$(basename $f .ts)' src/api/index.ts src/index.ts src/services/index.ts)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "Bash(npm rebuild:*)",
+      "Bash(node --version:*)",
+      "Bash(nvm list)",
+      "Bash(cmd.exe /c \"nvm list\")",
+      "Bash(npm cache clean:*)",
+      "Bash(timeout 10 npm start)"
     ],
     "deny": [],
     "ask": []

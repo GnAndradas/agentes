@@ -2055,7 +2055,82 @@ backend/tests/integration/APIIntegration.test.ts  # 19 tests
 | Validar Tool | ToolEditor | POST /api/tools/validate |
 | Validar Tool existente | ToolEditor | POST /api/tools/:id/validate |
 
-## 29. Próximos Pasos
+## 29. Source/Build Sync Diagnostic (2026-04-02)
+
+### Problema Identificado
+
+Errores 404/400 en runtime a pesar de que el source code contenía las rutas correctas.
+
+### Causa Raíz
+
+**Desalineación source vs dist**: El TypeScript source estaba actualizado pero `npm run build` no se había ejecutado, resultando en JavaScript compilado obsoleto.
+
+| Archivo | Source Modificado | Dist Modificado | Estado |
+|---------|-------------------|-----------------|--------|
+| `backend/src/api/tools/routes.ts` | 2026-04-02 02:43 | 2026-04-01 12:48 | **STALE** |
+| `frontend/src/pages/Agents.tsx` | 2026-04-02 02:47 | mar 31 | **STALE** |
+
+### Evidencia del Problema
+
+El dist contenía código viejo sin las rutas de validación:
+
+```javascript
+// dist/api/tools/routes.js (ANTES de rebuild)
+fastify.get('/', h.list);
+fastify.get('/:id', h.get);
+fastify.post('/', h.create);
+// ... NO había /validate ni /validate-config
+```
+
+### Solución Aplicada
+
+1. **Rebuild backend**: `cd backend && npm run build`
+2. **Rebuild frontend**: `cd frontend && npm run build`
+3. **Script de verificación**: `scripts/check-build-sync.sh`
+4. **npm script**: `npm run build:check`
+
+### Script check-build-sync.sh
+
+```bash
+#!/bin/bash
+# Verifica si source es más nuevo que dist
+
+# Backend: compara newest .ts vs oldest .js
+# Frontend: compara newest source vs main bundle
+
+# Exit codes:
+# 0 = Sync OK
+# 1 = Rebuild needed
+```
+
+### Uso
+
+```bash
+# Verificar antes de deploy
+npm run build:check
+
+# Output si hay problema:
+# ✗ Backend dist is STALE
+# Run: cd backend && npm run build
+```
+
+### Bloqueo Runtime Actual
+
+El backend no puede iniciar por problema de **dependencias nativas** (mejor-sqlite3):
+- Node.js v24.11.1 es muy nuevo
+- No hay binarios precompilados
+- Visual Studio no instalado para compilar
+
+**Solución**: Usar Node.js LTS (v20.x o v22.x) o instalar Visual Studio Build Tools.
+
+### Lecciones Aprendidas
+
+1. **Siempre rebuild después de cambios**: `npm run build` en monorepo
+2. **Verificar dist dates**: Si errores 404, comparar timestamps
+3. **Script de pre-deploy**: Automatizar verificación source/build
+4. **CI/CD**: Añadir step de build:check en pipeline
+
+## 30. Próximos Pasos
 
 1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
 2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada

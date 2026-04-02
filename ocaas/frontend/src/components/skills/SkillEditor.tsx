@@ -324,7 +324,6 @@ export function SkillEditor({ skill, onSave, onCancel, loading }: SkillEditorPro
       orderIndex: i,
       required: t.required,
       role: t.role || undefined,
-      createdAt: Date.now(),
     }));
 
     onSave(skillData, toolLinks.length > 0 ? toolLinks : undefined);

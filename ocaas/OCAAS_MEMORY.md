@@ -2130,7 +2130,89 @@ El backend no puede iniciar por problema de **dependencias nativas** (mejor-sqli
 3. **Script de pre-deploy**: Automatizar verificación source/build
 4. **CI/CD**: Añadir step de build:check en pipeline
 
-## 30. Próximos Pasos
+## 30. Auditoría de Alineación Frontend↔Backend (2026-04-02)
+
+### Estado Final del Source
+
+Auditoría exhaustiva realizada. El source está **100% alineado** entre frontend y backend.
+
+### Matriz de Alineación
+
+#### Agents
+| Operación | Frontend | Backend | Estado |
+|-----------|----------|---------|--------|
+| Listar | `GET /agents` | ✅ | ALINEADO |
+| Crear | `POST /agents` | ✅ | ALINEADO |
+| Editar | `PATCH /agents/:id` | ✅ | ALINEADO (sin status) |
+| Eliminar | `DELETE /agents/:id` | ✅ | ALINEADO |
+| Activar | `POST /agents/:id/activate` | ✅ | ALINEADO |
+| Desactivar | `POST /agents/:id/deactivate` | ✅ | ALINEADO |
+
+**Nota**: `PATCH /agents/:id` NO soporta `status` intencionalmente. Cambio de estado via `/activate` y `/deactivate`.
+
+#### Skills
+| Operación | Frontend | Backend | Estado |
+|-----------|----------|---------|--------|
+| Listar | `GET /skills?expand=toolCount` | ✅ | ALINEADO |
+| Crear | `POST /skills` | ✅ | ALINEADO |
+| Editar | `PATCH /skills/:id` | ✅ | ALINEADO (incluye status) |
+| Eliminar | `DELETE /skills/:id` | ✅ | ALINEADO |
+| Cargar tools | `GET /skills/:id/tools?expand=tool` | ✅ | ALINEADO |
+| Guardar tools | `PUT /skills/:id/tools` | ✅ | ALINEADO |
+| Ejecutar | `POST /skills/:id/execute` | ✅ | ALINEADO |
+| Validar ejecución | `POST /skills/:id/validate-execution` | ✅ | ALINEADO |
+| Preview | `GET /skills/:id/execution-preview` | ✅ | ALINEADO |
+
+#### Tools
+| Operación | Frontend | Backend | Estado |
+|-----------|----------|---------|--------|
+| Listar | `GET /tools` | ✅ | ALINEADO |
+| Crear | `POST /tools` | ✅ | ALINEADO |
+| Editar | `PATCH /tools/:id` | ✅ | ALINEADO (incluye status) |
+| Eliminar | `DELETE /tools/:id` | ✅ | ALINEADO |
+| Validar nuevo | `POST /tools/validate` | ✅ | ALINEADO |
+| Validar existente | `POST /tools/:id/validate` | ✅ | ALINEADO |
+| Validar config | `POST /tools/validate-config` | ✅ | ALINEADO |
+
+### Correcciones Aplicadas en Source
+
+1. **SkillEditor.tsx**: Removido `createdAt` innecesario del payload de tools
+2. **types/index.ts**: `SkillToolLink.createdAt` ahora opcional
+
+### Tests de Contrato Añadidos
+
+- `backend/src/api/__tests__/ContractAlignment.test.ts` - 33 tests
+  - Validan schemas Zod
+  - Verifican campos soportados
+  - Comprueban compatibilidad de payloads frontend→backend
+
+### Validación Runtime Pendiente
+
+Script: `scripts/runtime-validation.sh`
+
+```bash
+# Ejecutar en Linux/macOS con backend corriendo
+./scripts/runtime-validation.sh
+
+# Verifica:
+# - Rutas responden correctamente
+# - CRUD completo de agents/skills/tools
+# - Rutas estáticas vs parametrizadas (tools/validate)
+# - Build freshness
+```
+
+### Categorización de Confirmaciones
+
+| Elemento | Confirmado en Source | Confirmado en Tests | Pendiente Runtime |
+|----------|---------------------|---------------------|-------------------|
+| Rutas backend | ✅ | ✅ | ⏳ |
+| Schemas Zod | ✅ | ✅ | - |
+| Payloads frontend | ✅ | ✅ | - |
+| Route ordering (Fastify) | ✅ | - | ⏳ |
+| Query params (expand) | ✅ | - | ⏳ |
+| Skill execution | ✅ | - | ⏳ |
+
+## 31. Próximos Pasos
 
 1. ~~Mejorar DecisionEngine con heurísticas-primero~~ ✅ Smart Decision Engine
 2. ~~Integrar SmartDecisionEngine con DecisionEngine~~ ✅ Integración completada

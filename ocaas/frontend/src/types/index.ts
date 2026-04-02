@@ -119,7 +119,7 @@ export interface SkillToolLink {
   required: boolean;
   role?: string;
   config?: Record<string, unknown>;
-  createdAt: number;
+  createdAt?: number; // Optional - backend assigns if not provided
 }
 
 /**

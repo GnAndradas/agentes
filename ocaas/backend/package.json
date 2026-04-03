@@ -12,7 +12,7 @@
     "doctor": "tsx src/bootstrap/doctor.ts",
     "smoke-test": "tsx scripts/smoke-test.ts",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
+    "db:push": "npx drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:migrate": "drizzle-kit migrate",
     "db:drop": "drizzle-kit drop",

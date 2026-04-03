@@ -102,9 +102,10 @@ export function StatusBar() {
         // Update store with REST connection status
         setGatewayConnected(status.rest.reachable && status.rest.authenticated);
         return status;
-      } catch {
+      } catch (err) {
         setGatewayConnected(false);
-        return null;
+        const isNetworkError = err instanceof TypeError && err.message.includes('fetch');
+        return { error: isNetworkError ? 'unreachable' : 'server_error' };
       }
     },
     refetchInterval: 10000, // Every 10 seconds
@@ -194,6 +195,9 @@ export function StatusBar() {
                   {backendVersion && (
                     <span className="ml-1 text-dark-500 text-[10px]">v{backendVersion}</span>
                   )}
+                  {backendCommit && (
+                    <span className="ml-1 text-dark-600 text-[10px]">{backendCommit.slice(0, 7)}</span>
+                  )}
                 </span>
               </>
             ) : (
@@ -210,7 +214,9 @@ export function StatusBar() {
             title={
               restOk
                 ? `OpenClaw REST OK (${gatewayStatus?.rest?.latencyMs ?? 0}ms)`
-                : gatewayStatus?.rest?.error || 'OpenClaw REST disconnected'
+                : gatewayStatus?.error === 'unreachable'
+                  ? 'OpenClaw unreachable (network)'
+                  : gatewayStatus?.rest?.error || 'OpenClaw REST error'
             }
           >
             {restOk ? (

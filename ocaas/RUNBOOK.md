@@ -83,23 +83,24 @@ Task → TaskRouter → OrgAwareDecision → JobDispatcher → OpenClaw → Resp
 
 ## 6. INSTALLATION
 
-**Backend:**
+**Monorepo setup (recommended):**
 ```bash
-cd ocaas/backend
-npm install
-cp .env.example .env
-npm run db:push
-npm run dev
+cd ocaas
+npm install          # installs all workspaces
+cp backend/.env.example backend/.env
+npm run db:push      # pushes schema to SQLite
+npm run dev          # starts backend + frontend concurrently
 ```
 
-**Frontend:**
+**Manual setup:**
 ```bash
-cd ocaas/frontend
-npm install
-npm run dev
+# Backend
+cd ocaas/backend && npm install && npm run db:push && npm run dev
+# Frontend (separate terminal)
+cd ocaas/frontend && npm install && npm run dev
 ```
 
-**Env (.env):**
+**Env (backend/.env):**
 ```bash
 PORT=3001
 OPENCLAW_GATEWAY_URL=http://localhost:18789
@@ -110,8 +111,7 @@ AUTONOMY_LEVEL=supervised
 
 **Startup order:**
 1. OpenClaw gateway
-2. Backend: `npm run dev`
-3. Frontend: `npm run dev`
+2. OCAAS: `npm run dev` (from root)
 
 ## 7. CRITICAL CHECKS
 
@@ -221,3 +221,17 @@ src/config/autonomy.ts → Autonomy config
 **Role hierarchy:** CEO > Manager > Supervisor > Specialist > Worker
 
 **Delegation tracking:** Task.delegationHistory[] shows A → B → C chain
+
+## 12. CLEANUP
+
+```bash
+# Stop all
+pkill -f "npm run dev" || true
+
+# Reset database
+rm -f backend/data/*.db
+npm run db:push
+
+# Full clean rebuild
+npm run clean && npm install && npm run build
+```

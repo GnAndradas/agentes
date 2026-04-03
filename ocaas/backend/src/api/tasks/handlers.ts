@@ -189,6 +189,11 @@ export async function retry(req: FastifyRequest<IdParam>, reply: FastifyReply) {
     }).where(eq(schema.tasks.id, req.params.id));
 
     const retried = await taskService.getById(req.params.id);
+
+    // Re-submit to queue for processing
+    const taskRouter = getTaskRouter();
+    await taskRouter.submit(retried);
+
     return reply.send({ data: retried });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);

@@ -36,7 +36,8 @@
       "Bash(nvm list)",
       "Bash(cmd.exe /c \"nvm list\")",
       "Bash(npm cache clean:*)",
-      "Bash(timeout 10 npm start)"
+      "Bash(timeout 10 npm start)",
+      "Bash(npm run db:push:*)"
     ],
     "deny": [],
     "ask": []

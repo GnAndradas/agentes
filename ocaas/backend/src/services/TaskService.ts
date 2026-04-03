@@ -307,7 +307,19 @@ export class TaskService {
   }
 
   async queue(id: string): Promise<TaskDTO> {
+    const task = await this.getById(id);
     const now = nowTimestamp();
+
+    // Validate state transition
+    if (!isValidTransition(task.status, TASK_STATUS.QUEUED)) {
+      logger.warn({
+        taskId: id,
+        fromStatus: task.status,
+        toStatus: TASK_STATUS.QUEUED,
+      }, 'Invalid state transition attempted');
+      throw new Error(`Invalid state transition: ${task.status} → ${TASK_STATUS.QUEUED}`);
+    }
+
     await db.update(schema.tasks).set({
       status: TASK_STATUS.QUEUED,
       updatedAt: now,

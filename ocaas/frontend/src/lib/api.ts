@@ -483,7 +483,7 @@ export const orgApi = {
     await api.delete(`/org/hierarchy/${agentId}`);
   },
   getEscalationChain: async (agentId: string) => {
-    const res = await api.get<DataResponse<Array<{ agentId: string; roleType: import('../types').RoleType }>>>(`/org/hierarchy/${agentId}/escalation`);
+    const res = await api.get<DataResponse<Array<{ agentId: string; roleType: import('../types').RoleType }>>>(`/org/hierarchy/${agentId}/escalation-chain`);
     return res.data;
   },
   getSubordinates: async (agentId: string) => {
@@ -491,7 +491,7 @@ export const orgApi = {
     return res.data;
   },
   getEffectivePolicies: async (agentId: string) => {
-    const res = await api.get<DataResponse<import('../types').EffectivePolicies>>(`/org/policies/${agentId}/effective`);
+    const res = await api.get<DataResponse<import('../types').EffectivePolicies>>(`/org/policies/agent/${agentId}`);
     return res.data;
   },
 };

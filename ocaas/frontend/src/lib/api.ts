@@ -3,18 +3,29 @@ const API_BASE = '/api';
 // Response wrapper type from backend
 type DataResponse<T> = { data: T };
 
+interface RequestOptions extends Omit<RequestInit, 'body'> {
+  jsonBody?: unknown;
+}
+
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestOptions = {}
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
+  const { jsonBody, ...rest } = options;
+
+  const headers: Record<string, string> = { ...(rest.headers as Record<string, string> || {}) };
+  let body: string | undefined;
+
+  if (jsonBody !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(jsonBody);
+  }
 
   const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    ...rest,
+    headers,
+    body,
   });
 
   if (!response.ok) {
@@ -22,18 +33,14 @@ async function request<T>(
     throw new Error(error.message || error.error || 'Request failed');
   }
 
-  // Handle 204 No Content - don't try to parse JSON
+  // Handle 204 No Content
   if (response.status === 204) {
     return undefined as T;
   }
 
-  // Handle empty responses (Content-Length: 0)
-  const contentLength = response.headers.get('content-length');
-  if (contentLength === '0') {
-    return undefined as T;
-  }
-
-  return response.json();
+  // Safe JSON parsing
+  const text = await response.text();
+  return text ? JSON.parse(text) : (undefined as T);
 }
 
 export const api = {
@@ -42,19 +49,19 @@ export const api = {
   post: <T>(endpoint: string, data?: unknown) =>
     request<T>(endpoint, {
       method: 'POST',
-      body: JSON.stringify(data ?? {}),
+      jsonBody: data ?? {},
     }),
 
   put: <T>(endpoint: string, data: unknown) =>
     request<T>(endpoint, {
       method: 'PUT',
-      body: JSON.stringify(data),
+      jsonBody: data,
     }),
 
   patch: <T>(endpoint: string, data: unknown) =>
     request<T>(endpoint, {
       method: 'PATCH',
-      body: JSON.stringify(data),
+      jsonBody: data,
     }),
 
   delete: <T>(endpoint: string) =>

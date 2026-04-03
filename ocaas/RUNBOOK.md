@@ -83,22 +83,24 @@ Task → TaskRouter → OrgAwareDecision → JobDispatcher → OpenClaw → Resp
 
 ## 6. INSTALLATION
 
-**Monorepo setup (recommended):**
+**Backend-first setup (recommended):**
 ```bash
-cd ocaas
-npm install          # installs all workspaces
-cp backend/.env.example backend/.env
-npm run db:push      # pushes schema to SQLite
-npm run dev          # starts backend + frontend concurrently
+cd ocaas/backend
+npm install
+cp .env.example .env
+npx drizzle-kit push || echo "db:push failed (non-blocking, runtime init handles tables)"
+npm run dev
 ```
 
-**Manual setup:**
+**Frontend (separate terminal):**
 ```bash
-# Backend
-cd ocaas/backend && npm install && npm run db:push && npm run dev
-# Frontend (separate terminal)
-cd ocaas/frontend && npm install && npm run dev
+cd ocaas/frontend
+npm install
+npm run dev
 ```
+
+> **Note:** Do not run backend commands from monorepo root for initial setup.
+> db:push is optional if initDatabase creates required tables at runtime.
 
 **Env (backend/.env):**
 ```bash
@@ -111,7 +113,8 @@ AUTONOMY_LEVEL=supervised
 
 **Startup order:**
 1. OpenClaw gateway
-2. OCAAS: `npm run dev` (from root)
+2. Backend: `npm run dev` (from backend/)
+3. Frontend: `npm run dev` (from frontend/)
 
 ## 7. CRITICAL CHECKS
 
@@ -222,16 +225,52 @@ src/config/autonomy.ts → Autonomy config
 
 **Delegation tracking:** Task.delegationHistory[] shows A → B → C chain
 
-## 12. CLEANUP
+## 12. OLD INSTALLATION CLEANUP (CRITICAL)
 
+**Check if port 3001 is in use:**
+
+Linux/Mac:
 ```bash
-# Stop all
-pkill -f "npm run dev" || true
+lsof -i :3001
+ps -fp <pid>
+kill -9 <pid>
+```
 
-# Reset database
-rm -f backend/data/*.db
-npm run db:push
+If using systemd:
+```bash
+systemctl status ocaas
+sudo systemctl stop ocaas
+sudo systemctl disable ocaas
+```
 
-# Full clean rebuild
+Windows:
+```bash
+netstat -ano | findstr :3001
+taskkill /PID <pid> /F
+```
+
+> **Important:** If frontend shows errors after update, verify backend process is the correct version.
+
+**Reset database (safe mode):**
+```bash
+rm -f backend/data/ocaas.db
+# Runtime init handles table creation
+```
+
+**Full clean rebuild:**
+```bash
 npm run clean && npm install && npm run build
 ```
+
+## 13. VALIDATION (REQUIRED)
+
+After startup:
+```bash
+curl localhost:3001/health
+curl localhost:3001/api/system/diagnostics
+```
+
+Check:
+- `status` = `ok`
+- `healthy` = `true`
+- `commit` matches expected version

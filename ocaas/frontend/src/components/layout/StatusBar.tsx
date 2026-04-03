@@ -79,15 +79,19 @@ export function StatusBar() {
     queryFn: async () => {
       try {
         return await systemApi.health();
-      } catch {
-        return null;
+      } catch (err) {
+        if (err instanceof TypeError) {
+          return { error: 'unreachable', status: null };
+        }
+        return { error: 'server_error', status: null };
       }
     },
     refetchInterval: 10000, // Every 10 seconds
     retry: false,
   });
 
-  const backendHealthy = !!backendHealth;
+  const backendHealthy = !!backendHealth && !backendHealth?.error;
+  const backendError = backendHealth?.error as 'unreachable' | 'server_error' | undefined;
   const backendVersion = backendHealth?.version;
   const backendUptime = backendHealth?.uptime;
   const backendEnv = backendHealth?.environment;
@@ -203,7 +207,9 @@ export function StatusBar() {
             ) : (
               <>
                 <Zap className="w-3.5 h-3.5 text-red-400" />
-                <span className="text-red-400">Backend Off</span>
+                <span className="text-red-400">
+                  {backendError === 'unreachable' ? 'Backend Unreachable' : 'Backend Error'}
+                </span>
               </>
             )}
           </div>

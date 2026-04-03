@@ -92,14 +92,15 @@ npx drizzle-kit push || echo "db:push failed (non-blocking, runtime init handles
 npm run dev
 ```
 
-**Frontend (separate terminal):**
+**Frontend (separate terminal - REQUIRED):**
 ```bash
 cd ocaas/frontend
 npm install
 npm run dev
 ```
 
-> **Note:** Do not run backend commands from monorepo root for initial setup.
+> **Note:** Always run `npm install` in frontend/ after cloning or deleting node_modules.
+> Do not run backend commands from monorepo root for initial setup.
 > db:push is optional if initDatabase creates required tables at runtime.
 
 **Env (backend/.env):**
@@ -177,6 +178,7 @@ PATCH /api/system/autonomy -d '{"level":"autonomous"}'
 | OpenClaw disconnected | diagnostics.openclaw | Verify gateway URL, restart |
 | Agent not responding | `/api/agents/:id` | Check status, recreate session |
 | Approval timeout | `/api/approvals?status=pending` | Approve or change autonomy level |
+| Frontend "Cannot find @vitejs/plugin-react" | Missing node_modules | `cd frontend && npm install` |
 
 **Logs:**
 ```bash

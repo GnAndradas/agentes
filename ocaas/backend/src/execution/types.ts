@@ -173,6 +173,7 @@ export interface JobContext {
 export type JobStatus =
   | 'pending'      // Queued but not started
   | 'running'      // Currently executing
+  | 'accepted'     // Accepted by async handler (hooks_session), awaiting result via channel
   | 'completed'    // Finished successfully
   | 'failed'       // Failed with error
   | 'blocked'      // Blocked on missing resource/capability

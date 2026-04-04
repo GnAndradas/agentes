@@ -29,17 +29,19 @@ const logger = createLogger('ExecutionTraceability');
  * Real execution mode - HONEST about what actually happens
  */
 export type ExecutionMode =
-  | 'chat_completion'  // Uses /v1/chat/completions (OpenAI-compatible)
+  | 'hooks_session'    // PRIMARY: Uses /hooks/agent with sessionKey (stateful)
+  | 'chat_completion'  // FALLBACK: Uses /v1/chat/completions (stateless)
   | 'stub'             // OpenClaw not available, stub response
-  | 'real_agent';      // Would use actual OpenClaw agent (NOT IMPLEMENTED)
+  | 'real_agent';      // Would use actual OpenClaw agent (legacy, NOT IMPLEMENTED)
 
 /**
  * Execution transport used
  */
 export type ExecutionTransport =
-  | 'rest_api'         // HTTP POST to /v1/chat/completions
+  | 'hooks_agent'      // PRIMARY: HTTP POST to /hooks/agent with sessionKey
+  | 'rest_api'         // FALLBACK: HTTP POST to /v1/chat/completions
   | 'websocket_rpc'    // WebSocket RPC (for session management only)
-  | 'webhook'          // Fire-and-forget webhook
+  | 'webhook'          // Fire-and-forget webhook (notifications)
   | 'none';            // No transport (stub)
 
 // ============================================================================
@@ -59,8 +61,11 @@ export interface ExecutionTraceability {
   /** Agent ID from OCAAS */
   target_agent_id: string;
 
-  /** OpenClaw session ID (if any) */
+  /** OpenClaw session ID (if any - legacy local ID) */
   openclaw_session_id?: string;
+
+  /** Session key for hooks_session mode (hook:ocaas:task-{id} or hook:ocaas:job-{id}) */
+  session_key?: string;
 
   /** Was agent runtime_ready at execution time? */
   runtime_ready_at_execution: boolean;
@@ -134,12 +139,16 @@ export interface ExecutionModeInfo {
 /**
  * Detect actual execution mode based on gateway status
  *
- * HONEST: We always use chat_completion, never real_agent
+ * Priority:
+ * 1. hooks_session (if hooksToken configured)
+ * 2. chat_completion (fallback)
+ * 3. stub (if nothing works)
  */
 export function detectExecutionMode(
   gatewayConfigured: boolean,
   gatewayConnected: boolean,
-  wsConnected: boolean
+  wsConnected: boolean,
+  hooksConfigured: boolean = false
 ): ExecutionModeInfo {
   // Not configured at all
   if (!gatewayConfigured) {
@@ -163,14 +172,25 @@ export function detectExecutionMode(
     };
   }
 
-  // Connected - we use chat_completion (NOT real_agent)
-  // IMPORTANT: Real agent sessions are NOT implemented
+  // PRIMARY: hooks_session if hooks are configured
+  if (hooksConfigured) {
+    return {
+      mode: 'hooks_session',
+      transport: 'hooks_agent',
+      available: true,
+      reason: 'Using /hooks/agent with sessionKey (stateful session). ' +
+              'Fallback to chat_completion if hooks fail.',
+      fallback_available: true,
+    };
+  }
+
+  // FALLBACK: chat_completion
   return {
     mode: 'chat_completion',
     transport: 'rest_api',
     available: true,
-    reason: 'Using /v1/chat/completions endpoint (OpenAI-compatible). ' +
-            'Real agent sessions NOT implemented.',
+    reason: 'Using /v1/chat/completions endpoint (stateless). ' +
+            'Configure OPENCLAW_HOOKS_TOKEN for hooks_session mode.',
     fallback_available: false,
   };
 }
@@ -179,7 +199,7 @@ export function detectExecutionMode(
  * Check if execution mode is "real" (actually does something)
  */
 export function isRealExecution(mode: ExecutionMode): boolean {
-  return mode === 'chat_completion' || mode === 'real_agent';
+  return mode === 'hooks_session' || mode === 'chat_completion' || mode === 'real_agent';
 }
 
 /**
@@ -187,12 +207,14 @@ export function isRealExecution(mode: ExecutionMode): boolean {
  */
 export function getExecutionModeDescription(mode: ExecutionMode): string {
   switch (mode) {
+    case 'hooks_session':
+      return 'Hooks session via /hooks/agent with sessionKey (stateful)';
     case 'chat_completion':
-      return 'Chat completion via /v1/chat/completions (OpenAI-compatible)';
+      return 'Chat completion via /v1/chat/completions (stateless fallback)';
     case 'stub':
       return 'Stub/mock execution (OpenClaw not available)';
     case 'real_agent':
-      return 'Real OpenClaw agent session (NOT IMPLEMENTED)';
+      return 'Real OpenClaw agent session (legacy, NOT IMPLEMENTED)';
     default:
       return 'Unknown execution mode';
   }
@@ -324,9 +346,15 @@ export class ExecutionTraceabilityBuilder {
     return this;
   }
 
-  /** Set session ID */
+  /** Set session ID (legacy local) */
   sessionId(id: string): this {
     this.trace.openclaw_session_id = id;
+    return this;
+  }
+
+  /** Set session key for hooks_session mode */
+  sessionKey(key: string): this {
+    this.trace.session_key = key;
     return this;
   }
 
@@ -366,9 +394,12 @@ export class ExecutionTraceabilityBuilder {
   build(): ExecutionTraceability {
     // Add gap explanation if not set
     if (!this.trace.gap) {
-      if (this.trace.execution_mode === 'chat_completion') {
-        this.trace.gap = 'Execution uses /v1/chat/completions (OpenAI-compatible). ' +
-          'No real OpenClaw agent session created. Agent state is NOT persisted in OpenClaw.';
+      if (this.trace.execution_mode === 'hooks_session') {
+        this.trace.gap = 'Execution uses /hooks/agent with sessionKey. ' +
+          'Session state persisted in OpenClaw. Primary execution mode.';
+      } else if (this.trace.execution_mode === 'chat_completion') {
+        this.trace.gap = 'Execution uses /v1/chat/completions (stateless fallback). ' +
+          'No session state persisted. Configure OPENCLAW_HOOKS_TOKEN for hooks_session.';
       } else if (this.trace.execution_mode === 'stub') {
         this.trace.gap = 'Stub execution - no actual AI call made. ' +
           this.trace.execution_fallback_reason || 'Gateway not available.';
@@ -423,18 +454,30 @@ export interface ExecutionPoint {
  * Map of all execution points in the system
  *
  * BLOQUE 10: Honest documentation of what each point actually does
+ * Updated: hooks_session is now PRIMARY, chat_completion is FALLBACK
  */
 export const EXECUTION_POINTS: ExecutionPoint[] = [
+  {
+    name: 'OpenClawAdapter.executeViaHooks',
+    file: 'integrations/openclaw/OpenClawAdapter.ts',
+    method: 'executeViaHooks()',
+    actual_behavior: 'PRIMARY: Calls gateway.runViaHooksAgent() with sessionKey. ' +
+      'Uses /hooks/agent endpoint. Session persisted in OpenClaw.',
+    execution_mode: 'hooks_session',
+    transport: 'hooks_agent',
+    uses_real_agent: true,
+    gap: 'Session state persisted via sessionKey. Requires OPENCLAW_HOOKS_TOKEN.',
+  },
   {
     name: 'OpenClawAdapter.executeAgent',
     file: 'integrations/openclaw/OpenClawAdapter.ts',
     method: 'executeAgent()',
-    actual_behavior: 'Calls gateway.spawn() then gateway.send(). ' +
+    actual_behavior: 'FALLBACK: Calls gateway.spawn() then gateway.send(). ' +
       'spawn() creates LOCAL session ID only. send() uses /v1/chat/completions.',
     execution_mode: 'chat_completion',
     transport: 'rest_api',
     uses_real_agent: false,
-    gap: 'Session ID is LOCAL to OCAAS. No OpenClaw agent session created.',
+    gap: 'Fallback mode. Session ID is LOCAL to OCAAS. No OpenClaw session.',
   },
   {
     name: 'OpenClawAdapter.generate',

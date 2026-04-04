@@ -64,6 +64,24 @@ export class GenerationError extends AppError {
   }
 }
 
+export class BudgetExceededError extends AppError {
+  constructor(
+    message: string,
+    public scope: 'task' | 'agent_daily' | 'global_daily',
+    public currentCost: number,
+    public limit: number,
+    details?: Record<string, unknown>
+  ) {
+    super(message, 429, 'BUDGET_EXCEEDED', {
+      ...details,
+      scope,
+      currentCost,
+      limit,
+    });
+    this.name = 'BudgetExceededError';
+  }
+}
+
 export function isAppError(error: unknown): error is AppError {
   return error instanceof AppError;
 }

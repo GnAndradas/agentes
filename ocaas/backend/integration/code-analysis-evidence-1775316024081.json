@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-04-04T15:20:24.072Z",
+  "spawn_creates_local_id": true,
+  "spawn_calls_openclaw_session_endpoint": false,
+  "send_uses_chat_completions": true,
+  "send_uses_session_for_state": false,
+  "list_sessions_requires_websocket": true,
+  "execution_mode_determined": "chat_completion",
+  "code_evidence": {
+    "spawn_session_id_pattern": "ocaas-${options.agentId}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}",
+    "send_endpoint": "/v1/chat/completions",
+    "list_sessions_method": "WebSocket RPC (sessions.list)"
+  },
+  "final_verdict": "code_confirms_degraded"
+}

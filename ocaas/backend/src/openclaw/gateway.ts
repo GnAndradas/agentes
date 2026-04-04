@@ -12,6 +12,8 @@ import type {
   GenerateOptions,
   GenerateResult,
   OpenClawSession,
+  HooksAgentOptions,
+  HooksAgentResult,
 } from './types.js';
 import WebSocket from 'ws';
 
@@ -1138,6 +1140,80 @@ export class OpenClawGateway {
       logger.error({ err }, 'Failed to send notification');
       return false;
     }
+  }
+
+  /**
+   * PRIMARY EXECUTION: Run agent via /hooks/agent with sessionKey
+   *
+   * This is the main execution path for OCAAS.
+   * Uses sessionKey for stateful session management in OpenClaw.
+   *
+   * POST /hooks/agent with:
+   * - message: The prompt/task
+   * - sessionKey: Stable key like hook:ocaas:task-{taskId}
+   * - name: Agent display name
+   * - wakeMode: 'now' for immediate execution
+   * - deliver: false to get response back (vs fire-and-forget)
+   *
+   * Authentication: x-openclaw-token header
+   */
+  async runViaHooksAgent(options: HooksAgentOptions): Promise<HooksAgentResult> {
+    if (!this.hooksToken) {
+      logger.warn('Hooks token not configured, runViaHooksAgent unavailable');
+      return {
+        success: false,
+        error: 'OPENCLAW_HOOKS_TOKEN not configured',
+      };
+    }
+
+    try {
+      logger.info({
+        agentId: options.agentId,
+        sessionKey: options.sessionKey,
+        messageLength: options.message.length,
+      }, 'Running agent via /hooks/agent (PRIMARY MODE)');
+
+      const body: Record<string, unknown> = {
+        message: options.message,
+        sessionKey: options.sessionKey,
+        name: options.name || `OCAAS Agent ${options.agentId}`,
+        wakeMode: options.wakeMode || 'now',
+        deliver: options.deliver ?? false, // Default to sync response
+      };
+
+      if (options.channel) {
+        body.channel = options.channel;
+      }
+
+      await this.webhookRequest('/agent', body);
+
+      logger.info({
+        sessionKey: options.sessionKey,
+        agentId: options.agentId,
+      }, 'Agent execution accepted via /hooks/agent');
+
+      return {
+        success: true,
+        sessionKey: options.sessionKey,
+        accepted: true,
+        // Note: /hooks/agent is fire-and-forget, response comes via channel
+        // For sync response, would need different endpoint or polling
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err, agentId: options.agentId, sessionKey: options.sessionKey }, 'runViaHooksAgent failed');
+      return {
+        success: false,
+        error: message,
+      };
+    }
+  }
+
+  /**
+   * Check if hooks are configured and available
+   */
+  isHooksConfigured(): boolean {
+    return !!this.hooksToken;
   }
 
   /**

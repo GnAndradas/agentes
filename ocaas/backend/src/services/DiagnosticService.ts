@@ -133,7 +133,7 @@ export interface AIUsageSummary {
  */
 export interface ExecutionSummary {
   /** Execution mode used */
-  execution_mode: 'chat_completion' | 'stub' | 'real_agent';
+  execution_mode: 'hooks_session' | 'chat_completion' | 'stub' | 'real_agent';
 
   /** Agent was runtime_ready */
   runtime_ready: boolean;
@@ -153,8 +153,19 @@ export interface ExecutionSummary {
   /** Session ID (if any) */
   session_id?: string;
 
+  /** Session key (for hooks_session mode) */
+  session_key?: string;
+
   /** Response received */
   response_received: boolean;
+
+  /**
+   * HOOKS MIGRATION: Async outcome tracking
+   * - 'completed_sync': Response received immediately (chat_completion)
+   * - 'accepted_async': Job accepted, awaiting async delivery (hooks_session)
+   * - 'failed': Job failed
+   */
+  outcome?: 'completed_sync' | 'accepted_async' | 'failed';
 }
 
 // ============================================================================
@@ -555,6 +566,19 @@ export class DiagnosticService {
    * Build execution summary
    */
   private buildExecutionSummary(execution: ExecutionTraceability): ExecutionSummary {
+    // HOOKS MIGRATION: Determine outcome based on mode and response
+    let outcome: 'completed_sync' | 'accepted_async' | 'failed';
+    if (!execution.transport_success) {
+      outcome = 'failed';
+    } else if (execution.execution_mode === 'hooks_session' && !execution.response_received) {
+      // hooks_session with transport success but no response = accepted_async
+      outcome = 'accepted_async';
+    } else if (execution.response_received) {
+      outcome = 'completed_sync';
+    } else {
+      outcome = 'failed';
+    }
+
     return {
       execution_mode: execution.execution_mode,
       runtime_ready: execution.runtime_ready_at_execution,
@@ -563,7 +587,9 @@ export class DiagnosticService {
       fallback_reason: execution.execution_fallback_reason,
       gap: execution.gap,
       session_id: execution.openclaw_session_id,
+      session_key: execution.session_key,
       response_received: execution.response_received,
+      outcome,
     };
   }
 

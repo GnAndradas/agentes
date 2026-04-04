@@ -475,6 +475,10 @@ export interface DecisionWithCost extends StructuredDecision {
     estimatedCostUSD: number;
     savedByHeuristic: boolean;
     savedByCache: boolean;
+    /** Budget decision made before execution */
+    budgetDecision?: 'allow' | 'warn' | 'block' | 'degrade';
+    /** Budget scope that triggered decision */
+    budgetScope?: 'task' | 'agent_daily' | 'global_daily';
   };
 }
 

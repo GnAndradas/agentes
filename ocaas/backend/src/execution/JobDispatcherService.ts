@@ -46,6 +46,10 @@ import {
   checkRuntimeReady,
   type ExecutionTraceability,
 } from './ExecutionTraceability.js';
+import {
+  getGlobalBudgetManager,
+  type BudgetCheckResult,
+} from '../budget/index.js';
 
 const logger = createLogger('JobDispatcherService');
 
@@ -410,6 +414,7 @@ export class JobDispatcherService {
   /**
    * Execute a prepared job payload
    * BLOQUE 10: Adds execution traceability and runtime_ready checks
+   * HOOKS MIGRATION: Uses executeViaHooks as PRIMARY, executeAgent as FALLBACK
    */
   private async executeJob(
     payload: JobPayload,
@@ -425,12 +430,13 @@ export class JobDispatcherService {
     // Get gateway status
     const gatewayConfigured = adapter.isConfigured();
     const gatewayConnected = adapter.isConnected();
+    const hooksConfigured = adapter.isHooksConfigured();
     const wsConnected = false; // WebSocket RPC not yet implemented
 
     traceBuilder.gatewayStatus(gatewayConfigured, gatewayConnected, wsConnected);
 
-    // BLOQUE 10: Detect execution mode
-    const modeInfo = detectExecutionMode(gatewayConfigured, gatewayConnected, wsConnected);
+    // HOOKS MIGRATION: Detect execution mode with hooks support
+    const modeInfo = detectExecutionMode(gatewayConfigured, gatewayConnected, wsConnected, hooksConfigured);
     traceBuilder.mode(modeInfo.mode, modeInfo.transport);
 
     // BLOQUE 10: Check runtime_ready before execution
@@ -483,6 +489,61 @@ export class JobDispatcherService {
     const abortController = new AbortController();
     this.activeJobs.set(jobId, abortController);
 
+    // BUDGET CHECK: Validate before execution
+    const budgetManager = getGlobalBudgetManager();
+    const budgetCheck = budgetManager.checkBudget({
+      task_id: payload.taskId,
+      agent_id: agentId,
+      tier: 'medium', // Execution typically uses medium tier
+      operation: 'execution',
+    });
+
+    // Handle budget block
+    if (budgetCheck.decision === 'block') {
+      logger.warn({
+        jobId,
+        taskId: payload.taskId,
+        agentId,
+        budget_decision: 'block',
+        reason: budgetCheck.reason,
+        current_cost: budgetCheck.current_cost_usd,
+        limit: budgetCheck.limit_usd,
+      }, 'BUDGET BLOCK: Job execution blocked due to budget limit');
+
+      const error: JobError = {
+        code: 'execution_failed',
+        message: `Budget exceeded: ${budgetCheck.reason}`,
+        retryable: false,
+        suggestedAction: 'abort',
+      };
+
+      const response: JobResponse = {
+        jobId,
+        status: 'failed',
+        error,
+        completedAt: nowTimestamp(),
+      };
+
+      this.jobStore.setResponse(jobId, response);
+      this.activeJobs.delete(jobId);
+
+      return {
+        jobId,
+        dispatched: false,
+        error,
+      };
+    }
+
+    if (budgetCheck.decision === 'warn') {
+      logger.warn({
+        jobId,
+        agentId,
+        budget_decision: 'warn',
+        reason: budgetCheck.reason,
+        usage_pct: budgetCheck.usage_pct,
+      }, 'BUDGET WARNING: Approaching budget limit for execution');
+    }
+
     try {
       // Update status to running
       this.jobStore.setStatus(jobId, 'running');
@@ -491,39 +552,75 @@ export class JobDispatcherService {
       // Build prompt from payload
       const prompt = this.buildPrompt(payload);
 
-      // Execute via OpenClaw
-      const result = await adapter.executeAgent({
+      // HOOKS MIGRATION: Use executeViaHooks as PRIMARY execution method
+      const hooksResult = await adapter.executeViaHooks({
         agentId: payload.agent.agentId,
         taskId: payload.taskId,
+        jobId: jobId,
         prompt,
-        tools: payload.allowedResources.tools,
-        skills: payload.allowedResources.skills,
-        config: {
+        name: payload.agent.name,
+        context: {
+          tools: payload.allowedResources.tools,
+          skills: payload.allowedResources.skills,
           maxTokens: payload.constraints.maxTokens,
           temperature: payload.agent.temperature,
         },
       });
 
-      // BLOQUE 10: Mark transport success
-      traceBuilder.transportSuccess(true);
+      // HOOKS MIGRATION: Update traceability based on execution result
+      traceBuilder.mode(
+        hooksResult.executionMode === 'hooks_session' ? 'hooks_session' :
+        hooksResult.executionMode === 'chat_completion' ? 'chat_completion' : 'stub',
+        hooksResult.executionMode === 'hooks_session' ? 'hooks_agent' : 'rest_api'
+      );
 
-      // Update session ID if we got one
-      if (result.sessionId) {
-        traceBuilder.sessionId(result.sessionId);
-        this.jobStore.setStatus(jobId, 'running', result.sessionId);
-        this.jobStore.addEvent(jobId, { type: 'START', sessionId: result.sessionId });
+      if (hooksResult.sessionKey) {
+        traceBuilder.sessionKey(hooksResult.sessionKey);
       }
 
+      if (hooksResult.fallbackUsed) {
+        traceBuilder.fallbackUsed(hooksResult.fallbackReason || 'Unknown fallback reason');
+      }
+
+      // BLOQUE 10: Mark transport success
+      traceBuilder.transportSuccess(hooksResult.success);
+
       // BLOQUE 10: Track response
-      if (result.response) {
+      if (hooksResult.response) {
         traceBuilder.responseReceived();
       }
 
       // Build final traceability
       const trace = traceBuilder.completed().build();
 
-      // Process result
-      const response = this.processExecutionResult(jobId, result, payload);
+      // Process result (adapt hooksResult to expected format)
+      // HOOKS MIGRATION: Include accepted and executionMode for async handling
+      const adaptedResult = {
+        success: hooksResult.success,
+        sessionId: hooksResult.sessionKey, // Use sessionKey as identifier
+        response: hooksResult.response,
+        error: hooksResult.error,
+        // NEW: Pass async handling info
+        accepted: hooksResult.accepted,
+        executionMode: hooksResult.executionMode,
+      };
+
+      const response = this.processExecutionResult(jobId, adaptedResult, payload);
+
+      // BUDGET: Record execution cost (estimate since hooks don't return tokens)
+      // For hooks_session, we estimate based on prompt length; for chat_completion, similar
+      const estimatedInputTokens = Math.ceil(prompt.length / 4); // ~4 chars per token
+      const estimatedOutputTokens = hooksResult.response ? Math.ceil(hooksResult.response.length / 4) : 250;
+      budgetManager.recordCost({
+        task_id: payload.taskId,
+        agent_id: agentId,
+        operation: 'execution',
+        tier: 'medium',
+        input_tokens: estimatedInputTokens,
+        output_tokens: estimatedOutputTokens,
+        estimated_cost_usd: budgetCheck.estimated_cost_usd,
+        budget_decision: budgetCheck.decision,
+      });
 
       // BLOQUE 10: Attach traceability to response
       response.traceability = trace;
@@ -536,12 +633,14 @@ export class JobDispatcherService {
         agentId,
         execution_mode: trace.execution_mode,
         transport: trace.transport,
+        session_key: trace.session_key,
         runtime_ready: trace.runtime_ready_at_execution,
         transport_success: trace.transport_success,
         response_received: trace.response_received,
         fallback_used: trace.execution_fallback_used,
+        fallback_reason: trace.execution_fallback_reason,
         gap: trace.gap,
-      }, 'Job execution traced (BLOQUE 10)');
+      }, 'Job execution traced (HOOKS MIGRATION)');
 
       // Handle blocking
       if (response.status === 'blocked' && response.blocked) {
@@ -551,7 +650,7 @@ export class JobDispatcherService {
       return {
         jobId,
         dispatched: true,
-        sessionId: result.sessionId,
+        sessionId: hooksResult.sessionKey,
         response,
       };
     } catch (err) {
@@ -581,7 +680,7 @@ export class JobDispatcherService {
         jobId,
         execution_mode: trace.execution_mode,
         transport_success: trace.transport_success,
-      }, 'Job execution failed (BLOQUE 10)');
+      }, 'Job execution failed (HOOKS MIGRATION)');
 
       return {
         jobId,
@@ -773,12 +872,26 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
 
   /**
    * Process OpenClaw execution result into JobResponse
+   *
+   * HOOKS MIGRATION: Now handles three outcomes:
+   * 1. completed_sync: success=true, response present (chat_completion mode)
+   * 2. accepted_async: success=true, accepted=true, no response (hooks_session mode)
+   * 3. failed: success=false
    */
   private processExecutionResult(
     jobId: string,
-    result: { success: boolean; sessionId?: string; response?: string; error?: { code: string; message: string } },
+    result: {
+      success: boolean;
+      sessionId?: string;
+      response?: string;
+      error?: { code: string; message: string };
+      // HOOKS MIGRATION: New fields for async handling
+      accepted?: boolean;
+      executionMode?: 'hooks_session' | 'chat_completion' | 'stub';
+    },
     payload: JobPayload
   ): JobResponse {
+    // CASE 1: Success with response (completed_sync)
     if (result.success && result.response) {
       // Parse response for blocking indicators
       const blocking = this.detectBlocking(result.response, payload);
@@ -793,7 +906,7 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
         };
       }
 
-      // Success
+      // Success - completed synchronously
       const jobResult: JobResult = {
         output: result.response,
         actionsSummary: this.extractSummary(result.response),
@@ -809,7 +922,23 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
       };
     }
 
-    // Failure
+    // CASE 2: Accepted async (hooks_session mode) - NOT a failure
+    // hooks_session returns success=true but no immediate response
+    // The response will come via channel (telegram, etc.)
+    if (result.success && result.accepted && result.executionMode === 'hooks_session') {
+      return {
+        jobId,
+        status: 'accepted', // NEW: Job accepted, awaiting async result
+        sessionId: result.sessionId,
+        result: {
+          output: '[ASYNC] Job accepted by hooks_session. Response will be delivered via channel.',
+          actionsSummary: 'Job dispatched to hooks_session, awaiting async delivery',
+        },
+        completedAt: nowTimestamp(),
+      };
+    }
+
+    // CASE 3: Failure
     const error: JobError = {
       code: this.mapErrorCode(result.error?.code),
       message: result.error?.message || 'Execution failed',

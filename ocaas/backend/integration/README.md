@@ -163,3 +163,71 @@ persisted_session_found: false
 
 Esto confirma que OCAAS **NO tiene integración real con sesiones de OpenClaw**.
 Toda ejecución es vía `/v1/chat/completions` stateless.
+
+---
+
+## ACTUALIZACIÓN: Hooks Session Migration
+
+Con la migración a hooks_session:
+
+### Nuevo Modo Principal: hooks_session
+
+Si `OPENCLAW_HOOKS_TOKEN` está configurado:
+- OCAAS usa `/hooks/agent` con `sessionKey` estable
+- Session keys: `hook:ocaas:task-{taskId}` o `hook:ocaas:job-{jobId}`
+- Estado de sesión persiste en OpenClaw
+
+### Fallback: chat_completion
+
+Si hooks no están configurados o fallan:
+- OCAAS usa `/v1/chat/completions` (stateless)
+- Comportamiento legacy preservado
+
+### Variables de Entorno Requeridas
+
+```bash
+# Para hooks_session (recomendado)
+OPENCLAW_HOOKS_TOKEN=your-hooks-token
+
+# OpenClaw Gateway
+OPENCLAW_GATEWAY_URL=http://localhost:3030
+OPENCLAW_API_KEY=your-api-key
+```
+
+### Verificar Modo de Ejecución
+
+```bash
+# En diagnóstico de task
+curl http://localhost:3001/api/tasks/{id}/diagnostics | jq '.data.execution_summary'
+
+# Debe mostrar:
+# execution_mode: "hooks_session" (si hooks funcionan)
+# execution_mode: "chat_completion" (si fallback)
+# session_key: "hook:ocaas:task-{id}" (si hooks)
+# outcome: "completed_sync" | "accepted_async" | "failed"
+```
+
+### Modelo Asíncrono (hooks_session)
+
+hooks_session usa `/hooks/agent` que es fire-and-forget:
+
+| Campo | Valor hooks_session | Valor chat_completion |
+|-------|--------------------|-----------------------|
+| `execution_mode` | `hooks_session` | `chat_completion` |
+| `outcome` | `accepted_async` | `completed_sync` |
+| `response_received` | `false` (async) | `true` (sync) |
+| `job_status` | `accepted` | `completed` |
+
+**IMPORTANTE**: `accepted` NO es un error. Significa que el hook aceptó el job
+y la respuesta vendrá vía canal (Telegram, etc.)
+
+### Estados de Job
+
+| Estado | Significado |
+|--------|-------------|
+| `pending` | En cola |
+| `running` | Ejecutando |
+| `accepted` | **NUEVO**: Aceptado por hooks_session, esperando respuesta async |
+| `completed` | Terminado con éxito (respuesta recibida) |
+| `failed` | Error |
+| `blocked` | Bloqueado por recurso faltante |

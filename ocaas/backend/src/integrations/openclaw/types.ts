@@ -160,3 +160,50 @@ export interface TestConnectionResult {
   latencyMs: number;
   error?: OpenClawError;
 }
+
+// ============================================================================
+// Execute Via Hooks (PRIMARY EXECUTION MODE)
+// ============================================================================
+
+export interface ExecuteViaHooksInput {
+  /** Agent ID */
+  agentId: string;
+
+  /** Task ID for session key */
+  taskId?: string;
+
+  /** Job ID for session key (alternative to taskId) */
+  jobId?: string;
+
+  /** Prompt/message to send */
+  prompt: string;
+
+  /** Agent display name */
+  name?: string;
+
+  /** Additional context */
+  context?: Record<string, unknown>;
+}
+
+export interface ExecuteViaHooksResult {
+  success: boolean;
+
+  /** Session key used */
+  sessionKey?: string;
+
+  /** Execution mode used */
+  executionMode: 'hooks_session' | 'chat_completion' | 'stub';
+
+  /** Response content (may be async) */
+  response?: string;
+
+  /** Was this accepted by hooks? */
+  accepted?: boolean;
+
+  /** Did we fall back to chat_completion? */
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
+
+  /** Error if failed */
+  error?: OpenClawError;
+}

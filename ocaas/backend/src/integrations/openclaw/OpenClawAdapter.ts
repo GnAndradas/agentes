@@ -29,7 +29,10 @@ import type {
   OpenClawSession,
   ListSessionsResult,
   TestConnectionResult,
+  ExecuteViaHooksInput,
+  ExecuteViaHooksResult,
 } from './types.js';
+import { buildSessionKey } from '../../openclaw/types.js';
 
 const logger = integrationLogger.child({ component: 'OpenClawAdapter' });
 
@@ -251,6 +254,137 @@ export class OpenClawAdapter {
       logger.error({ err, agentId: input.agentId }, 'Agent execution failed');
       return {
         success: false,
+        error: normalizeError(err),
+      };
+    }
+  }
+
+  // ==========================================================================
+  // PRIMARY EXECUTION: Via Hooks (hooks_session mode)
+  // ==========================================================================
+
+  /**
+   * Check if hooks are configured
+   */
+  isHooksConfigured(): boolean {
+    return this.gateway.isHooksConfigured();
+  }
+
+  /**
+   * Execute an agent via hooks (PRIMARY execution mode)
+   *
+   * Uses /hooks/agent with sessionKey for stateful session.
+   * Falls back to chat_completion if hooks fail or are not configured.
+   */
+  async executeViaHooks(input: ExecuteViaHooksInput): Promise<ExecuteViaHooksResult> {
+    // Build session key
+    const sessionKey = input.taskId
+      ? buildSessionKey('task', input.taskId)
+      : input.jobId
+        ? buildSessionKey('job', input.jobId)
+        : buildSessionKey('manual', `${input.agentId}-${Date.now()}`);
+
+    logger.info({
+      agentId: input.agentId,
+      sessionKey,
+      hooksConfigured: this.isHooksConfigured(),
+    }, 'executeViaHooks called');
+
+    // Try hooks_session first (PRIMARY)
+    if (this.isHooksConfigured()) {
+      try {
+        const result = await this.gateway.runViaHooksAgent({
+          message: input.prompt,
+          agentId: input.agentId,
+          sessionKey,
+          name: input.name || `OCAAS Agent ${input.agentId}`,
+          wakeMode: 'now',
+          deliver: false, // We want sync-ish response handling
+        });
+
+        if (result.success) {
+          logger.info({
+            agentId: input.agentId,
+            sessionKey,
+            executionMode: 'hooks_session',
+          }, 'Execution succeeded via hooks_session');
+
+          return {
+            success: true,
+            sessionKey,
+            executionMode: 'hooks_session',
+            accepted: result.accepted,
+            response: result.response,
+          };
+        }
+
+        // Hooks failed - fall back to chat_completion
+        logger.warn({
+          agentId: input.agentId,
+          sessionKey,
+          error: result.error,
+        }, 'hooks_session failed, falling back to chat_completion');
+
+        return this.executeViaHooksFallback(input, sessionKey, result.error || 'hooks call failed');
+
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        logger.warn({ err, agentId: input.agentId }, 'hooks_session threw, falling back');
+        return this.executeViaHooksFallback(input, sessionKey, errorMsg);
+      }
+    }
+
+    // Hooks not configured - use fallback directly
+    logger.info({
+      agentId: input.agentId,
+    }, 'Hooks not configured, using chat_completion fallback');
+
+    return this.executeViaHooksFallback(input, sessionKey, 'OPENCLAW_HOOKS_TOKEN not configured');
+  }
+
+  /**
+   * Fallback execution via chat_completion
+   */
+  private async executeViaHooksFallback(
+    input: ExecuteViaHooksInput,
+    sessionKey: string,
+    fallbackReason: string
+  ): Promise<ExecuteViaHooksResult> {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        sessionKey,
+        executionMode: 'stub',
+        fallbackUsed: true,
+        fallbackReason: 'OpenClaw not configured',
+        error: { code: 'not_configured', message: 'OpenClaw API key not configured' },
+      };
+    }
+
+    try {
+      // Use executeAgent which uses spawn+send (chat_completion)
+      const result = await this.executeAgent({
+        agentId: input.agentId,
+        taskId: input.taskId,
+        prompt: input.prompt,
+      });
+
+      return {
+        success: result.success,
+        sessionKey,
+        executionMode: 'chat_completion',
+        fallbackUsed: true,
+        fallbackReason,
+        response: result.response,
+        error: result.error,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        sessionKey,
+        executionMode: 'stub',
+        fallbackUsed: true,
+        fallbackReason,
         error: normalizeError(err),
       };
     }

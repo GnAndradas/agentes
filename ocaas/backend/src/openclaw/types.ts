@@ -76,3 +76,73 @@ export interface GenerateResult {
     outputTokens: number;
   };
 }
+
+// ============================================================================
+// HOOKS SESSION TYPES (PRIMARY EXECUTION MODE)
+// ============================================================================
+
+/**
+ * Options for running via /hooks/agent with sessionKey
+ */
+export interface HooksAgentOptions {
+  /** Message/prompt to send */
+  message: string;
+
+  /** Agent ID for context */
+  agentId: string;
+
+  /** Session key for stateful session (e.g., hook:ocaas:task-{taskId}) */
+  sessionKey: string;
+
+  /** Display name for the agent */
+  name?: string;
+
+  /** Wake mode: 'now' | 'lazy' */
+  wakeMode?: 'now' | 'lazy';
+
+  /** Deliver response to channel? */
+  deliver?: boolean;
+
+  /** Target channel (telegram, etc.) */
+  channel?: string;
+}
+
+/**
+ * Result from /hooks/agent call
+ */
+export interface HooksAgentResult {
+  success: boolean;
+
+  /** Session key used */
+  sessionKey?: string;
+
+  /** Response content (if deliver=false or sync mode) */
+  response?: string;
+
+  /** Error message if failed */
+  error?: string;
+
+  /** Whether this was accepted (fire-and-forget may not have response) */
+  accepted?: boolean;
+}
+
+/**
+ * Session key types for OCAAS
+ */
+export type SessionKeyType = 'task' | 'job' | 'manual' | 'test';
+
+/**
+ * Build a session key for OCAAS
+ */
+export function buildSessionKey(type: SessionKeyType, id: string): string {
+  return `hook:ocaas:${type}-${id}`;
+}
+
+/**
+ * Parse a session key to extract type and ID
+ */
+export function parseSessionKey(sessionKey: string): { type: SessionKeyType; id: string } | null {
+  const match = sessionKey.match(/^hook:ocaas:(task|job|manual|test)-(.+)$/);
+  if (!match || !match[1] || !match[2]) return null;
+  return { type: match[1] as SessionKeyType, id: match[2] };
+}

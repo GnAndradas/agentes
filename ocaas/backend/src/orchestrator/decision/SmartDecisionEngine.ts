@@ -66,6 +66,11 @@ import {
 } from './DecisionValidator.js';
 import { inferCapabilities } from './HeuristicRules.js';
 import type { DecisionTraceability } from '../../types/contracts.js';
+import {
+  getGlobalBudgetManager,
+  type BudgetCheckResult,
+  type BudgetTraceability,
+} from '../../budget/index.js';
 
 const logger = orchestratorLogger.child({ component: 'SmartDecisionEngine' });
 
@@ -543,9 +548,13 @@ export class SmartDecisionEngine {
 
   /**
    * Try LLM with appropriate tier
+   *
+   * BUDGET INTEGRATION: Checks budget before LLM call.
+   * May block, warn, or degrade tier based on budget status.
    */
   private async tryLLM(task: TaskDTO, agents: AgentDTO[]): Promise<StructuredDecision | null> {
     const adapter = getOpenClawAdapter();
+    const budgetManager = getGlobalBudgetManager();
 
     if (!adapter.isConnected()) {
       logger.warn({ taskId: task.id }, 'Gateway not connected, skipping LLM');
@@ -584,6 +593,49 @@ export class SmartDecisionEngine {
     // Enforce max tier from operation mode
     tier = this.enforceMaxTier(tier);
 
+    // BUDGET CHECK: Validate before LLM call
+    const budgetCheck = budgetManager.checkBudget({
+      task_id: task.id,
+      agent_id: task.agentId || undefined,
+      tier: tier as 'short' | 'medium' | 'deep',
+      operation: 'decision',
+    });
+
+    // Handle budget decision
+    if (budgetCheck.decision === 'block') {
+      logger.warn({
+        taskId: task.id,
+        tier,
+        budget_decision: 'block',
+        reason: budgetCheck.reason,
+        current_cost: budgetCheck.current_cost_usd,
+        limit: budgetCheck.limit_usd,
+      }, 'BUDGET BLOCK: LLM call blocked due to budget limit');
+      return null; // Skip LLM, will fall back to heuristic
+    }
+
+    if (budgetCheck.decision === 'degrade' && budgetCheck.degraded_tier) {
+      const originalTier = tier;
+      tier = budgetCheck.degraded_tier as PromptTier;
+      logger.info({
+        taskId: task.id,
+        original_tier: originalTier,
+        degraded_tier: tier,
+        budget_decision: 'degrade',
+        reason: budgetCheck.reason,
+      }, 'BUDGET DEGRADE: Tier degraded due to budget');
+    }
+
+    if (budgetCheck.decision === 'warn') {
+      logger.warn({
+        taskId: task.id,
+        tier,
+        budget_decision: 'warn',
+        reason: budgetCheck.reason,
+        usage_pct: budgetCheck.usage_pct,
+      }, 'BUDGET WARNING: Approaching budget limit');
+    }
+
     logger.info({
       taskId: task.id,
       tier,
@@ -615,6 +667,20 @@ export class SmartDecisionEngine {
         result.usage?.outputTokens
       );
 
+      // BUDGET: Record actual cost in GlobalBudgetManager
+      const inputTokens = result.usage?.inputTokens || costInfo.inputTokens;
+      const outputTokens = result.usage?.outputTokens || costInfo.outputTokens;
+      budgetManager.recordCost({
+        task_id: task.id,
+        agent_id: task.agentId || undefined,
+        operation: 'decision',
+        tier: tier as 'short' | 'medium' | 'deep',
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        estimated_cost_usd: budgetCheck.estimated_cost_usd,
+        budget_decision: budgetCheck.decision,
+      });
+
       const parsed = parseResponse(tier, result.content);
 
       if (!parsed) {
@@ -632,6 +698,9 @@ export class SmartDecisionEngine {
         estimatedCostUSD: costInfo.cost,
         savedByHeuristic: false,
         savedByCache: false,
+        // BUDGET: Add budget traceability
+        budgetDecision: budgetCheck.decision,
+        budgetScope: budgetCheck.scope,
       };
 
       return decision;

@@ -1,7 +1,8 @@
 import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
 import { createLogger } from '../utils/logger.js';
-import { GenerationError } from '../utils/errors.js';
+import { GenerationError, BudgetExceededError } from '../utils/errors.js';
 import { parseJsonFromLLM } from '../utils/helpers.js';
+import { getGlobalBudgetManager } from '../budget/index.js';
 
 const logger = createLogger('AIClient');
 
@@ -72,9 +73,49 @@ export class AIClient {
    *
    * IMPORTANT: No precheck of connectivity. The real request determines
    * if the gateway is available. This avoids blocking on stale cached state.
+   *
+   * BUDGET INTEGRATION: Checks budget before generation.
+   * May block if budget exceeded.
    */
-  async generate<T>(request: AIGenerationRequest): Promise<AIGenerationResponse<T>> {
+  async generate<T>(request: AIGenerationRequest, taskId?: string, agentId?: string): Promise<AIGenerationResponse<T>> {
     const adapter = getOpenClawAdapter();
+    const budgetManager = getGlobalBudgetManager();
+
+    // BUDGET CHECK: Generation uses 'deep' tier (large output)
+    const budgetCheck = budgetManager.checkBudget({
+      task_id: taskId,
+      agent_id: agentId,
+      tier: 'deep', // Generation typically uses more tokens
+      operation: 'generation',
+    });
+
+    if (budgetCheck.decision === 'block') {
+      logger.warn({
+        type: request.type,
+        name: request.name,
+        budget_decision: 'block',
+        reason: budgetCheck.reason,
+        current_cost: budgetCheck.current_cost_usd,
+        limit: budgetCheck.limit_usd,
+      }, 'BUDGET BLOCK: AI generation blocked due to budget limit');
+
+      throw new BudgetExceededError(
+        `Generation blocked: ${budgetCheck.reason}`,
+        budgetCheck.scope,
+        budgetCheck.current_cost_usd,
+        budgetCheck.limit_usd
+      );
+    }
+
+    if (budgetCheck.decision === 'warn') {
+      logger.warn({
+        type: request.type,
+        name: request.name,
+        budget_decision: 'warn',
+        reason: budgetCheck.reason,
+        usage_pct: budgetCheck.usage_pct,
+      }, 'BUDGET WARNING: Approaching budget limit for generation');
+    }
 
     // No precheck - let the actual request determine connectivity
     const systemPrompt = this.buildSystemPrompt(request.type);
@@ -89,6 +130,20 @@ export class AIClient {
     if (!result.success || !result.content) {
       throw new GenerationError(`Generation failed: ${result.error?.message ?? 'No content returned'}`);
     }
+
+    // BUDGET: Record actual cost
+    const inputTokens = result.usage?.inputTokens || 1200; // deep tier estimate
+    const outputTokens = result.usage?.outputTokens || 800;
+    budgetManager.recordCost({
+      task_id: taskId,
+      agent_id: agentId,
+      operation: 'generation',
+      tier: 'deep',
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      estimated_cost_usd: budgetCheck.estimated_cost_usd,
+      budget_decision: budgetCheck.decision,
+    });
 
     // Parse JSON from LLM response (handles markdown fences, etc.)
     let parsed: T;
@@ -105,6 +160,7 @@ export class AIClient {
       name: request.name,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
+      budget_decision: budgetCheck.decision,
     }, 'AI generation completed via OpenClaw Gateway');
 
     return {

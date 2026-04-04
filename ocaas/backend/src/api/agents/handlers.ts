@@ -122,3 +122,44 @@ export async function getTasks(req: FastifyRequest<IdParam>, reply: FastifyReply
     return reply.status(statusCode).send(body);
   }
 }
+
+// ============================================================================
+// BLOQUE 9: MATERIALIZATION STATUS
+// ============================================================================
+
+/**
+ * Get materialization status for an agent
+ * BLOQUE 9: Returns lifecycle state, runtime readiness, etc.
+ */
+export async function getMaterializationStatus(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { agentService } = getServices();
+    const status = await agentService.getMaterializationStatus(req.params.id);
+    const lifecycle = await agentService.getLifecycleState(req.params.id);
+
+    return reply.send({
+      data: {
+        ...status,
+        lifecycle: lifecycle,
+      },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * List all agents with their materialization status
+ * BLOQUE 9: Includes lifecycle state for each agent
+ */
+export async function listWithStatus(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const { agentService } = getServices();
+    const data = await agentService.listWithMaterializationStatus();
+    return reply.send({ data });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

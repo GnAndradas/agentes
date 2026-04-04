@@ -6,6 +6,12 @@ import { NotFoundError, ForbiddenError } from '../utils/errors.js';
 import { nowTimestamp, parseJsonSafe } from '../utils/helpers.js';
 import { EVENT_TYPE, AGENT_STATUS } from '../config/constants.js';
 import { canCreateAgentAutonomously, requiresApprovalForAgentCreation } from '../config/autonomy.js';
+import {
+  computeMaterializationStatus,
+  getStatusDescription,
+  type AgentMaterializationStatus,
+  type AgentLifecycleState,
+} from '../generator/AgentMaterialization.js';
 import type { EventService } from './EventService.js';
 import type { AgentDTO, AgentStatus, AgentType } from '../types/domain.js';
 
@@ -230,5 +236,78 @@ export class AgentService {
   async getByCapability(capability: string): Promise<AgentDTO[]> {
     const all = await this.list();
     return all.filter(a => a.capabilities?.includes(capability));
+  }
+
+  // ============================================================================
+  // BLOQUE 9: MATERIALIZATION STATUS
+  // ============================================================================
+
+  /**
+   * Get materialization status for an agent
+   * BLOQUE 9: Explicit separation between db record, activated, materialized, runtime-ready
+   */
+  async getMaterializationStatus(id: string): Promise<AgentMaterializationStatus> {
+    const agent = await this.getById(id);
+
+    // Check if agent has active generation (stored in config)
+    const config = agent.config as Record<string, unknown> | undefined;
+    const materializationData = config?._materialization as Record<string, unknown> | undefined;
+    const hasActiveGeneration = !!materializationData;
+
+    return computeMaterializationStatus(
+      agent.name,
+      true, // has DB record since we fetched it
+      hasActiveGeneration,
+      agent.sessionId
+    );
+  }
+
+  /**
+   * Get lifecycle state for an agent
+   * BLOQUE 9: Returns explicit lifecycle state
+   */
+  async getLifecycleState(id: string): Promise<{
+    state: AgentLifecycleState;
+    description: string;
+    runtime_ready: boolean;
+  }> {
+    const status = await this.getMaterializationStatus(id);
+    return {
+      state: status.state,
+      description: getStatusDescription(status),
+      runtime_ready: status.openclaw_session,
+    };
+  }
+
+  /**
+   * List agents with their materialization status
+   * BLOQUE 9: Includes lifecycle state for each agent
+   */
+  async listWithMaterializationStatus(): Promise<Array<AgentDTO & {
+    lifecycle_state: AgentLifecycleState;
+    runtime_ready: boolean;
+    status_description: string;
+  }>> {
+    const agents = await this.list();
+
+    return agents.map(agent => {
+      const config = agent.config as Record<string, unknown> | undefined;
+      const materializationData = config?._materialization as Record<string, unknown> | undefined;
+      const hasActiveGeneration = !!materializationData;
+
+      const matStatus = computeMaterializationStatus(
+        agent.name,
+        true,
+        hasActiveGeneration,
+        agent.sessionId
+      );
+
+      return {
+        ...agent,
+        lifecycle_state: matStatus.state,
+        runtime_ready: matStatus.openclaw_session,
+        status_description: getStatusDescription(matStatus),
+      };
+    });
   }
 }

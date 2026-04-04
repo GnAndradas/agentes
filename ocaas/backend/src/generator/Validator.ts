@@ -1,4 +1,5 @@
 import { createLogger } from '../utils/logger.js';
+import { OPENCLAW_REAL_USAGE } from '../openclaw/OpenClawCompatibility.js';
 import type { ValidationResult, GeneratedFile } from './types.js';
 
 const logger = createLogger('Validator');
@@ -31,6 +32,9 @@ export class Validator {
     for (const file of files) {
       this.validateFileContent(file, result);
     }
+
+    // BLOQUE 8: Add OpenClaw compatibility warning
+    result.warnings.push(OPENCLAW_REAL_USAGE.skills.gap);
 
     logger.info({ valid: result.valid, errors: result.errors.length }, 'Skill validation completed');
     return result;
@@ -69,6 +73,9 @@ export class Validator {
       }
     }
 
+    // BLOQUE 8: Add OpenClaw compatibility warning
+    result.warnings.push(OPENCLAW_REAL_USAGE.tools.gap);
+
     logger.info({ valid: result.valid, type }, 'Tool validation completed');
     return result;
   }
@@ -92,6 +99,9 @@ export class Validator {
       result.errors.push('Capabilities must be an array');
       result.valid = false;
     }
+
+    // BLOQUE 8: Add OpenClaw compatibility warning
+    result.warnings.push(OPENCLAW_REAL_USAGE.agent.gap);
 
     logger.info({ valid: result.valid }, 'Agent validation completed');
     return result;

@@ -58,6 +58,14 @@ import {
   getCostTracker,
   getEstimatedTokensForTier,
 } from './CostTracker.js';
+import {
+  validateDecision,
+  needsValidation,
+  determineAction,
+  type ValidationResult,
+} from './DecisionValidator.js';
+import { inferCapabilities } from './HeuristicRules.js';
+import type { DecisionTraceability } from '../../types/contracts.js';
 
 const logger = orchestratorLogger.child({ component: 'SmartDecisionEngine' });
 
@@ -295,7 +303,9 @@ export class SmartDecisionEngine {
 
           this.updateMetrics(decision);
           await this.emitDecisionComplete(decision, task);
-          return decision;
+
+          // Stage 5: VALIDATION (BLOQUE 5) - validate cached decisions too
+          return this.validateAndFinalize(decision, task, agents, startTime);
         }
         // Track cache miss for metrics
         // (decisionType unknown yet, will update later)
@@ -349,7 +359,9 @@ export class SmartDecisionEngine {
             this.updateMetrics(decision);
             this.costTracker.recordCacheMiss(decision.decisionType);
             await this.emitDecisionComplete(decision, task);
-            return decision;
+
+            // Stage 5: VALIDATION (BLOQUE 5)
+            return this.validateAndFinalize(decision, task, agents, startTime);
           }
           // Heuristic didn't meet threshold - fall through to LLM
         }
@@ -378,7 +390,9 @@ export class SmartDecisionEngine {
           this.updateMetrics(decision);
           this.costTracker.recordCacheMiss(decision.decisionType);
           await this.emitDecisionComplete(decision, task);
-          return decision;
+
+          // Stage 5: VALIDATION (BLOQUE 5)
+          return this.validateAndFinalize(decision, task, agents, startTime);
         }
       }
 
@@ -388,7 +402,9 @@ export class SmartDecisionEngine {
       this.updateMetrics(decision);
       this.costTracker.recordCacheMiss(decision.decisionType);
       await this.emitDecisionComplete(decision, task);
-      return decision;
+
+      // Stage 5: VALIDATION (BLOQUE 5 - Hybrid Decision Engine)
+      return this.validateAndFinalize(decision, task, agents, startTime);
 
     } catch (err) {
       logger.error({ err, taskId: task.id, decisionId }, 'Decision process failed');
@@ -397,7 +413,9 @@ export class SmartDecisionEngine {
       const fallback = this.createFallbackDecision(decisionId, task, agents, startTime, err);
       this.updateMetrics(fallback);
       await this.emitDecisionComplete(fallback, task);
-      return fallback;
+
+      // Still validate fallback
+      return this.validateAndFinalize(fallback, task, agents, startTime);
     }
   }
 
@@ -927,6 +945,109 @@ export class SmartDecisionEngine {
         heuristicFailReason: 'all_methods_failed',
       }
     );
+  }
+
+  /**
+   * BLOQUE 5: Validate and finalize decision
+   *
+   * This is the final validation gate before a decision is executed.
+   * IA interpreta → heurística valida → validador confirma → sistema decide
+   */
+  private validateAndFinalize(
+    decision: StructuredDecision,
+    task: TaskDTO,
+    agents: AgentDTO[],
+    startTime: number
+  ): StructuredDecision {
+    // Skip validation for escalations (already safe)
+    if (!needsValidation(decision)) {
+      return this.attachTraceability(decision, null);
+    }
+
+    // Infer required capabilities from task
+    const requiredCapabilities = inferCapabilities({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      type: task.type,
+      priority: task.priority,
+      parentTaskId: task.parentTaskId,
+      retryCount: task.retryCount,
+      input: task.input,
+      metadata: task.metadata,
+    });
+
+    // Validate the decision
+    const validation = validateDecision(
+      decision,
+      agents,
+      requiredCapabilities,
+      {
+        requireCapabilityMatch: this.modeConfig.mode !== 'max_quality',
+        strictMode: task.priority >= 4, // Strict for critical tasks
+      }
+    );
+
+    // Log validation result
+    logger.info({
+      taskId: task.id,
+      decisionId: decision.id,
+      valid: validation.valid,
+      fallbackApplied: validation.fallbackApplied,
+      fallbackType: validation.fallbackType,
+      errors: validation.errors.length,
+      warnings: validation.warnings.length,
+    }, 'Decision validated');
+
+    // Return validated decision with traceability
+    return this.attachTraceability(validation.decision, validation);
+  }
+
+  /**
+   * Attach traceability to decision (BLOQUE 5)
+   */
+  private attachTraceability(
+    decision: StructuredDecision,
+    validation: ValidationResult | null
+  ): StructuredDecision {
+    const traceability: DecisionTraceability = validation?.traceability ?? {
+      decision_source: this.getDecisionSource(decision),
+      decision_confidence: decision.confidenceScore,
+      decision_validated: true,
+      decided_at: decision.decidedAt,
+      decision_reason: decision.reasoning,
+    };
+
+    // Attach to decision metadata
+    return {
+      ...decision,
+      // Store traceability in metadata for downstream consumers
+      extras: {
+        ...(decision as unknown as { extras?: Record<string, unknown> }).extras,
+        _traceability: traceability,
+        _validated: validation?.valid ?? true,
+        _fallbackApplied: validation?.fallbackApplied ?? false,
+        _fallbackType: validation?.fallbackType,
+      },
+    } as StructuredDecision;
+  }
+
+  /**
+   * Determine decision source for traceability
+   */
+  private getDecisionSource(decision: StructuredDecision): DecisionTraceability['decision_source'] {
+    switch (decision.method) {
+      case 'heuristic':
+      case 'fallback':
+      case 'cached':
+        return 'heuristic';
+      case 'llm_classify':
+      case 'llm_decide':
+      case 'llm_plan':
+        return 'ai';
+      default:
+        return 'hybrid';
+    }
   }
 
   /**

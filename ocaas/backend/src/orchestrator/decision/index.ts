@@ -57,3 +57,15 @@ export {
   resetSmartDecisionEngine,
   type SmartDecisionEngineConfig,
 } from './SmartDecisionEngine.js';
+
+// Decision validator (BLOQUE 5)
+export {
+  validateDecision,
+  needsValidation,
+  determineAction,
+  VALIDATION_THRESHOLDS,
+  type ValidationResult,
+  type ValidationError,
+  type ValidationErrorCode,
+  type ValidatorConfig,
+} from './DecisionValidator.js';

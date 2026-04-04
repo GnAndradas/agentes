@@ -3,6 +3,7 @@ import { EVENT_TYPE } from '../config/constants.js';
 import type { EventService } from './EventService.js';
 import type { TaskService } from './TaskService.js';
 import type { TaskDTO, TaskPriority } from '../types/domain.js';
+import type { TaskRouter } from '../orchestrator/TaskRouter.js';
 
 const logger = createLogger('ChannelService');
 
@@ -47,10 +48,19 @@ export interface ChannelResponsePayload {
  * - Emit events for responses
  */
 export class ChannelService {
+  private taskRouter: TaskRouter | null = null;
+
   constructor(
     private taskService: TaskService,
     private eventService: EventService
   ) {}
+
+  /**
+   * Set the TaskRouter reference (injected after init to avoid circular deps)
+   */
+  setTaskRouter(router: TaskRouter): void {
+    this.taskRouter = router;
+  }
 
   /**
    * Ingest a message from an external channel and create a task
@@ -81,6 +91,16 @@ export class ChannelService {
       userId: normalized.userId,
       messageLength: normalized.message.length,
     }, 'Channel message ingested as task');
+
+    // Submit to TaskRouter for processing (unified entry point)
+    if (this.taskRouter) {
+      await this.taskRouter.submit(task, 'channel', {
+        sourceChannel: normalized.channel,
+      });
+      logger.debug({ taskId: task.id }, 'Task submitted to TaskRouter');
+    } else {
+      logger.warn({ taskId: task.id }, 'TaskRouter not set - task created but not submitted');
+    }
 
     // Emit ingest event
     await this.eventService.emit({

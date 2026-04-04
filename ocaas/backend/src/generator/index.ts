@@ -6,6 +6,23 @@ export { getToolGenerator } from './ToolGenerator.js';
 export { getAgentGenerator } from './AgentGenerator.js';
 export * from './templates/index.js';
 
+// BLOQUE 9: Agent materialization exports
+export {
+  materializeAgent,
+  computeMaterializationStatus,
+  getAgentWorkspace,
+  getAgentWorkspacePath,
+  getStatusDescription,
+  isRuntimeReady,
+  isMaterializedOnly,
+  type AgentLifecycleState,
+  type AgentMaterializationStatus,
+  type MaterializationTraceability,
+  type AgentWorkspace,
+  type AgentWorkspaceConfig,
+  DEFAULT_MATERIALIZATION_STATUS,
+} from './AgentMaterialization.js';
+
 import { getAIClient } from './AIClient.js';
 import { createLogger } from '../utils/logger.js';
 

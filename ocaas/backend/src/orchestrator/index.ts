@@ -70,7 +70,10 @@ export async function initOrchestrator(): Promise<void> {
   const agentManager = getAgentManager();
   const actionExecutor = getActionExecutor();
   const resourceRetryService = getResourceRetryService();
-  const { generationService, manualResourceService } = getServices();
+  const { generationService, manualResourceService, channelService } = getServices();
+
+  // Connect TaskRouter to ChannelService (unified task entry)
+  channelService.setTaskRouter(taskRouter);
 
   // Register callback for task retry when AI generation is activated
   generationService.setOnActivatedCallback(async (generationId: string) => {

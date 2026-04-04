@@ -77,3 +77,27 @@ export {
   resetJobSafetyService,
   type JobSafetyConfig,
 } from './JobSafetyService.js';
+
+// BLOQUE 10: Execution Traceability
+export {
+  // Types
+  type ExecutionMode,
+  type ExecutionTransport,
+  type ExecutionTraceability,
+  type ExecutionModeInfo,
+  type RuntimeReadyCheck,
+  type ExecutionPoint,
+  // Functions
+  detectExecutionMode,
+  isRealExecution,
+  getExecutionModeDescription,
+  checkRuntimeReady,
+  createExecutionTraceability,
+  getExecutionPoint,
+  logExecutionMapSummary,
+  // Constants
+  DEFAULT_EXECUTION_TRACEABILITY,
+  EXECUTION_POINTS,
+  // Builder
+  ExecutionTraceabilityBuilder,
+} from './ExecutionTraceability.js';

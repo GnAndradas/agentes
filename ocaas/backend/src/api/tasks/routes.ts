@@ -17,4 +17,8 @@ export async function taskRoutes(fastify: FastifyInstance) {
   fastify.post('/:id/fail', h.fail);
   fastify.post('/:id/cancel', h.cancel);
   fastify.post('/:id/retry', h.retry);
+
+  // BLOQUE 11: Diagnostics endpoints
+  fastify.get('/:id/diagnostics', h.getDiagnostics);
+  fastify.get('/:id/timeline', h.getTimeline);
 }

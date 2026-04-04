@@ -116,6 +116,15 @@ export interface IntelligentDecision {
   // Fallback usado
   usedFallback: boolean;
   fallbackReason?: string;
+  // Traceability (BLOQUE 2)
+  traceability?: {
+    decision_source: 'heuristic' | 'ai' | 'hybrid';
+    decision_confidence: number;
+    decision_validated: boolean;
+    heuristic_method?: string;
+    ai_model?: string;
+    execution_time_ms?: number;
+  };
 }
 
 export interface SuggestedAction {

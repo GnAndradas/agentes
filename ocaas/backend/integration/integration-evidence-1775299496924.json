@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-04-04T10:44:56.419Z",
+  "task_dispatched": false,
+  "openclaw_call_reached": false,
+  "execution_mode": "unknown",
+  "session_created": false,
+  "session_id_used": null,
+  "session_id_only_local": true,
+  "persisted_session_found": false,
+  "gateway_ws_connected": false,
+  "gateway_rest_connected": false,
+  "gateway_rest_authenticated": false,
+  "final_verdict": "inconclusive",
+  "details": {
+    "errors": [
+      "OPENCLAW_API_KEY not configured"
+    ]
+  }
+}

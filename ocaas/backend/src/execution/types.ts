@@ -6,6 +6,7 @@
  */
 
 import type { RoleType } from '../organization/types.js';
+import type { ExecutionTraceability } from './ExecutionTraceability.js';
 
 // ============================================================================
 // JOB PAYLOAD (OCAAS → OpenClaw)
@@ -205,6 +206,9 @@ export interface JobResponse {
 
   /** Timestamp when job completed/failed/blocked */
   completedAt?: number;
+
+  /** Execution traceability (BLOQUE 10) */
+  traceability?: ExecutionTraceability;
 }
 
 /**

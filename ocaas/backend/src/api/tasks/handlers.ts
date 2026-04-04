@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { getServices } from '../../services/index.js';
 import { getTaskRouter } from '../../orchestrator/index.js';
+import { getDiagnosticService } from '../../services/DiagnosticService.js';
 import { db, schema } from '../../db/index.js';
 import { nowTimestamp } from '../../utils/helpers.js';
 import { CreateTaskSchema, UpdateTaskSchema, AssignTaskSchema, CompleteTaskSchema, FailTaskSchema, ListTasksQuery } from './schemas.js';
@@ -230,6 +231,47 @@ export async function getSubtasks(req: FastifyRequest<IdParam>, reply: FastifyRe
     await taskService.getById(req.params.id);
     const data = await taskService.getSubtasks(req.params.id);
     return reply.send({ data });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// ============================================================================
+// BLOQUE 11: DIAGNOSTICS
+// ============================================================================
+
+/**
+ * Get complete diagnostics for a task
+ * BLOQUE 11: Returns full observability data
+ */
+export async function getDiagnostics(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const diagnosticService = getDiagnosticService();
+    const data = await diagnosticService.getTaskDiagnostics(req.params.id);
+    return reply.send({ data });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * Get timeline for a task
+ * BLOQUE 11: Returns structured timeline
+ */
+export async function getTimeline(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const diagnosticService = getDiagnosticService();
+    const diagnostics = await diagnosticService.getTaskDiagnostics(req.params.id);
+    return reply.send({
+      data: {
+        task_id: diagnostics.task_id,
+        timeline: diagnostics.timeline,
+        ai_usage: diagnostics.ai_usage,
+        execution_summary: diagnostics.execution_summary,
+      },
+    });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);
     return reply.status(statusCode).send(body);

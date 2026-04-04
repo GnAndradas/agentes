@@ -141,3 +141,14 @@ export {
   ResourceService,
   SkillExecutionService,
 };
+
+// BLOQUE 11: Diagnostic Service
+export {
+  DiagnosticService,
+  getDiagnosticService,
+  resetDiagnosticService,
+  type TaskDiagnostics,
+  type TaskTimeline,
+  type AIUsageSummary,
+  type ExecutionSummary,
+} from './DiagnosticService.js';

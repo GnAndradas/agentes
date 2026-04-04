@@ -15,7 +15,7 @@ import {
   requiresApprovalForTask,
 } from '../config/autonomy.js';
 import { EVENT_TYPE, TASK_STATUS } from '../config/constants.js';
-import type { TaskDTO } from '../types/domain.js';
+import type { TaskDTO, TaskIngressMode } from '../types/domain.js';
 import type { OrchestratorConfig } from './types.js';
 import type { CreateTaskInput } from '../services/TaskService.js';
 import {
@@ -52,12 +52,45 @@ export class TaskRouter {
     this.queue.setSequentialMode(enabled);
   }
 
-  async submit(task: TaskDTO): Promise<void> {
+  /**
+   * Submit a task for processing (unified entry point)
+   * @param task - The task to submit
+   * @param ingressMode - How the task entered the system (defaults to 'api')
+   * @param ingressMeta - Additional ingress metadata
+   */
+  async submit(
+    task: TaskDTO,
+    ingressMode: TaskIngressMode = 'api',
+    ingressMeta?: { sourceChannel?: string; batchId?: string; decomposedFrom?: string }
+  ): Promise<void> {
     const { taskService } = getServices();
+
+    // Add intake traceability to task metadata
+    const intake = {
+      ingress_mode: ingressMode,
+      queued_at: Date.now(),
+      source_channel: ingressMeta?.sourceChannel,
+      batch_id: ingressMeta?.batchId,
+      decomposed_from: ingressMeta?.decomposedFrom,
+    };
+
+    // Update task with intake info (stored in metadata for now)
+    await taskService.update(task.id, {
+      metadata: {
+        ...task.metadata,
+        _intake: intake,
+      },
+    });
 
     // Queue the task
     await taskService.queue(task.id);
     this.queue.add(task);
+
+    logger.debug({
+      taskId: task.id,
+      ingressMode,
+      queuedAt: intake.queued_at,
+    }, 'Task submitted to router');
 
     // Try immediate assignment if auto-assign enabled
     if (this.config.autoAssign) {

@@ -41,6 +41,27 @@ export interface DelegationRecord {
   jobId?: string;  // Job that triggered the delegation
 }
 
+/**
+ * Ingress mode: how the task was created
+ */
+export type TaskIngressMode = 'api' | 'channel' | 'batch' | 'decomposition' | 'internal';
+
+/**
+ * Task intake traceability (BLOQUE 4)
+ */
+export interface TaskIntakeTraceability {
+  /** How the task entered the system */
+  ingress_mode: TaskIngressMode;
+  /** When the task was submitted to TaskRouter */
+  queued_at?: number;
+  /** Source channel (if ingress_mode === 'channel') */
+  source_channel?: string;
+  /** Parent task ID (if ingress_mode === 'decomposition') */
+  decomposed_from?: string;
+  /** Batch ID (if ingress_mode === 'batch') */
+  batch_id?: string;
+}
+
 export interface TaskDTO {
   id: string;
   title: string;
@@ -61,6 +82,8 @@ export interface TaskDTO {
   error?: string;
   metadata?: Record<string, unknown>;
   delegationHistory?: DelegationRecord[];
+  // Intake traceability (BLOQUE 4)
+  intake?: TaskIntakeTraceability;
   startedAt?: number;
   completedAt?: number;
   createdAt: number;
@@ -177,6 +200,17 @@ export interface GenerationDTO {
   approvedAt?: number;
   activatedAt?: number;
   metadata?: Record<string, unknown>;
+  // Traceability (BLOQUE 2)
+  traceability?: {
+    ai_requested?: boolean;
+    ai_available?: boolean;
+    ai_generation_attempted?: boolean;
+    ai_generation_succeeded?: boolean;
+    fallback_used?: boolean;
+    fallback_reason?: string | null;
+    fallback_template_name?: string | null;
+    ai_model?: string;
+  };
   createdAt: number;
   updatedAt: number;
 }

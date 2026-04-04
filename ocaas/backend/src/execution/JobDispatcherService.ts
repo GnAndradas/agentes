@@ -40,6 +40,12 @@ import type {
   MissingResource,
 } from './types.js';
 import type { AutonomyPolicy } from '../organization/types.js';
+import {
+  createExecutionTraceability,
+  detectExecutionMode,
+  checkRuntimeReady,
+  type ExecutionTraceability,
+} from './ExecutionTraceability.js';
 
 const logger = createLogger('JobDispatcherService');
 
@@ -403,6 +409,7 @@ export class JobDispatcherService {
 
   /**
    * Execute a prepared job payload
+   * BLOQUE 10: Adds execution traceability and runtime_ready checks
    */
   private async executeJob(
     payload: JobPayload,
@@ -410,9 +417,38 @@ export class JobDispatcherService {
   ): Promise<DispatchResult> {
     const adapter = getOpenClawAdapter();
     const { jobId } = payload;
+    const agentId = payload.agent.agentId;
+
+    // BLOQUE 10: Initialize execution traceability
+    const traceBuilder = createExecutionTraceability(agentId);
+
+    // Get gateway status
+    const gatewayConfigured = adapter.isConfigured();
+    const gatewayConnected = adapter.isConnected();
+    const wsConnected = false; // WebSocket RPC not yet implemented
+
+    traceBuilder.gatewayStatus(gatewayConfigured, gatewayConnected, wsConnected);
+
+    // BLOQUE 10: Detect execution mode
+    const modeInfo = detectExecutionMode(gatewayConfigured, gatewayConnected, wsConnected);
+    traceBuilder.mode(modeInfo.mode, modeInfo.transport);
+
+    // BLOQUE 10: Check runtime_ready before execution
+    const runtimeCheck = checkRuntimeReady(
+      payload.agent.name,
+      undefined, // sessionId not known yet
+      gatewayConfigured,
+      gatewayConnected
+    );
+    traceBuilder.runtimeReady(runtimeCheck.ready, runtimeCheck.materialization_status);
 
     // Check OpenClaw availability
-    if (!adapter.isConfigured()) {
+    if (!gatewayConfigured) {
+      const trace = traceBuilder
+        .fallbackUsed('OpenClaw not configured')
+        .completed()
+        .build();
+
       this.jobStore.setStatus(jobId, 'failed');
       return {
         jobId,
@@ -422,7 +458,25 @@ export class JobDispatcherService {
           message: 'OpenClaw not configured',
           retryable: false,
         },
+        response: {
+          jobId,
+          status: 'failed',
+          traceability: trace,
+          completedAt: nowTimestamp(),
+        },
       };
+    }
+
+    // BLOQUE 10: Check runtime_ready
+    if (!runtimeCheck.ready) {
+      logger.warn({
+        jobId,
+        agentId,
+        reason: runtimeCheck.reason,
+        lifecycleState: runtimeCheck.lifecycle_state,
+      }, 'Agent not runtime_ready - executing with fallback');
+
+      traceBuilder.fallbackUsed(runtimeCheck.reason || 'Agent not runtime_ready');
     }
 
     // Setup abort controller
@@ -450,15 +504,44 @@ export class JobDispatcherService {
         },
       });
 
+      // BLOQUE 10: Mark transport success
+      traceBuilder.transportSuccess(true);
+
       // Update session ID if we got one
       if (result.sessionId) {
+        traceBuilder.sessionId(result.sessionId);
         this.jobStore.setStatus(jobId, 'running', result.sessionId);
         this.jobStore.addEvent(jobId, { type: 'START', sessionId: result.sessionId });
       }
 
+      // BLOQUE 10: Track response
+      if (result.response) {
+        traceBuilder.responseReceived();
+      }
+
+      // Build final traceability
+      const trace = traceBuilder.completed().build();
+
       // Process result
       const response = this.processExecutionResult(jobId, result, payload);
+
+      // BLOQUE 10: Attach traceability to response
+      response.traceability = trace;
+
       this.jobStore.setResponse(jobId, response);
+
+      // Log execution traceability
+      logger.info({
+        jobId,
+        agentId,
+        execution_mode: trace.execution_mode,
+        transport: trace.transport,
+        runtime_ready: trace.runtime_ready_at_execution,
+        transport_success: trace.transport_success,
+        response_received: trace.response_received,
+        fallback_used: trace.execution_fallback_used,
+        gap: trace.gap,
+      }, 'Job execution traced (BLOQUE 10)');
 
       // Handle blocking
       if (response.status === 'blocked' && response.blocked) {
@@ -472,6 +555,10 @@ export class JobDispatcherService {
         response,
       };
     } catch (err) {
+      // BLOQUE 10: Mark transport failure
+      traceBuilder.transportSuccess(false);
+      const trace = traceBuilder.completed().build();
+
       const error: JobError = {
         code: 'execution_failed',
         message: err instanceof Error ? err.message : String(err),
@@ -482,13 +569,19 @@ export class JobDispatcherService {
         jobId,
         status: 'failed',
         error,
+        traceability: trace, // BLOQUE 10: Include traceability even on failure
         completedAt: nowTimestamp(),
       };
 
       this.jobStore.setResponse(jobId, response);
       this.jobStore.addEvent(jobId, { type: 'FAIL', error });
 
-      logger.error({ err, jobId }, 'Job execution failed');
+      logger.error({
+        err,
+        jobId,
+        execution_mode: trace.execution_mode,
+        transport_success: trace.transport_success,
+      }, 'Job execution failed (BLOQUE 10)');
 
       return {
         jobId,

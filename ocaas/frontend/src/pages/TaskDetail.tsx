@@ -101,11 +101,19 @@ export function TaskDetail() {
   });
 
   // ============ NEW: Advanced execution data ============
+  // All these queries treat 404 as "no data" rather than error
+  // This allows the page to remain functional even when some data is unavailable
 
   // Fetch task diagnostics (includes execution summary, timeline, delegation chain)
   const { data: diagnostics, isLoading: isDiagnosticsLoading } = useQuery({
     queryKey: ['tasks', id, 'diagnostics'],
-    queryFn: () => taskStateApi.getDiagnostics(id!),
+    queryFn: async () => {
+      try {
+        return await taskStateApi.getDiagnostics(id!);
+      } catch {
+        return null; // 404 or error = no diagnostics available
+      }
+    },
     enabled: !!id,
     refetchInterval: 5000,
     retry: false,
@@ -114,16 +122,28 @@ export function TaskDetail() {
   // Fetch full task execution state
   const { data: taskState, isLoading: isStateLoading } = useQuery({
     queryKey: ['tasks', id, 'state'],
-    queryFn: () => taskStateApi.getState(id!),
+    queryFn: async () => {
+      try {
+        return await taskStateApi.getState(id!);
+      } catch {
+        return null; // 404 = state not initialized yet
+      }
+    },
     enabled: !!id,
     refetchInterval: 5000,
     retry: false,
   });
 
-  // Fetch timeline events
-  const { data: timeline, isLoading: isTimelineLoading } = useQuery({
+  // Fetch timeline - backend returns { task_id, timeline, ai_usage, execution_summary }
+  const { data: timelineResponse, isLoading: isTimelineLoading } = useQuery({
     queryKey: ['tasks', id, 'timeline'],
-    queryFn: () => taskStateApi.getTimeline(id!),
+    queryFn: async () => {
+      try {
+        return await taskStateApi.getTimeline(id!);
+      } catch {
+        return null; // 404 = no timeline available
+      }
+    },
     enabled: !!id,
     refetchInterval: 10000,
     retry: false,
@@ -132,7 +152,13 @@ export function TaskDetail() {
   // Fetch checkpoints
   const { data: checkpoints, isLoading: isCheckpointsLoading } = useQuery({
     queryKey: ['tasks', id, 'checkpoints'],
-    queryFn: () => taskStateApi.getCheckpoints(id!),
+    queryFn: async () => {
+      try {
+        return await taskStateApi.getCheckpoints(id!);
+      } catch {
+        return []; // 404 = no checkpoints
+      }
+    },
     enabled: !!id,
     retry: false,
   });
@@ -140,7 +166,13 @@ export function TaskDetail() {
   // Fetch budget/cost for this task
   const { data: taskCost, isLoading: isCostLoading } = useQuery({
     queryKey: ['budget', 'task', id],
-    queryFn: () => budgetApi.getTaskCost(id!),
+    queryFn: async () => {
+      try {
+        return await budgetApi.getTaskCost(id!);
+      } catch {
+        return null; // 404 = no cost data
+      }
+    },
     enabled: !!id,
     retry: false,
   });
@@ -218,7 +250,7 @@ export function TaskDetail() {
   const isPaused = taskState?.pausedAt !== undefined && taskState.pausedAt > 0;
   const canPause = task.status === 'running' && !isPaused;
   const canResume = isPaused;
-  const hasAdvancedData = diagnostics || taskState || timeline || checkpoints || taskCost;
+  const hasAdvancedData = diagnostics || taskState || timelineResponse || checkpoints || taskCost;
 
   return (
     <div className="space-y-6">
@@ -565,7 +597,7 @@ export function TaskDetail() {
                 />
                 <div className="max-h-80 overflow-y-auto">
                   <TimelinePanel
-                    events={timeline || diagnostics?.timeline || []}
+                    events={timelineResponse?.timeline || diagnostics?.timeline || []}
                     isLoading={isTimelineLoading}
                     maxItems={15}
                   />

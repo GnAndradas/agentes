@@ -547,10 +547,30 @@ export const taskStateApi = {
     return res.data;
   },
 
-  /** Get task execution timeline */
+  /**
+   * Get task execution timeline
+   * Backend returns { task_id, timeline, ai_usage, execution_summary }
+   */
   getTimeline: async (taskId: string) => {
-    const res = await api.get<DataResponse<import('../types').TaskTimelineEvent[]>>(`/tasks/${taskId}/timeline`);
+    const res = await api.get<DataResponse<import('../types').TaskTimelineResponse>>(`/tasks/${taskId}/timeline`);
     return res.data;
+  },
+
+  /**
+   * Get timeline events only (extracts array from response)
+   * Convenience method that returns just the events array, safely handling errors
+   */
+  getTimelineEvents: async (taskId: string): Promise<import('../types').TaskTimelineEvent[]> => {
+    try {
+      const res = await api.get<DataResponse<import('../types').TaskTimelineResponse>>(`/tasks/${taskId}/timeline`);
+      const data = res?.data;
+      if (data && Array.isArray(data.timeline)) {
+        return data.timeline;
+      }
+      return [];
+    } catch {
+      return [];
+    }
   },
 
   /** Get full task execution state */
@@ -625,28 +645,21 @@ export const budgetApi = {
     return res.data;
   },
 
-  /** Get cost summary for a specific task */
+  /**
+   * Get cost summary for a specific task
+   * Backend route: GET /budget/cost/task/:taskId
+   */
   getTaskCost: async (taskId: string) => {
-    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/task/${taskId}`);
+    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/cost/task/${taskId}`);
     return res.data;
   },
 
-  /** Get daily cost summary for a specific agent */
+  /**
+   * Get daily cost summary for a specific agent
+   * Backend route: GET /budget/cost/agent/:agentId
+   */
   getAgentCost: async (agentId: string) => {
-    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/agent/${agentId}`);
-    return res.data;
-  },
-
-  /** Check budget before an operation */
-  check: async (params: {
-    taskId?: string;
-    agentId?: string;
-    estimatedCost?: number;
-    model?: string;
-    inputTokens?: number;
-    outputTokens?: number;
-  }) => {
-    const res = await api.post<DataResponse<import('../types').BudgetCheckResult>>('/budget/check', params);
+    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/cost/agent/${agentId}`);
     return res.data;
   },
 
@@ -669,53 +682,44 @@ export const agentMaterializationApi = {
     return res.data;
   },
 
-  /** List all agents with their runtime status */
+  /**
+   * List all agents with their runtime status
+   * Backend route: GET /agents/status/all
+   */
   listWithStatus: async () => {
-    const res = await api.get<DataResponse<import('../types').AgentWithStatus[]>>('/agents?expand=runtime');
+    const res = await api.get<DataResponse<import('../types').AgentWithStatus[]>>('/agents/status/all');
     return res.data;
   },
 
-  /** Materialize an agent (start OpenClaw session) */
-  materialize: async (agentId: string) => {
-    const res = await api.post<DataResponse<{ sessionId: string; status: import('../types').MaterializationStatus }>>(`/agents/${agentId}/materialize`);
-    return res.data;
-  },
-
-  /** Dematerialize an agent (close OpenClaw session) */
-  dematerialize: async (agentId: string) => {
-    const res = await api.post<DataResponse<{ status: import('../types').MaterializationStatus }>>(`/agents/${agentId}/dematerialize`);
-    return res.data;
-  },
-
-  /** Ping/heartbeat for an agent session */
-  ping: async (agentId: string) => {
-    const res = await api.post<DataResponse<{ alive: boolean; lastPing: number }>>(`/agents/${agentId}/ping`);
-    return res.data;
-  },
+  // NOTE: materialize, dematerialize, ping endpoints do NOT exist in backend yet
+  // These are placeholders for future implementation
 };
 
 // =============================================================================
 // GENERATION TRACEABILITY API
 // =============================================================================
 
-// Extend generationApi with traceability methods
+// NOTE: Backend does NOT have traceability endpoints yet.
+// These are placeholders that return empty/default values to avoid breaking the UI.
 export const generationTraceabilityApi = {
-  /** Get generation with full traceability info */
+  /** Get generation with full traceability info - NOT IMPLEMENTED IN BACKEND */
   getWithTraceability: async (id: string) => {
-    const res = await api.get<DataResponse<import('../types').GenerationWithTraceability>>(`/generations/${id}?expand=traceability`);
-    return res.data;
+    // Fallback: return regular generation without traceability
+    const res = await api.get<DataResponse<import('../types').Generation>>(`/generations/${id}`);
+    return { ...res.data, traceability: undefined } as import('../types').GenerationWithTraceability;
   },
 
-  /** Get traceability info for a generation */
-  getTraceability: async (id: string) => {
-    const res = await api.get<DataResponse<import('../types').GenerationTraceability>>(`/generations/${id}/traceability`);
-    return res.data;
+  /** Get traceability info for a generation - NOT IMPLEMENTED IN BACKEND */
+  getTraceability: async (_id: string): Promise<import('../types').GenerationTraceability | null> => {
+    // Backend doesn't support this - return null
+    return null;
   },
 
-  /** List generations with traceability */
+  /** List generations with traceability - NOT IMPLEMENTED IN BACKEND */
   listWithTraceability: async (params?: { type?: string; status?: string }) => {
-    const query = params ? `?${new URLSearchParams({ ...params, expand: 'traceability' } as Record<string, string>)}` : '?expand=traceability';
-    const res = await api.get<DataResponse<import('../types').GenerationWithTraceability[]>>(`/generations${query}`);
-    return res.data;
+    // Fallback: return regular generations without traceability
+    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
+    const res = await api.get<DataResponse<import('../types').Generation[]>>(`/generations${query}`);
+    return res.data.map(g => ({ ...g, traceability: undefined })) as import('../types').GenerationWithTraceability[];
   },
 };

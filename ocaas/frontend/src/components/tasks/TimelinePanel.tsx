@@ -19,7 +19,8 @@ import {
 import type { TaskTimelineEvent, ExecutionPhase } from '../../types';
 
 interface TimelinePanelProps {
-  events: TaskTimelineEvent[];
+  /** Events array - component handles null/undefined/non-array safely */
+  events: TaskTimelineEvent[] | null | undefined;
   isLoading?: boolean;
   maxItems?: number;
 }
@@ -122,7 +123,10 @@ export function TimelinePanel({ events, isLoading, maxItems = 20 }: TimelinePane
     );
   }
 
-  if (!events || events.length === 0) {
+  // HARDENING: Safely handle null, undefined, or non-array values
+  const safeEvents = Array.isArray(events) ? events : [];
+
+  if (safeEvents.length === 0) {
     return (
       <div className="text-center py-6 text-dark-500 text-sm">
         <Clock className="w-5 h-5 mx-auto mb-2 opacity-50" />
@@ -132,7 +136,9 @@ export function TimelinePanel({ events, isLoading, maxItems = 20 }: TimelinePane
   }
 
   // Sort by timestamp descending (most recent first) and limit
-  const sortedEvents = [...events]
+  // Filter out any invalid events (missing id or timestamp)
+  const sortedEvents = safeEvents
+    .filter((e) => e && typeof e.timestamp === 'number' && e.id)
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, maxItems);
 
@@ -141,9 +147,9 @@ export function TimelinePanel({ events, isLoading, maxItems = 20 }: TimelinePane
       {sortedEvents.map((event) => (
         <TimelineItem key={event.id} event={event} />
       ))}
-      {events.length > maxItems && (
+      {safeEvents.length > maxItems && (
         <p className="text-xs text-dark-500 text-center pt-2">
-          +{events.length - maxItems} more events
+          +{safeEvents.length - maxItems} more events
         </p>
       )}
     </div>

@@ -9,8 +9,8 @@ import { Badge } from '../ui';
 import type { ExecutionSummary, TaskExecutionState, TaskStateSnapshot } from '../../types';
 
 interface ExecutionSummaryPanelProps {
-  execution?: ExecutionSummary;
-  state?: TaskExecutionState | TaskStateSnapshot;
+  execution?: ExecutionSummary | null;
+  state?: TaskExecutionState | TaskStateSnapshot | null;
   isLoading?: boolean;
 }
 

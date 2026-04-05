@@ -668,6 +668,23 @@ export interface TaskTimelineEvent {
   };
 }
 
+/** Backend timeline response (contains timeline array + metadata) */
+export interface TaskTimelineResponse {
+  task_id: string;
+  timeline: TaskTimelineEvent[];
+  ai_usage?: {
+    model?: string;
+    input_tokens?: number;
+    output_tokens?: number;
+    cost?: number;
+  };
+  execution_summary?: {
+    outcome?: TaskExecutionOutcome;
+    hooks_session?: string;
+    execution_time_ms?: number;
+  };
+}
+
 /** Execution summary returned by diagnostics endpoint */
 export interface ExecutionSummary {
   lastJobId?: string;

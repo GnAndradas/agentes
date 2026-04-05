@@ -9,7 +9,8 @@ import { Badge, Button } from '../ui';
 import type { TaskCheckpoint, ExecutionPhase } from '../../types';
 
 interface CheckpointsPanelProps {
-  checkpoints: TaskCheckpoint[];
+  /** Checkpoints array - component handles null/undefined/non-array safely */
+  checkpoints: TaskCheckpoint[] | null | undefined;
   isLoading?: boolean;
   onRestore?: (checkpointId: string) => void;
   canRestore?: boolean;
@@ -105,7 +106,10 @@ export function CheckpointsPanel({
     );
   }
 
-  if (!checkpoints || checkpoints.length === 0) {
+  // HARDENING: Safely handle null, undefined, or non-array values
+  const safeCheckpoints = Array.isArray(checkpoints) ? checkpoints : [];
+
+  if (safeCheckpoints.length === 0) {
     return (
       <div className="text-center py-6 text-dark-500 text-sm">
         <Flag className="w-5 h-5 mx-auto mb-2 opacity-50" />
@@ -114,8 +118,10 @@ export function CheckpointsPanel({
     );
   }
 
-  // Sort by createdAt descending (most recent first)
-  const sortedCheckpoints = [...checkpoints].sort((a, b) => b.createdAt - a.createdAt);
+  // Sort by createdAt descending (most recent first), filter invalid entries
+  const sortedCheckpoints = safeCheckpoints
+    .filter((c) => c && c.id && typeof c.createdAt === 'number')
+    .sort((a, b) => b.createdAt - a.createdAt);
 
   return (
     <div className="space-y-2">

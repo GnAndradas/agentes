@@ -8,8 +8,8 @@ import { DollarSign, AlertTriangle, Ban, TrendingDown, CheckCircle } from 'lucid
 import type { BudgetCostSummary, BudgetDecision } from '../../types';
 
 interface BudgetPanelProps {
-  cost?: BudgetCostSummary;
-  decision?: BudgetDecision;
+  cost?: BudgetCostSummary | null;
+  decision?: BudgetDecision | null;
   isLoading?: boolean;
 }
 

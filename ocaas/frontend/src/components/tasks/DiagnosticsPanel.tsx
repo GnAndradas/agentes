@@ -17,8 +17,8 @@ import { Badge } from '../ui';
 import type { TaskDiagnostics, TaskExecutionState } from '../../types';
 
 interface DiagnosticsPanelProps {
-  diagnostics?: TaskDiagnostics;
-  state?: TaskExecutionState;
+  diagnostics?: TaskDiagnostics | null;
+  state?: TaskExecutionState | null;
   isLoading?: boolean;
 }
 
@@ -29,8 +29,8 @@ interface DiagnosticIssue {
 }
 
 function extractIssues(
-  diagnostics?: TaskDiagnostics,
-  state?: TaskExecutionState
+  diagnostics?: TaskDiagnostics | null,
+  state?: TaskExecutionState | null
 ): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = [];
 

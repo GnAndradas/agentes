@@ -13,6 +13,7 @@ interface JobStatusPanelProps {
 const statusConfig: Record<JobStatusType, { icon: React.ElementType; color: string; bg: string }> = {
   pending: { icon: Clock, color: 'text-dark-400', bg: 'bg-dark-700' },
   running: { icon: Loader2, color: 'text-blue-400', bg: 'bg-blue-500/20' },
+  accepted: { icon: CheckCircle, color: 'text-cyan-400', bg: 'bg-cyan-500/20' },
   completed: { icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-500/20' },
   failed: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-500/20' },
   blocked: { icon: AlertTriangle, color: 'text-yellow-400', bg: 'bg-yellow-500/20' },

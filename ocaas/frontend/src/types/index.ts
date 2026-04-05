@@ -485,7 +485,7 @@ export interface EffectivePolicies {
 // JOB TYPES
 // =============================================================================
 
-export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'timeout';
+export type JobStatus = 'pending' | 'running' | 'accepted' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'timeout';
 
 export interface JobBlocked {
   reason: string;
@@ -559,4 +559,320 @@ export interface AgentJobSummary {
   sessionId?: string;
   createdAt: number;
   completedAt?: number;
+}
+
+// =============================================================================
+// TASK EXECUTION STATE TYPES
+// =============================================================================
+
+/** Outcome of task execution attempt */
+export type TaskExecutionOutcome = 'completed_sync' | 'accepted_async' | 'failed';
+
+/** Execution phase for task state tracking */
+export type ExecutionPhase =
+  | 'pending'
+  | 'initializing'
+  | 'planning'
+  | 'executing'
+  | 'waiting_human'
+  | 'waiting_resource'
+  | 'paused'
+  | 'completing'
+  | 'completed'
+  | 'failed';
+
+/** Step status in task execution */
+export type TaskStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+/** Individual step in task execution */
+export interface TaskStep {
+  id: string;
+  name: string;
+  type: 'action' | 'decision' | 'delegation' | 'tool_call' | 'llm_call' | 'human_input' | 'checkpoint';
+  status: TaskStepStatus;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Checkpoint for task state recovery */
+export interface TaskCheckpoint {
+  id: string;
+  taskId: string;
+  label: string;
+  phase: ExecutionPhase;
+  stepIndex: number;
+  state: Record<string, unknown>;
+  isAutomatic: boolean;
+  reason?: string;
+  createdAt: number;
+}
+
+/** Full task execution state */
+export interface TaskExecutionState {
+  taskId: string;
+  phase: ExecutionPhase;
+  currentStepIndex: number;
+  steps: TaskStep[];
+  context: Record<string, unknown>;
+  errors: Array<{ stepId?: string; error: string; timestamp: number; recoverable: boolean }>;
+  pausedAt?: number;
+  pauseReason?: string;
+  checkpoints: TaskCheckpoint[];
+  metrics: {
+    totalSteps: number;
+    completedSteps: number;
+    failedSteps: number;
+    totalDurationMs: number;
+    llmCalls: number;
+    toolCalls: number;
+  };
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Lightweight snapshot for diagnostics */
+export interface TaskStateSnapshot {
+  taskId: string;
+  phase: ExecutionPhase;
+  currentStepIndex: number;
+  totalSteps: number;
+  completedSteps: number;
+  failedSteps: number;
+  isPaused: boolean;
+  hasCheckpoints: boolean;
+  lastCheckpointAt?: number;
+  updatedAt: number;
+}
+
+/** Timeline event for task execution history */
+export interface TaskTimelineEvent {
+  id: string;
+  taskId: string;
+  type: 'phase_change' | 'step_start' | 'step_complete' | 'step_fail' | 'checkpoint' | 'pause' | 'resume' | 'error' | 'delegation';
+  timestamp: number;
+  data: {
+    phase?: ExecutionPhase;
+    stepId?: string;
+    stepName?: string;
+    checkpointId?: string;
+    error?: string;
+    fromAgentId?: string;
+    toAgentId?: string;
+    reason?: string;
+  };
+}
+
+/** Execution summary returned by diagnostics endpoint */
+export interface ExecutionSummary {
+  lastJobId?: string;
+  lastJobStatus?: JobStatus;
+  outcome?: TaskExecutionOutcome;
+  result?: JobResult;
+  error?: string;
+  hooks_session?: string;
+  executionTimeMs?: number;
+  toolCalls?: number;
+}
+
+/** Full task diagnostics */
+export interface TaskDiagnostics {
+  task: Task;
+  execution: ExecutionSummary;
+  state?: TaskStateSnapshot;
+  timeline: TaskTimelineEvent[];
+  delegationChain: Array<{
+    agentId: string;
+    agentName: string;
+    jobId: string;
+    status: JobStatus;
+    startedAt: number;
+    completedAt?: number;
+  }>;
+  subtasks?: Array<{
+    id: string;
+    title: string;
+    status: TaskStatus;
+    agentId?: string;
+  }>;
+}
+
+// =============================================================================
+// BUDGET TYPES
+// =============================================================================
+
+/** Budget decision types */
+export type BudgetDecision = 'allow' | 'warn' | 'block' | 'degrade';
+
+/** Budget scope for cost tracking */
+export type BudgetScope = 'task' | 'agent_daily' | 'global_daily';
+
+/** Budget configuration */
+export interface BudgetConfig {
+  enabled: boolean;
+  limits: {
+    perTask: number;
+    perAgentDaily: number;
+    globalDaily: number;
+  };
+  thresholds: {
+    warnAt: number;      // 0.0-1.0
+    blockAt: number;     // 0.0-1.0
+    degradeAt: number;   // 0.0-1.0
+  };
+  degradation: {
+    fallbackModel?: string;
+    maxTokensReduction?: number;
+    disableTools?: boolean;
+  };
+  resetHour: number; // UTC hour for daily reset (0-23)
+}
+
+/** Cost entry for tracking */
+export interface BudgetCostEntry {
+  id: string;
+  scope: BudgetScope;
+  scopeId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Budget check result */
+export interface BudgetCheckResult {
+  decision: BudgetDecision;
+  scope: BudgetScope;
+  currentCost: number;
+  limit: number;
+  percentUsed: number;
+  message?: string;
+  degradationConfig?: BudgetConfig['degradation'];
+}
+
+/** Cost summary for a scope */
+export interface BudgetCostSummary {
+  scope: BudgetScope;
+  scopeId: string;
+  totalCost: number;
+  limit: number;
+  percentUsed: number;
+  entryCount: number;
+  breakdown?: {
+    byModel: Record<string, number>;
+    byHour?: Record<number, number>;
+  };
+  periodStart: number;
+  periodEnd?: number;
+}
+
+/** Full budget diagnostics */
+export interface BudgetDiagnostics {
+  config: BudgetConfig;
+  global: BudgetCostSummary;
+  agents: BudgetCostSummary[];
+  recentTasks: BudgetCostSummary[];
+  warnings: Array<{
+    scope: BudgetScope;
+    scopeId: string;
+    message: string;
+    percentUsed: number;
+    timestamp: number;
+  }>;
+  blocks: Array<{
+    scope: BudgetScope;
+    scopeId: string;
+    message: string;
+    timestamp: number;
+  }>;
+}
+
+// =============================================================================
+// AGENT MATERIALIZATION TYPES
+// =============================================================================
+
+/** Agent materialization status */
+export type MaterializationStatus =
+  | 'not_materialized'
+  | 'materializing'
+  | 'materialized'
+  | 'failed'
+  | 'expired';
+
+/** Agent runtime status with materialization info */
+export interface AgentRuntimeStatus {
+  agentId: string;
+  materialization: MaterializationStatus;
+  sessionId?: string;
+  lastPing?: number;
+  uptime?: number;
+  memoryUsage?: number;
+  activeJobs: number;
+  totalJobsProcessed: number;
+  errorCount: number;
+  lastError?: string;
+  capabilities: string[];
+  version?: string;
+}
+
+/** Extended agent with runtime status */
+export interface AgentWithStatus extends Agent {
+  runtime?: AgentRuntimeStatus;
+}
+
+// =============================================================================
+// GENERATION TRACEABILITY TYPES
+// =============================================================================
+
+/** Generation traceability for auditing */
+export interface GenerationTraceability {
+  generationId: string;
+  type: GenerationType;
+  trigger: {
+    source: 'user' | 'agent' | 'system' | 'feedback';
+    sourceId?: string;
+    feedbackId?: string;
+    taskId?: string;
+  };
+  llmCalls: Array<{
+    callId: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    cost: number;
+    timestamp: number;
+    duration: number;
+  }>;
+  validation: {
+    attempts: number;
+    lastResult?: Record<string, unknown>;
+    errors: string[];
+  };
+  approval?: {
+    status: ApprovalStatus;
+    approvedBy?: string;
+    approvedAt?: number;
+    reason?: string;
+  };
+  deployment?: {
+    deployedAt?: number;
+    path?: string;
+    version?: string;
+    rollbackAvailable: boolean;
+  };
+  totalCost: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Extended generation with traceability */
+export interface GenerationWithTraceability extends Generation {
+  traceability?: GenerationTraceability;
 }

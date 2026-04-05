@@ -18,8 +18,20 @@ import {
   Link2Off,
   HelpCircle,
 } from 'lucide-react';
-import { systemApi } from '../../lib/api';
+import { systemApi, type QuickStatus, type HealthResponse } from '../../lib/api';
 import { useAppStore, type StatusActivity } from '../../stores/app';
+
+// Type guards for union types
+type HealthError = { error: string; status: null };
+type GatewayError = { error: string };
+
+function isHealthResponse(data: HealthResponse | HealthError | undefined): data is HealthResponse {
+  return !!data && !('error' in data);
+}
+
+function isQuickStatus(data: QuickStatus | GatewayError | undefined): data is QuickStatus {
+  return !!data && 'rest' in data;
+}
 
 const activityIcons = {
   gateway: Server,
@@ -90,12 +102,12 @@ export function StatusBar() {
     retry: false,
   });
 
-  const backendHealthy = !!backendHealth && !backendHealth?.error;
-  const backendError = backendHealth?.error as 'unreachable' | 'server_error' | undefined;
-  const backendVersion = backendHealth?.version;
-  const backendUptime = backendHealth?.uptime;
-  const backendEnv = backendHealth?.environment;
-  const backendCommit = backendHealth?.commit;
+  const backendHealthy = isHealthResponse(backendHealth);
+  const backendError = !backendHealthy && backendHealth ? (backendHealth as HealthError).error as 'unreachable' | 'server_error' : undefined;
+  const backendVersion = backendHealthy ? backendHealth.version : undefined;
+  const backendUptime = backendHealthy ? backendHealth.uptime : undefined;
+  const backendEnv = backendHealthy ? backendHealth.environment : undefined;
+  const backendCommit = backendHealthy ? backendHealth.commit : undefined;
 
   // Check gateway status (OpenClaw) - HONEST: makes real requests
   const { data: gatewayStatus } = useQuery({
@@ -116,12 +128,14 @@ export function StatusBar() {
     retry: false,
   });
 
-  // Derive status indicators from QuickStatus (all null-safe)
-  const restOk = gatewayStatus?.rest?.reachable && gatewayStatus?.rest?.authenticated;
-  const hooksConfigured = gatewayStatus?.hooks?.configured;
-  const hooksProbed = gatewayStatus?.hooks?.probed;
-  const probeEnabled = gatewayStatus?.probe?.enabled;
-  const probeTested = gatewayStatus?.probe?.tested;
+  // Derive status indicators from QuickStatus (use type guard)
+  const gwStatus = isQuickStatus(gatewayStatus) ? gatewayStatus : undefined;
+  const gwError = !gwStatus && gatewayStatus ? (gatewayStatus as GatewayError).error : undefined;
+  const restOk = gwStatus?.rest?.reachable && gwStatus?.rest?.authenticated;
+  const hooksConfigured = gwStatus?.hooks?.configured;
+  const hooksProbed = gwStatus?.hooks?.probed;
+  const probeEnabled = gwStatus?.probe?.enabled;
+  const probeTested = gwStatus?.probe?.tested;
   // OpenClaw WS status available via gatewayStatus?.websocket.connected if needed
 
   // Get orchestrator status
@@ -219,10 +233,10 @@ export function StatusBar() {
             className="flex items-center gap-1.5"
             title={
               restOk
-                ? `OpenClaw REST OK (${gatewayStatus?.rest?.latencyMs ?? 0}ms)`
-                : gatewayStatus?.error === 'unreachable'
+                ? `OpenClaw REST OK (${gwStatus?.rest?.latencyMs ?? 0}ms)`
+                : gwError === 'unreachable'
                   ? 'OpenClaw unreachable (network)'
-                  : gatewayStatus?.rest?.error || 'OpenClaw REST error'
+                  : gwStatus?.rest?.error || 'OpenClaw REST error'
             }
           >
             {restOk ? (
@@ -243,7 +257,7 @@ export function StatusBar() {
             className="flex items-center gap-1.5"
             title={
               hooksProbed
-                ? (gatewayStatus?.hooks?.working ? 'Hooks working' : 'Hooks failed')
+                ? (gwStatus?.hooks?.working ? 'Hooks working' : 'Hooks failed')
                 : hooksConfigured
                   ? 'Hooks configured (not probed)'
                   : 'Hooks not configured'
@@ -251,7 +265,7 @@ export function StatusBar() {
           >
             {hooksConfigured ? (
               hooksProbed ? (
-                gatewayStatus?.hooks?.working ? (
+                gwStatus?.hooks?.working ? (
                   <>
                     <Link className="w-3.5 h-3.5 text-green-400" />
                     <span className="text-dark-400">Hooks</span>
@@ -282,12 +296,12 @@ export function StatusBar() {
               className="flex items-center gap-1.5"
               title={
                 probeTested
-                  ? (gatewayStatus?.probe?.working ? 'Generation probe OK' : `Probe failed: ${gatewayStatus?.probe?.error ?? 'unknown'}`)
+                  ? (gwStatus?.probe?.working ? 'Generation probe OK' : `Probe failed: ${gwStatus?.probe?.error ?? 'unknown'}`)
                   : 'Probe enabled (run diagnostic for full test)'
               }
             >
               {probeTested ? (
-                gatewayStatus?.probe?.working ? (
+                gwStatus?.probe?.working ? (
                   <>
                     <Cpu className="w-3.5 h-3.5 text-green-400" />
                     <span className="text-dark-400">Probe</span>

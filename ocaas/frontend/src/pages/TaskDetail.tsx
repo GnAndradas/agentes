@@ -1,13 +1,38 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, XCircle, RotateCcw, Clock, CheckCircle, AlertCircle, GitBranch, FolderTree, Zap, User, Network } from 'lucide-react';
+import {
+  ArrowLeft,
+  XCircle,
+  RotateCcw,
+  Clock,
+  CheckCircle,
+  AlertCircle,
+  GitBranch,
+  FolderTree,
+  Zap,
+  User,
+  Network,
+  Activity,
+  Flag,
+  DollarSign,
+  Bug,
+  Pause,
+  Play,
+} from 'lucide-react';
 import { DelegationHistory } from '../components/DelegationHistory';
-import { taskApi, jobApi, agentApi, orgApi } from '../lib/api';
+import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
 import { SubtasksPanel } from '../components/SubtasksPanel';
 import { JobStatusPanel, BlockedJobView } from '../components/jobs';
+import {
+  ExecutionSummaryPanel,
+  TimelinePanel,
+  CheckpointsPanel,
+  BudgetPanel,
+  DiagnosticsPanel,
+} from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
 
@@ -44,6 +69,7 @@ export function TaskDetail() {
   const queryClient = useQueryClient();
   const { addNotification } = useAppStore();
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(true);
 
   const { data: task, isLoading } = useQuery({
     queryKey: ['tasks', id],
@@ -74,6 +100,51 @@ export function TaskDetail() {
     retry: false,
   });
 
+  // ============ NEW: Advanced execution data ============
+
+  // Fetch task diagnostics (includes execution summary, timeline, delegation chain)
+  const { data: diagnostics, isLoading: isDiagnosticsLoading } = useQuery({
+    queryKey: ['tasks', id, 'diagnostics'],
+    queryFn: () => taskStateApi.getDiagnostics(id!),
+    enabled: !!id,
+    refetchInterval: 5000,
+    retry: false,
+  });
+
+  // Fetch full task execution state
+  const { data: taskState, isLoading: isStateLoading } = useQuery({
+    queryKey: ['tasks', id, 'state'],
+    queryFn: () => taskStateApi.getState(id!),
+    enabled: !!id,
+    refetchInterval: 5000,
+    retry: false,
+  });
+
+  // Fetch timeline events
+  const { data: timeline, isLoading: isTimelineLoading } = useQuery({
+    queryKey: ['tasks', id, 'timeline'],
+    queryFn: () => taskStateApi.getTimeline(id!),
+    enabled: !!id,
+    refetchInterval: 10000,
+    retry: false,
+  });
+
+  // Fetch checkpoints
+  const { data: checkpoints, isLoading: isCheckpointsLoading } = useQuery({
+    queryKey: ['tasks', id, 'checkpoints'],
+    queryFn: () => taskStateApi.getCheckpoints(id!),
+    enabled: !!id,
+    retry: false,
+  });
+
+  // Fetch budget/cost for this task
+  const { data: taskCost, isLoading: isCostLoading } = useQuery({
+    queryKey: ['budget', 'task', id],
+    queryFn: () => budgetApi.getTaskCost(id!),
+    enabled: !!id,
+    retry: false,
+  });
+
   const cancelMutation = useMutation({
     mutationFn: taskApi.cancel,
     onSuccess: () => {
@@ -87,6 +158,35 @@ export function TaskDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tasks', id] });
       addNotification({ type: 'success', title: 'Task retried' });
+    },
+  });
+
+  // Pause mutation
+  const pauseMutation = useMutation({
+    mutationFn: (reason?: string) => taskStateApi.pause(id!, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'state'] });
+      addNotification({ type: 'info', title: 'Task paused' });
+    },
+  });
+
+  // Resume mutation
+  const resumeMutation = useMutation({
+    mutationFn: (checkpointId?: string) => taskStateApi.resume(id!, checkpointId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'state'] });
+      addNotification({ type: 'success', title: 'Task resumed' });
+    },
+  });
+
+  // Create checkpoint mutation
+  const checkpointMutation = useMutation({
+    mutationFn: (label?: string) => taskStateApi.createCheckpoint(id!, label),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'checkpoints'] });
+      addNotification({ type: 'success', title: 'Checkpoint created' });
     },
   });
 
@@ -113,6 +213,12 @@ export function TaskDetail() {
 
   // Check if this is a subtask
   const isSubtask = Boolean(task.parentTaskId);
+
+  // ============ NEW: Derived state from advanced data ============
+  const isPaused = taskState?.pausedAt !== undefined && taskState.pausedAt > 0;
+  const canPause = task.status === 'running' && !isPaused;
+  const canResume = isPaused;
+  const hasAdvancedData = diagnostics || taskState || timeline || checkpoints || taskCost;
 
   return (
     <div className="space-y-6">
@@ -156,6 +262,26 @@ export function TaskDetail() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {canPause && (
+            <Button
+              variant="secondary"
+              onClick={() => pauseMutation.mutate('Manual pause')}
+              loading={pauseMutation.isPending}
+            >
+              <Pause className="w-4 h-4" />
+              Pause
+            </Button>
+          )}
+          {canResume && (
+            <Button
+              variant="primary"
+              onClick={() => resumeMutation.mutate(undefined)}
+              loading={resumeMutation.isPending}
+            >
+              <Play className="w-4 h-4" />
+              Resume
+            </Button>
+          )}
           {canCancel && (
             <Button
               variant="danger"
@@ -388,6 +514,132 @@ export function TaskDetail() {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* ============ ADVANCED EXECUTION PANELS ============ */}
+      {hasAdvancedData && (
+        <>
+          {/* Toggle for advanced view */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Activity className="w-5 h-5 text-primary-400" />
+              Execution Details
+            </h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              {showAdvanced ? 'Hide Details' : 'Show Details'}
+            </Button>
+          </div>
+
+          {showAdvanced && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+              {/* Execution Summary Panel */}
+              <Card>
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-blue-400" />
+                      Execution Summary
+                    </div>
+                  }
+                />
+                <ExecutionSummaryPanel
+                  execution={diagnostics?.execution}
+                  state={taskState}
+                  isLoading={isDiagnosticsLoading || isStateLoading}
+                />
+              </Card>
+
+              {/* Timeline Panel */}
+              <Card>
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-purple-400" />
+                      Timeline
+                    </div>
+                  }
+                />
+                <div className="max-h-80 overflow-y-auto">
+                  <TimelinePanel
+                    events={timeline || diagnostics?.timeline || []}
+                    isLoading={isTimelineLoading}
+                    maxItems={15}
+                  />
+                </div>
+              </Card>
+
+              {/* Checkpoints Panel */}
+              <Card>
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <Flag className="w-4 h-4 text-yellow-400" />
+                      Checkpoints
+                    </div>
+                  }
+                  action={
+                    task.status === 'running' && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => checkpointMutation.mutate('Manual checkpoint')}
+                        loading={checkpointMutation.isPending}
+                      >
+                        <Flag className="w-3 h-3 mr-1" />
+                        Create
+                      </Button>
+                    )
+                  }
+                />
+                <div className="max-h-60 overflow-y-auto">
+                  <CheckpointsPanel
+                    checkpoints={checkpoints || taskState?.checkpoints || []}
+                    isLoading={isCheckpointsLoading}
+                    onRestore={(checkpointId) => resumeMutation.mutate(checkpointId)}
+                    canRestore={canResume}
+                  />
+                </div>
+              </Card>
+
+              {/* Budget Panel */}
+              <Card>
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="w-4 h-4 text-green-400" />
+                      Budget & Cost
+                    </div>
+                  }
+                />
+                <BudgetPanel
+                  cost={taskCost}
+                  isLoading={isCostLoading}
+                />
+              </Card>
+
+              {/* Diagnostics Panel */}
+              <Card className="lg:col-span-2">
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <Bug className="w-4 h-4 text-orange-400" />
+                      Diagnostics
+                    </div>
+                  }
+                />
+                <DiagnosticsPanel
+                  diagnostics={diagnostics}
+                  state={taskState}
+                  isLoading={isDiagnosticsLoading || isStateLoading}
+                />
+              </Card>
+            </div>
+          )}
+        </>
       )}
 
       {/* Subtasks panel - only shown for decomposed parent tasks */}

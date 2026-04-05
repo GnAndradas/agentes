@@ -362,6 +362,7 @@ export function AgentDetail() {
               const statusColors: Record<JobStatus, string> = {
                 pending: 'bg-dark-700 text-dark-300',
                 running: 'bg-blue-500/20 text-blue-400',
+                accepted: 'bg-cyan-500/20 text-cyan-400',
                 completed: 'bg-green-500/20 text-green-400',
                 failed: 'bg-red-500/20 text-red-400',
                 blocked: 'bg-yellow-500/20 text-yellow-400',

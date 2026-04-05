@@ -535,3 +535,187 @@ export const jobApi = {
     return res.data;
   },
 };
+
+// =============================================================================
+// TASK STATE & DIAGNOSTICS API
+// =============================================================================
+
+export const taskStateApi = {
+  /** Get full task diagnostics including execution summary, state, timeline */
+  getDiagnostics: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').TaskDiagnostics>>(`/tasks/${taskId}/diagnostics`);
+    return res.data;
+  },
+
+  /** Get task execution timeline */
+  getTimeline: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').TaskTimelineEvent[]>>(`/tasks/${taskId}/timeline`);
+    return res.data;
+  },
+
+  /** Get full task execution state */
+  getState: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').TaskExecutionState>>(`/tasks/${taskId}/state`);
+    return res.data;
+  },
+
+  /** Get lightweight state snapshot */
+  getStateSnapshot: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').TaskStateSnapshot>>(`/tasks/${taskId}/state/snapshot`);
+    return res.data;
+  },
+
+  /** Initialize task state (if not exists) */
+  initState: async (taskId: string) => {
+    const res = await api.post<DataResponse<import('../types').TaskExecutionState>>(`/tasks/${taskId}/state/init`);
+    return res.data;
+  },
+
+  /** Get all checkpoints for a task */
+  getCheckpoints: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').TaskCheckpoint[]>>(`/tasks/${taskId}/checkpoints`);
+    return res.data;
+  },
+
+  /** Create a manual checkpoint */
+  createCheckpoint: async (taskId: string, label?: string) => {
+    const res = await api.post<DataResponse<import('../types').TaskCheckpoint>>(`/tasks/${taskId}/checkpoint`, { label });
+    return res.data;
+  },
+
+  /** Pause task execution */
+  pause: async (taskId: string, reason?: string) => {
+    const res = await api.post<DataResponse<import('../types').TaskExecutionState>>(`/tasks/${taskId}/pause`, { reason });
+    return res.data;
+  },
+
+  /** Resume task execution, optionally from a checkpoint */
+  resume: async (taskId: string, fromCheckpointId?: string) => {
+    const res = await api.post<DataResponse<import('../types').TaskExecutionState>>(`/tasks/${taskId}/resume`, { fromCheckpointId });
+    return res.data;
+  },
+};
+
+// =============================================================================
+// BUDGET API
+// =============================================================================
+
+export const budgetApi = {
+  /** Get full budget diagnostics */
+  getDiagnostics: async () => {
+    const res = await api.get<DataResponse<import('../types').BudgetDiagnostics>>('/budget/diagnostics');
+    return res.data;
+  },
+
+  /** Get current budget configuration */
+  getConfig: async () => {
+    const res = await api.get<DataResponse<import('../types').BudgetConfig>>('/budget/config');
+    return res.data;
+  },
+
+  /** Update budget configuration */
+  updateConfig: async (config: Partial<import('../types').BudgetConfig>) => {
+    const res = await api.patch<DataResponse<import('../types').BudgetConfig>>('/budget/config', config);
+    return res.data;
+  },
+
+  /** Get global daily cost summary */
+  getGlobal: async () => {
+    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>('/budget/global');
+    return res.data;
+  },
+
+  /** Get cost summary for a specific task */
+  getTaskCost: async (taskId: string) => {
+    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/task/${taskId}`);
+    return res.data;
+  },
+
+  /** Get daily cost summary for a specific agent */
+  getAgentCost: async (agentId: string) => {
+    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/agent/${agentId}`);
+    return res.data;
+  },
+
+  /** Check budget before an operation */
+  check: async (params: {
+    taskId?: string;
+    agentId?: string;
+    estimatedCost?: number;
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+  }) => {
+    const res = await api.post<DataResponse<import('../types').BudgetCheckResult>>('/budget/check', params);
+    return res.data;
+  },
+
+  /** Reset budget counters (admin operation) */
+  reset: async (scope?: import('../types').BudgetScope, scopeId?: string) => {
+    const res = await api.post<DataResponse<{ reset: boolean; scope?: string; scopeId?: string }>>('/budget/reset', { scope, scopeId });
+    return res.data;
+  },
+};
+
+// =============================================================================
+// AGENT MATERIALIZATION API
+// =============================================================================
+
+// Extend agentApi with materialization methods
+export const agentMaterializationApi = {
+  /** Get materialization status for an agent */
+  getMaterialization: async (agentId: string) => {
+    const res = await api.get<DataResponse<import('../types').AgentRuntimeStatus>>(`/agents/${agentId}/materialization`);
+    return res.data;
+  },
+
+  /** List all agents with their runtime status */
+  listWithStatus: async () => {
+    const res = await api.get<DataResponse<import('../types').AgentWithStatus[]>>('/agents?expand=runtime');
+    return res.data;
+  },
+
+  /** Materialize an agent (start OpenClaw session) */
+  materialize: async (agentId: string) => {
+    const res = await api.post<DataResponse<{ sessionId: string; status: import('../types').MaterializationStatus }>>(`/agents/${agentId}/materialize`);
+    return res.data;
+  },
+
+  /** Dematerialize an agent (close OpenClaw session) */
+  dematerialize: async (agentId: string) => {
+    const res = await api.post<DataResponse<{ status: import('../types').MaterializationStatus }>>(`/agents/${agentId}/dematerialize`);
+    return res.data;
+  },
+
+  /** Ping/heartbeat for an agent session */
+  ping: async (agentId: string) => {
+    const res = await api.post<DataResponse<{ alive: boolean; lastPing: number }>>(`/agents/${agentId}/ping`);
+    return res.data;
+  },
+};
+
+// =============================================================================
+// GENERATION TRACEABILITY API
+// =============================================================================
+
+// Extend generationApi with traceability methods
+export const generationTraceabilityApi = {
+  /** Get generation with full traceability info */
+  getWithTraceability: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').GenerationWithTraceability>>(`/generations/${id}?expand=traceability`);
+    return res.data;
+  },
+
+  /** Get traceability info for a generation */
+  getTraceability: async (id: string) => {
+    const res = await api.get<DataResponse<import('../types').GenerationTraceability>>(`/generations/${id}/traceability`);
+    return res.data;
+  },
+
+  /** List generations with traceability */
+  listWithTraceability: async (params?: { type?: string; status?: string }) => {
+    const query = params ? `?${new URLSearchParams({ ...params, expand: 'traceability' } as Record<string, string>)}` : '?expand=traceability';
+    const res = await api.get<DataResponse<import('../types').GenerationWithTraceability[]>>(`/generations${query}`);
+    return res.data;
+  },
+};

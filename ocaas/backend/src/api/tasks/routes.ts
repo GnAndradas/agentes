@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import * as h from './handlers.js';
+import * as state from '../taskState/handlers.js';
 
 export async function taskRoutes(fastify: FastifyInstance) {
   fastify.get('/', h.list);
@@ -21,4 +22,13 @@ export async function taskRoutes(fastify: FastifyInstance) {
   // BLOQUE 11: Diagnostics endpoints
   fastify.get('/:id/diagnostics', h.getDiagnostics);
   fastify.get('/:id/timeline', h.getTimeline);
+
+  // TASK STATE: Execution state endpoints
+  fastify.get('/:id/state', state.getTaskState);
+  fastify.get('/:id/state/snapshot', state.getTaskStateSnapshot);
+  fastify.post('/:id/state/init', state.initTaskState);
+  fastify.get('/:id/checkpoints', state.getTaskCheckpoints);
+  fastify.post('/:id/checkpoint', state.createCheckpoint);
+  fastify.post('/:id/pause', state.pauseTask);
+  fastify.post('/:id/resume', state.resumeTask);
 }

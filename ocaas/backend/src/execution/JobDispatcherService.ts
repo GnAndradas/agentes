@@ -50,6 +50,7 @@ import {
   getGlobalBudgetManager,
   type BudgetCheckResult,
 } from '../budget/index.js';
+import { getTaskStateManager } from './TaskStateManager/index.js';
 
 const logger = createLogger('JobDispatcherService');
 
@@ -549,6 +550,18 @@ export class JobDispatcherService {
       this.jobStore.setStatus(jobId, 'running');
       this.jobStore.addEvent(jobId, { type: 'START', sessionId: '' });
 
+      // TASK STATE: Track job start as a step
+      const taskStateManager = getTaskStateManager();
+      const stepId = `job-${jobId}`;
+      await taskStateManager.addSteps(payload.taskId, [{
+        id: stepId,
+        name: `Job: ${payload.goal.slice(0, 50)}`,
+        description: payload.description,
+        status: 'pending',
+        order: 1,
+      }]);
+      await taskStateManager.startStep(payload.taskId, stepId, jobId);
+
       // Build prompt from payload
       const prompt = this.buildPrompt(payload);
 
@@ -626,6 +639,20 @@ export class JobDispatcherService {
       response.traceability = trace;
 
       this.jobStore.setResponse(jobId, response);
+
+      // TASK STATE: Track job outcome
+      if (response.status === 'completed') {
+        await taskStateManager.completeStep(payload.taskId, stepId, response.result as Record<string, unknown> | undefined);
+      } else if (response.status === 'accepted') {
+        // Async accepted - step still running, set session key
+        if (hooksResult.sessionKey) {
+          await taskStateManager.setSessionKey(payload.taskId, hooksResult.sessionKey);
+        }
+      } else if (response.status === 'failed') {
+        await taskStateManager.failStep(payload.taskId, stepId, response.error?.message || 'Unknown error');
+      } else if (response.status === 'blocked') {
+        await taskStateManager.block(payload.taskId, response.blocked?.description || 'Blocked');
+      }
 
       // Log execution traceability
       logger.info({

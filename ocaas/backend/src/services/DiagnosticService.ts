@@ -25,6 +25,7 @@ import type {
 } from '../types/contracts.js';
 import type { ExecutionTraceability } from '../execution/ExecutionTraceability.js';
 import type { AgentMaterializationStatus, MaterializationTraceability } from '../generator/AgentMaterialization.js';
+import { getTaskStateManager } from '../execution/TaskStateManager/index.js';
 
 const logger = createLogger('DiagnosticService');
 
@@ -173,6 +174,38 @@ export interface ExecutionSummary {
 // ============================================================================
 
 /**
+ * Task execution state snapshot for diagnostics
+ */
+export interface TaskStateInfo {
+  /** Current execution phase */
+  phase?: string;
+  /** Current step ID */
+  current_step_id?: string;
+  /** Current step name */
+  current_step_name?: string;
+  /** Completed steps count */
+  completed_steps: number;
+  /** Total steps count */
+  total_steps: number;
+  /** Pending steps count */
+  pending_steps: number;
+  /** Failed steps count */
+  failed_steps: number;
+  /** Checkpoints count */
+  checkpoints_count: number;
+  /** Progress percentage */
+  progress_pct: number;
+  /** Paused reason (if paused) */
+  paused_reason?: string;
+  /** Resume from checkpoint ID */
+  resume_from?: string;
+  /** Last meaningful update */
+  last_update_at?: number;
+  /** State warnings */
+  state_warnings: string[];
+}
+
+/**
  * Complete task diagnostics
  */
 export interface TaskDiagnostics {
@@ -211,6 +244,9 @@ export interface TaskDiagnostics {
 
   /** Execution summary */
   execution_summary?: ExecutionSummary;
+
+  /** Task execution state (TASK STATE MANAGER) */
+  task_state?: TaskStateInfo;
 
   /** All gaps detected */
   gaps: string[];
@@ -273,6 +309,9 @@ export class DiagnosticService {
     // Collect warnings
     const warnings = this.collectWarnings(taskRow, jobRow ?? null, decision, execution);
 
+    // TASK STATE: Get execution state info
+    const taskStateInfo = await this.getTaskStateInfo(taskId);
+
     const diagnostics: TaskDiagnostics = {
       task_id: taskId,
       task: {
@@ -290,14 +329,46 @@ export class DiagnosticService {
       execution,
       ai_usage: aiUsage,
       execution_summary: executionSummary,
+      task_state: taskStateInfo,
       gaps,
-      warnings,
+      warnings: [...warnings, ...(taskStateInfo?.state_warnings || [])],
       diagnosed_at: Date.now(),
     };
 
     logger.debug({ taskId, gaps: gaps.length, warnings: warnings.length }, 'Task diagnostics generated');
 
     return diagnostics;
+  }
+
+  /**
+   * Get task state info for diagnostics
+   */
+  private async getTaskStateInfo(taskId: string): Promise<TaskStateInfo | undefined> {
+    try {
+      const stateManager = getTaskStateManager();
+      const snapshot = await stateManager.getSnapshot(taskId);
+
+      if (!snapshot) return undefined;
+
+      return {
+        phase: snapshot.phase,
+        current_step_id: snapshot.currentStepId,
+        current_step_name: snapshot.currentStepName,
+        completed_steps: snapshot.completedStepsCount,
+        total_steps: snapshot.totalStepsCount,
+        pending_steps: snapshot.pendingStepsCount,
+        failed_steps: snapshot.failedStepsCount,
+        checkpoints_count: snapshot.checkpointsCount,
+        progress_pct: snapshot.progressPct,
+        paused_reason: snapshot.pausedReason,
+        resume_from: snapshot.resumeFromCheckpointId,
+        last_update_at: snapshot.lastMeaningfulUpdateAt,
+        state_warnings: snapshot.warnings,
+      };
+    } catch (err) {
+      logger.debug({ taskId, err }, 'No task state found');
+      return undefined;
+    }
   }
 
   /**

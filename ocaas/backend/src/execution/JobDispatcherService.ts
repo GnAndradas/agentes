@@ -810,15 +810,15 @@ export class JobDispatcherService {
             }, 'accepted_async fallback succeeded');
           } else if (fallbackResult.executionMode === 'stub') {
             // CASE D: accepted_async + no fallback available
+            // PROMPT 8B: NO fallback_used - stub means fallback was NOT available
             finalResponse = undefined;
             finalSuccess = false;
             finalAccepted = false;
             finalExecutionMode = 'stub';
             finalError = { code: 'timeout' as const, message: 'Async timeout with no fallback available' };
-            traceBuilder.fallbackUsed('async_timeout_no_response');
             // PROMPT 8: Update mode to match finalExecutionMode
             traceBuilder.mode('stub', 'none');
-            traceBuilder.gap('Async timeout: async_timeout_no_response');
+            traceBuilder.gap('Async timeout: no fallback available (stub mode)');
 
             logger.warn({
               jobId,

@@ -27,6 +27,8 @@ Agent (role-based selection)
      v
 JobDispatcherService
      |
+     +---> [NEW] ensureAgentReady (warmup)
+     |
      v
 OpenClaw Gateway (hooks_session | chat_completion | stub)
      |
@@ -62,20 +64,63 @@ SQLite (state: tasks, jobs, generation_traces)
 
 **Fallback chain:** hooks_session -> chat_completion -> stub
 
-## 4. EXECUTION FLOW
+## 4. EXECUTION FLOW [UPDATED]
 
 ```
-Task -> TaskRouter -> OrgAwareDecision -> JobDispatcher -> OpenClaw -> Response
-                         |                      |
-                    Agent Selection        Mode detection:
-                                           1. hooks_session?
-                                           2. chat_completion?
-                                           3. stub
+Task
+  |
+  v
+TaskRouter -> OrgAwareDecision -> Agent Selection
+  |
+  v
+JobDispatcher.executeJob()
+  |
+  +---> [NEW] ensureAgentReady(agentId) - Warmup ping
+  |           |
+  |           +--> ready=true: proceed
+  |           +--> ready=false: log warning, proceed anyway (fallback will cover)
+  |
+  v
+executeViaHooks()
+  |
+  +---> hooks_session attempt
+  |           |
+  |           +--> immediate response: DONE
+  |           |
+  |           +--> accepted_async (no immediate response)
+  |                     |
+  |                     +--> wait for timeout
+  |                     |
+  |                     +--> timeout reached? -> fallback to chat_completion
+  |
+  +---> hooks failed? -> fallback to chat_completion
+  |
+  +---> chat_completion failed? -> stub mode
+  |
+  v
+JobResponse + GenerationTrace
 ```
 
 **Job states:** `pending` -> `running` -> `completed|failed|blocked|timeout`
 
 **Blocked Flow:** blocked -> suggestion -> approval -> resource created -> retry
+
+### [NEW] accepted_async Handling
+
+```
+accepted_async = hooks acepto el request PERO no hay respuesta inmediata
+
+IMPORTANTE: accepted_async NO es fallo
+
+Flujo:
+1. hooks_session retorna success=true, accepted=true, response=undefined
+2. Sistema espera hasta timeout
+3. Si timeout:
+   - CASE A: Timeout pero respuesta llega -> completado
+   - CASE B: Timeout, fallback a chat_completion -> respuesta via REST
+   - CASE C: Timeout, fallback falla -> error
+   - CASE D: Timeout, no fallback disponible -> stub mode
+```
 
 ## 5. CORE COMPONENTS
 
@@ -90,7 +135,280 @@ Task -> TaskRouter -> OrgAwareDecision -> JobDispatcher -> OpenClaw -> Response
 | DiagnosticService | services/ | Full diagnostics |
 | TaskStateManager | execution/TaskStateManager/ | Execution state + tools |
 
-## 6. JOBS
+## 6. [NEW] OPENCLAW INTEGRATION
+
+### Token Separation
+
+```bash
+# REST API (fallback mode)
+OPENCLAW_API_KEY=<key>
+# Used for: /v1/chat/completions, /v1/models
+
+# Hooks/Webhooks (primary mode)
+OPENCLAW_HOOKS_TOKEN=<token>
+# Used for: /hooks/agent, /hooks/wake
+```
+
+**IMPORTANTE:** Los tokens son SEPARADOS. No hay fallback automatico de uno al otro.
+
+### Payload for /hooks/agent
+
+```json
+{
+  "message": "task prompt here",
+  "agentId": "agent-123",
+  "sessionKey": "hook:ocaas:task-abc123",
+  "name": "OCAAS Agent agent-123",
+  "wakeMode": "now",
+  "deliver": false
+}
+```
+
+### sessionKey Convention
+
+```
+hook:ocaas:task-{taskId}     - Para tasks
+hook:ocaas:job-{jobId}       - Para jobs directos
+hook:ocaas:warmup-{agentId}  - Para warmup pings
+hook:ocaas:manual-{id}       - Para ejecuciones manuales
+```
+
+**sessionKey es ROUTING, no AUTH.** El auth es via header `x-openclaw-token`.
+
+## 7. [NEW] AGENT RUNTIME BOOTSTRAP
+
+### ensureAgentReady()
+
+Antes de ejecutar via hooks_session, OCAAS envia un warmup ping:
+
+```typescript
+async ensureAgentReady(agentId: string): Promise<{ ready: boolean; error?: string }>
+```
+
+**Comportamiento:**
+1. Genera sessionKey: `hook:ocaas:warmup:{agentId}:{timestamp}`
+2. Envia `message: "ping"` via hooks
+3. Interpreta resultado:
+   - request enviado sin error -> `ready = true`
+   - error de red/gateway -> `ready = false`
+
+**NO espera respuesta de AI. NO hace polling. NO hace retry loops.**
+
+### Warmup vs Execution
+
+```
+Warmup (ensureAgentReady):
+- Proposito: verificar que gateway puede rutear al agente
+- NO bloquea: si falla, ejecucion continua igual
+- Trackeado en: agent_warmup_attempted, agent_warmup_success
+
+Execution (executeViaHooks):
+- Proposito: enviar el prompt real
+- SI puede fallar: dispara fallback chain
+```
+
+### Limitation: materialized ≠ runtime_ready
+
+```
+Agent materialized:
+  - Tiene agent.json en workspace
+  - Tiene system-prompt.md
+  - Record en DB
+
+Agent runtime_ready:
+  - Tiene sesion activa en OpenClaw
+  - Puede recibir mensajes
+  - ACTUALMENTE: siempre false (no session management real)
+```
+
+## 8. [NEW] SYSTEMIC GENERATOR (Bundles)
+
+### Bundle Flow
+
+```
+SystemicGeneratorService.generateBundle(input)
+  |
+  v
+STEP 1: Generate TOOL
+  |
+  v
+STEP 2: Generate SKILL (references tool)
+  |
+  v
+STEP 3: Generate AGENT (references skill)
+  |
+  v
+STEP 4: Approve + Activate all (in order)
+  |
+  v
+STEP 5: Link resources
+  - skillService.addTool(skillId, toolId)
+  - skillService.assignToAgent(skillId, agentId)
+  |
+  v
+STEP 6: Update metadata with cross-references
+```
+
+### Bundle Metadata
+
+Cada generation del bundle tiene:
+
+```json
+{
+  "bundle": true,
+  "bundleId": "bundle_abc123xyz",
+  "bundleName": "my-bundle",
+  "bundleType": "tool|skill|agent",
+  "bundleStatus": "partial|complete"
+}
+```
+
+### bundleStatus Rules
+
+| Status | Meaning |
+|--------|---------|
+| `partial` | Bundle en progreso o fallo parcial |
+| `complete` | Todos los pasos exitosos |
+
+**Solo `complete` significa bundle usable.**
+
+### API Usage
+
+```typescript
+import { getSystemicGenerator } from './generator/index.js';
+
+const generator = getSystemicGenerator();
+const result = await generator.generateBundle({
+  name: 'my-feature',
+  description: 'Feature description',
+  objective: 'What it should accomplish',
+  capabilities: ['code', 'analysis']
+});
+
+// result.bundleStatus === 'complete' -> usable
+// result.bundleStatus === 'partial' -> check result.error
+```
+
+## 9. [NEW] ENRICHED TASKS (PROMPT 10)
+
+### New Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `objective` | string | What should be accomplished |
+| `constraints` | string | Limitations or requirements |
+| `details` | string/JSON | Additional context or data |
+| `expectedOutput` | string | Expected output format |
+
+Todos opcionales. Backward compatible.
+
+### Storage
+
+Cuando se proveen campos enriquecidos, se almacenan en `task.input`:
+
+```json
+{
+  "text": "Task title",
+  "context": {
+    "description": "...",
+    "objective": "...",
+    "constraints": "...",
+    "details": "...",
+    "expectedOutput": "..."
+  }
+}
+```
+
+### Prompt Generation
+
+JobDispatcherService.buildPrompt() genera:
+
+```markdown
+## Goal
+Task title
+
+## Description
+Task description
+
+## Objective
+What should be accomplished
+
+## Task Constraints
+Any limitations
+
+## Details
+Additional context
+
+## Expected Output
+Expected format
+
+## System Constraints
+- Autonomy: supervised
+- Max tool calls: 20
+```
+
+### API Example
+
+```bash
+curl -X POST http://localhost:3001/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Generate report",
+    "type": "report",
+    "priority": 2,
+    "objective": "Produce Q1 sales PDF",
+    "constraints": "Max 5 minutes, no PII",
+    "details": "Data source: sales_db",
+    "expectedOutput": "PDF at /reports/q1.pdf"
+  }'
+```
+
+## 10. [UPDATED] TRACEABILITY
+
+### ExecutionTraceability Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `execution_mode` | string | `hooks_session|chat_completion|stub` |
+| `transport` | string | `hooks_agent|rest_api|none` |
+| `transport_success` | bool | Request enviado exitosamente |
+| `accepted_async` | bool | [NEW] hooks acepto pero sin respuesta inmediata |
+| `async_timeout_triggered` | bool | [NEW] Timeout alcanzado en modo async |
+| `agent_warmup_attempted` | bool | [NEW] Se intento warmup |
+| `agent_warmup_success` | bool | [NEW] Warmup exitoso |
+| `execution_fallback_used` | bool | Se uso fallback |
+| `execution_fallback_reason` | string | Razon del fallback |
+| `response_received` | bool | Se recibio respuesta |
+| `response_tokens` | object | `{input, output}` token counts |
+
+### Final vs Initial State
+
+```
+IMPORTANTE: execution_mode FINAL puede diferir del INICIAL
+
+Escenario:
+1. Intento hooks_session -> accepted_async
+2. Timeout -> fallback a chat_completion
+3. chat_completion responde
+
+Traceability FINAL:
+- execution_mode: 'chat_completion' (NO 'hooks_session')
+- accepted_async: true (hubo async inicial)
+- execution_fallback_used: true
+- execution_fallback_reason: 'async_timeout'
+```
+
+### Cost/Tokens
+
+```
+Costos se calculan sobre la RESPUESTA FINAL, no intentos intermedios.
+
+Si accepted_async timeout -> fallback -> respuesta:
+  - tokens = de respuesta del fallback
+  - cost = calculado sobre fallback response
+```
+
+## 11. JOBS
 
 **Payload minimo:**
 ```typescript
@@ -108,7 +426,7 @@ Task -> TaskRouter -> OrgAwareDecision -> JobDispatcher -> OpenClaw -> Response
 
 **Resolution:** POST `/api/jobs/:id/resolve` -> creates generation + approval -> auto-retry
 
-## 7. INSTALLATION
+## 12. INSTALLATION
 
 **Backend-first setup (recommended):**
 ```bash
@@ -132,10 +450,10 @@ PORT=3001
 OPENCLAW_GATEWAY_URL=http://localhost:18789
 API_SECRET_KEY=<min-16-chars>
 
-# For hooks_session (PRIMARY)
+# For hooks_session (PRIMARY) - REQUIRED for primary mode
 OPENCLAW_HOOKS_TOKEN=<token>
 
-# For chat_completion (FALLBACK)
+# For chat_completion (FALLBACK) - REQUIRED for fallback
 OPENCLAW_API_KEY=<key>
 
 AUTONOMY_LEVEL=supervised
@@ -146,7 +464,7 @@ AUTONOMY_LEVEL=supervised
 2. Backend: `npm run dev` (from backend/)
 3. Frontend: `npm run dev` (from frontend/)
 
-## 8. CRITICAL CHECKS
+## 13. CRITICAL CHECKS
 
 ```bash
 # Health
@@ -166,7 +484,7 @@ curl -X POST localhost:3001/api/tasks \
 - `openclaw.configured` -> `true`
 - Task creates -> Job dispatches via detected mode
 
-## 9. OPERATIONS
+## 14. OPERATIONS
 
 **Tasks:**
 ```bash
@@ -208,7 +526,7 @@ GET   /api/system/autonomy
 PATCH /api/system/autonomy -d '{"level":"autonomous"}'
 ```
 
-## 10. TROUBLESHOOTING
+## 15. [UPDATED] TROUBLESHOOTING
 
 | Problem | Check | Fix |
 |---------|-------|-----|
@@ -219,6 +537,32 @@ PATCH /api/system/autonomy -d '{"level":"autonomous"}'
 | All modes fail | `/api/system/diagnostics` | Check gateway URL, restart |
 | Task not processing | `/api/tasks/:id/diagnostics` | Check gaps, warnings |
 | Frontend errors | Missing node_modules | `cd frontend && npm install` |
+| [NEW] Warmup fails | Check logs | Non-blocking, execution continues |
+| [NEW] accepted_async timeout | Normal behavior | Fallback will handle |
+| [NEW] Bundle partial | Check error in result | Retry or manual fix |
+
+### [NEW] Common Error Patterns
+
+**"Transport failed" in async context:**
+```
+NO es un error real si accepted_async=true.
+hooks_session acepto el request, solo no hubo respuesta inmediata.
+```
+
+**"Bundle partial":**
+```
+Un paso del bundle fallo. Revisar:
+- result.error para el mensaje
+- result.metadata para ver que pasos completaron
+- Puede haber recursos huerfanos (tool sin skill, etc)
+```
+
+**"Agent not ready":**
+```
+Warmup fallo pero ejecucion continua.
+NO bloquea el flujo.
+Fallback chain manejara cualquier error real.
+```
 
 **Logs:**
 ```bash
@@ -226,7 +570,7 @@ tail -f logs/ocaas.log
 LOG_LEVEL=debug npm run dev
 ```
 
-## 11. SECURITY & LIMITS
+## 16. SECURITY & LIMITS
 
 **Auth:** `X-API-Key` header = `API_SECRET_KEY`
 
@@ -243,7 +587,7 @@ LOG_LEVEL=debug npm run dev
 - `supervised` -> high priority needs approval
 - `autonomous` -> no approval needed
 
-## 12. QUICK REFERENCE
+## 17. QUICK REFERENCE
 
 **Key endpoints:**
 ```
@@ -257,14 +601,17 @@ LOG_LEVEL=debug npm run dev
 
 **Key files:**
 ```
-src/execution/JobDispatcherService.ts   -> Job creation + mode detection
-src/execution/ExecutionTraceability.ts  -> Mode definitions
+src/execution/JobDispatcherService.ts   -> Job creation + mode detection + warmup
+src/execution/ExecutionTraceability.ts  -> Mode definitions + trace builder
 src/execution/GenerationTraceService.ts -> AI trace persistence
 src/orchestrator/OrgAwareDecisionEngine.ts -> Agent selection
+src/integrations/openclaw/OpenClawAdapter.ts -> ensureAgentReady + executeViaHooks
+src/generator/SystemicGeneratorService.ts -> Bundle generation
+src/services/TaskService.ts -> Enriched task creation
 src/config/autonomy.ts -> Autonomy config
 ```
 
-## 13. AGENT MATERIALIZATION
+## 18. AGENT MATERIALIZATION
 
 **Auto-materialization:** Agents are automatically materialized on activation.
 - `AgentBootstrap` creates default-general-agent on startup
@@ -278,7 +625,7 @@ POST /api/agents/:id/materialize
 
 **Lifecycle states:** `record` -> `activated` -> `materialized` -> `runtime_ready`
 
-## 14. TASK OPERATIONS
+## 19. TASK OPERATIONS
 
 **Manual agent assignment/reassignment:**
 - TaskDetail shows assignment panel for queued/pending/failed tasks
@@ -295,14 +642,57 @@ POST /api/agents/:id/materialize
 ```
 Pure injector: no polling, no GET, just POST and return ID.
 
-## 15. KNOWN GAPS
+## 20. KNOWN GAPS
 
 1. **Skills/Tools not used** - OpenClaw doesn't read workspace
 2. **Agents not "real"** - Always hooks_session or chat_completion, never real OpenClaw session
 3. **runtime_ready always false** - No real session management
 4. **Workspace not connected** - agent.json created but not loaded
 
-## 16. CLEANUP
+## 21. [NEW] OPERATIONAL VALIDATION CHECKLIST
+
+### Build Verification
+```bash
+cd backend && npx tsc --noEmit
+cd frontend && npx tsc --noEmit
+```
+
+### Hooks Functioning
+```bash
+# Check token configured
+curl localhost:3001/api/system/diagnostics | jq '.openclaw.hooks'
+
+# Expected: { "configured": true }
+```
+
+### Bundle Complete
+```typescript
+// In code
+const result = await generator.generateBundle(input);
+if (result.bundleStatus !== 'complete') {
+  console.error('Bundle failed:', result.error);
+}
+```
+
+### Fallback OK
+```bash
+# Temporarily disable hooks token and verify chat_completion works
+# In .env: comment out OPENCLAW_HOOKS_TOKEN
+# Restart and test task creation
+```
+
+### Trace Coherent
+```bash
+curl localhost:3001/api/tasks/{id}/generation-trace | jq
+
+# Check:
+# - execution_mode matches what happened
+# - fallback_used matches reality
+# - accepted_async only true if hooks was used
+# - response_received true if got output
+```
+
+## 22. CLEANUP
 
 **Check if port 3001 is in use:**
 
@@ -328,7 +718,7 @@ rm -f backend/data/ocaas.db
 npm run clean && npm install && npm run build
 ```
 
-## 17. VALIDATION
+## 23. VALIDATION
 
 After startup:
 ```bash
@@ -345,3 +735,4 @@ Check:
 ---
 
 *Updated: 2026-04-06*
+*Sections marked [NEW] or [UPDATED] reflect PROMPT 7-11 changes*

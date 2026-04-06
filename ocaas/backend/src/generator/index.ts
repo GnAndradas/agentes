@@ -4,6 +4,8 @@ export { getAIClient } from './AIClient.js';
 export { getSkillGenerator } from './SkillGenerator.js';
 export { getToolGenerator } from './ToolGenerator.js';
 export { getAgentGenerator } from './AgentGenerator.js';
+// PROMPT 9: Systemic generator for bundles
+export { getSystemicGenerator, type BundleInput, type BundleOutput } from './SystemicGeneratorService.js';
 export * from './templates/index.js';
 
 // BLOQUE 9: Agent materialization exports

@@ -11,6 +11,7 @@ import { createLogger } from '../utils/logger.js';
 import { getOpenClawAdapter } from '../integrations/openclaw/OpenClawAdapter.js';
 import { getJobSafetyService } from '../execution/JobSafetyService.js';
 import { db, schema } from '../db/index.js';
+import { config } from '../config/index.js';
 
 const logger = createLogger('ProductionChecks');
 
@@ -160,6 +161,25 @@ async function checkWebSocket(): Promise<CheckResult> {
 }
 
 /**
+ * PROMPT 7: Check hooks token configuration
+ */
+function checkHooksToken(): CheckResult {
+  if (!config.openclaw.hooksToken) {
+    return {
+      name: 'hooks_token',
+      passed: false,
+      message: 'OPENCLAW_HOOKS_TOKEN not configured - hooks mode unavailable',
+    };
+  }
+
+  return {
+    name: 'hooks_token',
+    passed: true,
+    message: 'Hooks token configured',
+  };
+}
+
+/**
  * Check failsafe status
  */
 function checkFailsafe(): CheckResult {
@@ -198,6 +218,7 @@ export async function runProductionChecks(): Promise<ProductionCheckResult> {
   checks.push(await checkGateway());
   checks.push(await checkGatewayAuth());
   checks.push(await checkWebSocket());
+  checks.push(checkHooksToken()); // PROMPT 7: Add hooks token check
   checks.push(checkFailsafe());
 
   const allPassed = checks.every(c => c.passed);

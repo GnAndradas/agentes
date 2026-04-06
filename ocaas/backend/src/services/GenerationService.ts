@@ -109,13 +109,23 @@ export class GenerationService {
     await db.delete(schema.generations).where(eq(schema.generations.id, id));
   }
 
-  async markGenerated(id: string, content: Record<string, unknown>, targetPath: string): Promise<GenerationDTO> {
+  async markGenerated(
+    id: string,
+    content: Record<string, unknown>,
+    targetPath: string,
+    metadata?: Record<string, unknown>
+  ): Promise<GenerationDTO> {
     const now = nowTimestamp();
+
+    // Merge new metadata with existing (if any)
+    const current = await this.getById(id);
+    const mergedMetadata = { ...(current.metadata || {}), ...(metadata || {}) };
 
     await db.update(schema.generations).set({
       status: GENERATION_STATUS.GENERATED,
       generatedContent: JSON.stringify(content),
       targetPath,
+      metadata: JSON.stringify(mergedMetadata),
       updatedAt: now,
     }).where(eq(schema.generations.id, id));
 
@@ -264,6 +274,22 @@ export class GenerationService {
         logger.error({ err, id }, 'Error in onActivatedCallback');
       }
     }
+
+    return this.getById(id);
+  }
+
+  /**
+   * Update generation metadata (e.g., to add resourceId after activation)
+   */
+  async updateMetadata(id: string, metadata: Record<string, unknown>): Promise<GenerationDTO> {
+    const now = nowTimestamp();
+    const current = await this.getById(id);
+    const mergedMetadata = { ...(current.metadata || {}), ...metadata };
+
+    await db.update(schema.generations).set({
+      metadata: JSON.stringify(mergedMetadata),
+      updatedAt: now,
+    }).where(eq(schema.generations.id, id));
 
     return this.getById(id);
   }

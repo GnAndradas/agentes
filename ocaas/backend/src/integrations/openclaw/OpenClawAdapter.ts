@@ -325,12 +325,12 @@ export class OpenClawAdapter {
           error: result.error,
         }, 'hooks_session failed, falling back to chat_completion');
 
-        return this.executeViaHooksFallback(input, sessionKey, result.error || 'hooks call failed');
+        return this.executeChatCompletionDirect(input, sessionKey, result.error || 'hooks call failed');
 
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         logger.warn({ err, agentId: input.agentId }, 'hooks_session threw, falling back');
-        return this.executeViaHooksFallback(input, sessionKey, errorMsg);
+        return this.executeChatCompletionDirect(input, sessionKey, errorMsg);
       }
     }
 
@@ -339,13 +339,14 @@ export class OpenClawAdapter {
       agentId: input.agentId,
     }, 'Hooks not configured, using chat_completion fallback');
 
-    return this.executeViaHooksFallback(input, sessionKey, 'OPENCLAW_HOOKS_TOKEN not configured');
+    return this.executeChatCompletionDirect(input, sessionKey, 'OPENCLAW_HOOKS_TOKEN not configured');
   }
 
   /**
-   * Fallback execution via chat_completion
+   * Fallback execution via chat_completion (direct, no hooks)
+   * Public for use in async timeout scenarios where we need to bypass hooks.
    */
-  private async executeViaHooksFallback(
+  async executeChatCompletionDirect(
     input: ExecuteViaHooksInput,
     sessionKey: string,
     fallbackReason: string

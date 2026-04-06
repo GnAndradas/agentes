@@ -58,6 +58,17 @@ import { getGenerationTraceService } from './GenerationTraceService.js';
 const logger = createLogger('JobDispatcherService');
 
 // =============================================================================
+// ASYNC TIMEOUT CONFIG
+// =============================================================================
+
+/**
+ * Timeout for accepted_async execution before fallback/failure
+ * When hooks_session accepts dispatch but no immediate response,
+ * wait this long before triggering fallback or marking failed.
+ */
+const HOOKS_ASYNC_TIMEOUT_MS = 10000; // 10 seconds
+
+// =============================================================================
 // TOOL CALL DETECTION
 // =============================================================================
 
@@ -528,11 +539,13 @@ export class JobDispatcherService {
     traceBuilder.mode(modeInfo.mode, modeInfo.transport);
 
     // BLOQUE 10: Check runtime_ready before execution
+    // Pass execution mode to properly evaluate hooks_session requirements
     const runtimeCheck = checkRuntimeReady(
       payload.agent.name,
       undefined, // sessionId not known yet
       gatewayConfigured,
-      gatewayConnected
+      gatewayConnected,
+      modeInfo.mode
     );
     traceBuilder.runtimeReady(runtimeCheck.ready, runtimeCheck.materialization_status);
 
@@ -706,19 +719,150 @@ export class JobDispatcherService {
       // BLOQUE 10: Mark transport success
       traceBuilder.transportSuccess(hooksResult.success);
 
+      // HOOKS MIGRATION: Mark accepted_async for hooks_session without immediate response
+      if (hooksResult.success && hooksResult.accepted && !hooksResult.response && hooksResult.executionMode === 'hooks_session') {
+        traceBuilder.acceptedAsync();
+      }
+
       // BLOQUE 10: Track response
       if (hooksResult.response) {
         traceBuilder.responseReceived();
       }
 
       // =========================================================================
+      // ASYNC TIMEOUT HANDLER: Fallback for accepted_async without response
+      // =========================================================================
+      // PROMPT 5: Track final execution state separately from initial hooks dispatch
+      // This ensures we don't contaminate final result with initial accepted_async state
+      let finalResponse = hooksResult.response;
+      let finalSuccess = hooksResult.success;
+      let finalAccepted = hooksResult.accepted;
+      let finalExecutionMode = hooksResult.executionMode;
+      let finalError = hooksResult.error;
+      let usedAsyncFallback = false;
+
+      // If accepted_async (hooks_session accepted but no immediate response),
+      // wait briefly then fallback to chat_completion
+      if (hooksResult.success && hooksResult.accepted && !hooksResult.response && hooksResult.executionMode === 'hooks_session') {
+        logger.info({
+          jobId,
+          taskId: payload.taskId,
+          timeoutMs: HOOKS_ASYNC_TIMEOUT_MS,
+        }, 'accepted_async: waiting for async timeout before fallback');
+
+        // Wait the timeout period (non-blocking via setTimeout wrapped in Promise)
+        await new Promise(resolve => setTimeout(resolve, HOOKS_ASYNC_TIMEOUT_MS));
+
+        // Check if job was already completed/cancelled during wait
+        const currentJob = this.jobStore.get(jobId);
+        if (currentJob && currentJob.status === 'running') {
+          // Still running, no response received - trigger fallback
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            event: 'ASYNC_TIMEOUT_FALLBACK',
+          }, 'accepted_async timeout: triggering chat_completion fallback');
+
+          traceBuilder.asyncTimeout(HOOKS_ASYNC_TIMEOUT_MS);
+
+          // Execute fallback via chat_completion DIRECTLY (no hooks reentry)
+          const sessionKey = hooksResult.sessionKey || `hook:ocaas:job-${jobId}`;
+          const fallbackResult = await withTimeout(
+            adapter.executeChatCompletionDirect(
+              {
+                agentId: payload.agent.agentId,
+                taskId: payload.taskId,
+                jobId: jobId,
+                prompt,
+                name: payload.agent.name,
+                context: {
+                  tools: payload.allowedResources.tools,
+                  skills: payload.allowedResources.skills,
+                  maxTokens: payload.constraints.maxTokens,
+                  temperature: payload.agent.temperature,
+                },
+              },
+              sessionKey,
+              'async_timeout_fallback'
+            ),
+            timeoutMs,
+            abortController
+          );
+
+          if (fallbackResult.success && fallbackResult.response) {
+            // CASE B: accepted_async + fallback success
+            // Final result = fallback result (NOT initial hooks result)
+            finalResponse = fallbackResult.response;
+            finalSuccess = true;
+            finalAccepted = false; // Fallback resolved, not async-accepted
+            finalExecutionMode = 'chat_completion';
+            finalError = undefined;
+            usedAsyncFallback = true;
+            traceBuilder.fallbackUsed('async_timeout_fallback_to_chat_completion');
+            traceBuilder.responseReceived();
+            traceBuilder.mode('chat_completion', 'rest_api');
+
+            logger.info({
+              jobId,
+              taskId: payload.taskId,
+              event: 'ASYNC_FALLBACK_SUCCESS',
+              outcome: 'completed',
+            }, 'accepted_async fallback succeeded');
+          } else if (fallbackResult.executionMode === 'stub') {
+            // CASE D: accepted_async + no fallback available
+            finalResponse = undefined;
+            finalSuccess = false;
+            finalAccepted = false;
+            finalExecutionMode = 'stub';
+            finalError = { code: 'timeout' as const, message: 'Async timeout with no fallback available' };
+            traceBuilder.fallbackUsed('async_timeout_no_response');
+            // PROMPT 8: Update mode to match finalExecutionMode
+            traceBuilder.mode('stub', 'none');
+            traceBuilder.gap('Async timeout: async_timeout_no_response');
+
+            logger.warn({
+              jobId,
+              taskId: payload.taskId,
+              event: 'ASYNC_FALLBACK_FAILED',
+              outcome: 'failed',
+              reason: 'async_timeout_no_response',
+            }, 'accepted_async timeout: no fallback available');
+          } else {
+            // CASE C: accepted_async + fallback failed
+            finalResponse = undefined;
+            finalSuccess = false;
+            finalAccepted = false;
+            finalExecutionMode = 'chat_completion'; // Fallback was attempted
+            finalError = fallbackResult.error || { code: 'execution_error' as const, message: 'Fallback failed after async timeout' };
+            traceBuilder.fallbackUsed('fallback_failed_after_async_timeout');
+            // PROMPT 8: Update mode to match finalExecutionMode
+            traceBuilder.mode('chat_completion', 'rest_api');
+            traceBuilder.gap('Async timeout: fallback_failed_after_async_timeout');
+
+            logger.warn({
+              jobId,
+              taskId: payload.taskId,
+              event: 'ASYNC_FALLBACK_FAILED',
+              outcome: 'failed',
+              reason: 'fallback_failed_after_async_timeout',
+            }, 'accepted_async timeout: fallback failed');
+          }
+        } else {
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            currentStatus: currentJob?.status,
+          }, 'accepted_async: job already resolved during wait');
+        }
+      }
+
+      // =========================================================================
       // TOOL-CALLING LOOP (Max 1 tool call per task)
       // =========================================================================
-      let finalResponse = hooksResult.response;
       let toolExecutionResult: ToolExecutionResult | null = null;
 
-      if (hooksResult.success && hooksResult.response) {
-        const detectedTool = detectToolCall(hooksResult.response);
+      if (finalResponse) {
+        const detectedTool = detectToolCall(finalResponse);
 
         if (detectedTool) {
           logger.info({
@@ -803,7 +947,8 @@ export class JobDispatcherService {
             }, '[ToolLoop] Follow-up IA call completed');
           } else {
             // Follow-up failed, include tool output directly in response
-            finalResponse = `${hooksResult.response}\n\n[Tool Execution Result]\n${toolResultContext}`;
+            const originalResponse = finalResponse || '';
+            finalResponse = `${originalResponse}\n\n[Tool Execution Result]\n${toolResultContext}`;
             logger.warn({
               jobId,
               taskId: payload.taskId,
@@ -816,16 +961,17 @@ export class JobDispatcherService {
       // Build final traceability
       const trace = traceBuilder.completed().build();
 
-      // Process result (adapt hooksResult to expected format)
-      // HOOKS MIGRATION: Include accepted and executionMode for async handling
+      // Process result (adapt to expected format)
+      // PROMPT 5: Use final execution state, not initial hooksResult
+      // This ensures accepted_async + fallback produces correct final result
       const adaptedResult = {
-        success: hooksResult.success,
-        sessionId: hooksResult.sessionKey, // Use sessionKey as identifier
-        response: finalResponse, // Use final response (may include tool loop result)
-        error: hooksResult.error,
-        // NEW: Pass async handling info
-        accepted: hooksResult.accepted,
-        executionMode: hooksResult.executionMode,
+        success: finalSuccess,
+        sessionId: hooksResult.sessionKey, // Session key from initial dispatch
+        response: finalResponse, // Final response (may include tool loop result)
+        error: finalError,
+        // Final state (NOT initial accepted_async state)
+        accepted: finalAccepted,
+        executionMode: finalExecutionMode,
       };
 
       const response = this.processExecutionResult(jobId, adaptedResult, payload);
@@ -848,9 +994,9 @@ export class JobDispatcherService {
       }
 
       // BUDGET: Record execution cost (estimate since hooks don't return tokens)
-      // For hooks_session, we estimate based on prompt length; for chat_completion, similar
+      // PROMPT 5: Use finalResponse for token estimation, not initial hooksResult.response
       const estimatedInputTokens = Math.ceil(prompt.length / 4); // ~4 chars per token
-      const estimatedOutputTokens = hooksResult.response ? Math.ceil(hooksResult.response.length / 4) : 250;
+      const estimatedOutputTokens = finalResponse ? Math.ceil(finalResponse.length / 4) : 250;
       budgetManager.recordCost({
         task_id: payload.taskId,
         agent_id: agentId,
@@ -866,26 +1012,27 @@ export class JobDispatcherService {
       response.traceability = trace;
 
       // P0-02: Save generation trace for full traceability
+      // PROMPT 5: Use final execution state for trace, preserve initial dispatch info
       const durationMs = Date.now() - executionStartTime;
       const generationTraceService = getGenerationTraceService();
       generationTraceService.save({
         taskId: payload.taskId,
         jobId,
-        executionMode: trace.execution_mode,
+        executionMode: trace.execution_mode, // Final execution mode from trace
         aiRequested: true, // We always request AI in executeJob
-        aiAttempted: hooksResult.executionMode !== 'stub',
-        aiSucceeded: hooksResult.success && !!hooksResult.response,
+        aiAttempted: finalExecutionMode !== 'stub',
+        aiSucceeded: finalSuccess && !!finalResponse,
         fallbackUsed: trace.execution_fallback_used,
         fallbackReason: trace.execution_fallback_reason,
-        rawOutput: hooksResult.response, // Original AI response
+        rawOutput: usedAsyncFallback ? undefined : hooksResult.response, // Only if hooks gave immediate response
         finalOutput: finalResponse, // May include tool loop result
         tokenUsage: {
           input: estimatedInputTokens,
           output: estimatedOutputTokens,
         },
-        model: hooksResult.executionMode === 'chat_completion' ? 'gpt-4' : undefined,
+        model: finalExecutionMode === 'chat_completion' ? 'gpt-4' : undefined,
         durationMs,
-        error: hooksResult.error?.message,
+        error: finalError?.message,
       });
 
       this.jobStore.setResponse(jobId, response);

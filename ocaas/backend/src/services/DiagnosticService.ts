@@ -561,7 +561,8 @@ export class DiagnosticService {
         gateway_configured: true,
         gateway_connected: jobRow.status !== 'failed',
         websocket_connected: false,
-        transport_success: jobRow.status === 'completed',
+        transport_success: jobRow.status === 'completed' || jobRow.status === 'accepted',
+        accepted_async: jobRow.status === 'accepted',
         execution_fallback_used: false,
         execution_started_at: jobRow.createdAt,
         execution_completed_at: jobRow.updatedAt,
@@ -726,8 +727,8 @@ export class DiagnosticService {
       warnings.push(`Execution fallback used: ${execution.execution_fallback_reason || 'unknown'}`);
     }
 
-    // Transport failed
-    if (execution && !execution.transport_success) {
+    // Transport failed (but not for accepted_async which is expected without immediate response)
+    if (execution && !execution.transport_success && !execution.accepted_async) {
       warnings.push('Transport failed during execution');
     }
 

@@ -12,6 +12,7 @@ import {
 import {
   createTraceability,
   toStoredTraceability,
+  toOriginMetadata,
   MATERIALIZATION_STATUS,
 } from './traceability.js';
 import type { GenerationRequest, GeneratedFile, GenerationOutput } from './types.js';
@@ -160,8 +161,11 @@ export class SkillGenerator {
         _traceability: toStoredTraceability(trace.build()),
       };
 
+      // Extract origin metadata for frontend display
+      const originMetadata = toOriginMetadata(trace.build());
+
       const targetPath = `skills/${request.name}`;
-      await generationService.markGenerated(generation.id, generatedContent, targetPath);
+      await generationService.markGenerated(generation.id, generatedContent, targetPath, originMetadata);
 
       // Always go to pending_approval first (required by FSM)
       await generationService.markPendingApproval(generation.id, {
@@ -229,11 +233,18 @@ export class SkillGenerator {
     // =====================================
 
     // Create skill in DB
-    await skillService.create({
+    const skill = await skillService.create({
       name: generation.name,
       description: generation.description,
       path: skillPath,
       capabilities: content.capabilities,
+    });
+
+    // Update generation metadata with resourceId for frontend link
+    await generationService.updateMetadata(generationId, {
+      resourceId: skill.id,
+      skillId: skill.id,
+      resourceStatus: skill.status,
     });
 
     // Mark generation as active

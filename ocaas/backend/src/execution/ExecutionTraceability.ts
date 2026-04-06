@@ -85,6 +85,13 @@ export interface ExecutionTraceability {
   /** Transport succeeded (request sent) */
   transport_success: boolean;
 
+  /** Async accepted (hooks_session mode: request accepted, response via channel) */
+  accepted_async: boolean;
+
+  /** Async timeout triggered (accepted_async but no response within timeout) */
+  async_timeout_triggered?: boolean;
+  async_timeout_ms?: number;
+
   /** Fallback used (and why) */
   execution_fallback_used: boolean;
   execution_fallback_reason?: string;
@@ -116,6 +123,7 @@ export const DEFAULT_EXECUTION_TRACEABILITY: ExecutionTraceability = {
   gateway_connected: false,
   websocket_connected: false,
   transport_success: false,
+  accepted_async: false,
   execution_fallback_used: false,
   execution_started_at: 0,
   response_received: false,
@@ -250,19 +258,19 @@ export interface RuntimeReadyCheck {
 /**
  * Check if agent is runtime_ready before execution
  *
- * IMPORTANT: Currently, runtime_ready means:
- * - Agent has DB record
+ * IMPORTANT: runtime_ready = true ONLY if:
  * - Gateway is configured and connected
+ * - AND (has openclaw_session OR execution_mode != 'hooks_session')
  *
- * It does NOT mean:
- * - Agent has actual OpenClaw session (we don't use them)
- * - Agent workspace is materialized (optional)
+ * For hooks_session without openclaw_session: runtime_ready = false
+ * (but can_proceed_with_fallback = true if chat_completion available)
  */
 export function checkRuntimeReady(
   agentName: string,
   agentSessionId: string | undefined,
   gatewayConfigured: boolean,
-  gatewayConnected: boolean
+  gatewayConnected: boolean,
+  executionMode: ExecutionMode = 'chat_completion'
 ): RuntimeReadyCheck {
   // Compute materialization status
   const matStatus = computeMaterializationStatus(
@@ -296,7 +304,24 @@ export function checkRuntimeReady(
     };
   }
 
-  // Ready for chat_completion (NOT for real_agent)
+  // For hooks_session: runtime_ready requires actual session
+  // For chat_completion: ready if gateway connected
+  const hasOpenclawSession = !!agentSessionId;
+
+  if (executionMode === 'hooks_session' && !hasOpenclawSession) {
+    // hooks_session mode but no session - NOT runtime_ready
+    // but CAN proceed with chat_completion fallback
+    return {
+      ready: false,
+      reason: 'hooks_session mode requires openclaw_session',
+      lifecycle_state: matStatus.state,
+      materialization_status: matStatus,
+      can_proceed_with_fallback: true,
+      fallback_mode: 'chat_completion',
+    };
+  }
+
+  // Ready for execution
   return {
     ready: true,
     lifecycle_state: matStatus.state,
@@ -361,6 +386,19 @@ export class ExecutionTraceabilityBuilder {
   /** Mark transport success */
   transportSuccess(success: boolean): this {
     this.trace.transport_success = success;
+    return this;
+  }
+
+  /** Mark accepted async (hooks_session without immediate response) */
+  acceptedAsync(): this {
+    this.trace.accepted_async = true;
+    return this;
+  }
+
+  /** Mark async timeout triggered */
+  asyncTimeout(timeoutMs: number): this {
+    this.trace.async_timeout_triggered = true;
+    this.trace.async_timeout_ms = timeoutMs;
     return this;
   }
 

@@ -35,8 +35,9 @@ export const config = {
     workspacePath: resolveHomePath(env.OPENCLAW_WORKSPACE_PATH),
     // REST API token (for /v1/chat/completions, /v1/models)
     apiKey: env.OPENCLAW_API_KEY,
-    // Webhook token (for /hooks/agent, /hooks/wake) - falls back to apiKey
-    hooksToken: env.OPENCLAW_HOOKS_TOKEN || env.OPENCLAW_API_KEY,
+    // Webhook token (for /hooks/agent, /hooks/wake) - SEPARATE from apiKey
+    // PROMPT 7: NO fallback to apiKey - hooks require dedicated token
+    hooksToken: env.OPENCLAW_HOOKS_TOKEN,
     // Enable generation probe in diagnostics
     enableGenerationProbe: env.OPENCLAW_ENABLE_GENERATION_PROBE,
     // WebSocket URL - defaults to ws:// version of gatewayUrl

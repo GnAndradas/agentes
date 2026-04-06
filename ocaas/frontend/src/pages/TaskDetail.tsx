@@ -522,8 +522,10 @@ export function TaskDetail() {
         </Card>
       )}
 
-      {/* Manual Agent Assignment Panel - Shows for reassignment or new assignment */}
-      {(task.status === 'queued' || task.status === 'pending' || task.status === 'failed' || task.status === 'assigned') && (
+      {/* Manual Agent Assignment Panel - Shows ONLY for states that allow direct assignment
+          FSM: queued→assigned, assigned→queued (for reassignment)
+          NOT allowed: pending→assigned (must queue first), failed→assigned, completed→assigned */}
+      {(task.status === 'queued' || task.status === 'assigned') && (
         <Card>
           <CardHeader
             title={

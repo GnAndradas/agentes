@@ -402,6 +402,17 @@ export async function initDatabase(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_generation_traces_task ON generation_traces(task_id);
     CREATE INDEX IF NOT EXISTS idx_generation_traces_job ON generation_traces(job_id);
+
+    -- Task states table (for TaskStateManager persistence)
+    CREATE TABLE IF NOT EXISTS task_states (
+      task_id TEXT PRIMARY KEY,
+      state TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_task_states_updated ON task_states(updated_at);
   `);
 
   // Verify critical tables exist after initialization
@@ -409,7 +420,7 @@ export async function initDatabase(): Promise<void> {
     'tasks', 'agents', 'skills', 'tools', 'skill_tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
     'task_checkpoints', 'execution_leases', 'human_escalations', 'jobs',
-    'decision_traces', 'generation_traces',
+    'decision_traces', 'generation_traces', 'task_states',
   ];
 
   const existingTables = sqlite.prepare(`

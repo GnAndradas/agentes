@@ -187,6 +187,7 @@ const CRITICAL_TABLES = [
   'resource_drafts',  // Required for ManualResourceService
   'approvals',
   'agent_feedback',
+  'task_states',      // Required for TaskStateManager
 ];
 
 export async function checkDatabase(): Promise<BootstrapCheck> {

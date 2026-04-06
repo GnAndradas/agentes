@@ -11,6 +11,7 @@ import {
 import {
   createTraceability,
   toStoredTraceability,
+  toOriginMetadata,
   MATERIALIZATION_STATUS,
   type FullGenerationTraceability,
 } from './traceability.js';
@@ -171,7 +172,15 @@ export class AgentGenerator {
         _traceability: toStoredTraceability(trace.build()),
       };
 
-      await generationService.markGenerated(generation.id, generatedContent, `agents/${request.name}`);
+      // Extract origin metadata for frontend display
+      const originMetadata = toOriginMetadata(trace.build());
+
+      await generationService.markGenerated(
+        generation.id,
+        generatedContent,
+        `agents/${request.name}`,
+        originMetadata
+      );
 
       // Always go to pending_approval first (required by FSM)
       await generationService.markPendingApproval(generation.id, {
@@ -244,7 +253,7 @@ export class AgentGenerator {
 
     // Create agent in DB using stored content
     // BLOQUE 9: Now includes actual materialization status
-    await agentService.create({
+    const agent = await agentService.create({
       name: generation.name,
       description: generation.description,
       type: content.type,
@@ -268,6 +277,13 @@ export class AgentGenerator {
           activated_at: Date.now(),
         },
       },
+    });
+
+    // Update generation metadata with resourceId for frontend link
+    await generationService.updateMetadata(generationId, {
+      resourceId: agent.id,
+      agentId: agent.id,
+      resourceStatus: agent.status,
     });
 
     await generationService.activate(generationId);

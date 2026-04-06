@@ -231,6 +231,36 @@ export function toStoredTraceability(trace: FullGenerationTraceability): Record<
 }
 
 // ============================================================================
+// ORIGIN METADATA FOR FRONTEND
+// ============================================================================
+
+/**
+ * Extract origin metadata for frontend display
+ * Maps internal traceability to frontend-expected format
+ */
+export function toOriginMetadata(trace: FullGenerationTraceability): Record<string, unknown> {
+  // Map generation_mode to generated_by
+  let generated_by: 'ai' | 'fallback' | 'manual' | 'heuristic' = 'fallback';
+  if (trace.generation_mode === 'ai' && trace.ai_generation_succeeded) {
+    generated_by = 'ai';
+  } else if (trace.generation_mode === 'manual') {
+    generated_by = 'manual';
+  } else if (trace.fallback_used) {
+    generated_by = 'fallback';
+  }
+
+  return {
+    generated_by,
+    ai_attempted: trace.ai_generation_attempted,
+    ai_succeeded: trace.ai_generation_succeeded,
+    fallback_used: trace.fallback_used,
+    fallback_reason: trace.fallback_reason,
+    model: trace.ai_model,
+    tokens_used: trace.ai_tokens ? (trace.ai_tokens.input + trace.ai_tokens.output) : undefined,
+  };
+}
+
+// ============================================================================
 // MATERIALIZATION STATUS
 // ============================================================================
 

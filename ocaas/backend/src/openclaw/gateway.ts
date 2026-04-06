@@ -1167,15 +1167,30 @@ export class OpenClawGateway {
     }
 
     try {
+      // PROMPT 7: Validation warnings (non-blocking)
+      if (!options.agentId) {
+        logger.warn({
+          sessionKey: options.sessionKey,
+        }, 'hooks dispatch without explicit agentId (may rely on gateway defaults)');
+      }
+
+      if (options.sessionKey && !options.sessionKey.startsWith('hook:ocaas:')) {
+        logger.warn({
+          sessionKey: options.sessionKey,
+        }, 'sessionKey does not follow hook:ocaas: convention');
+      }
+
       logger.info({
         agentId: options.agentId,
         sessionKey: options.sessionKey,
         messageLength: options.message.length,
       }, 'Running agent via /hooks/agent (PRIMARY MODE)');
 
+      // PROMPT 7: Include agentId in payload
       const body: Record<string, unknown> = {
         message: options.message,
         sessionKey: options.sessionKey,
+        agentId: options.agentId,
         name: options.name || `OCAAS Agent ${options.agentId}`,
         wakeMode: options.wakeMode || 'now',
         deliver: options.deliver ?? false, // Default to sync response

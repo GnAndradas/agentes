@@ -12,6 +12,7 @@ import {
 import {
   createTraceability,
   toStoredTraceability,
+  toOriginMetadata,
   MATERIALIZATION_STATUS,
 } from './traceability.js';
 import type { GenerationRequest, GenerationOutput } from './types.js';
@@ -156,8 +157,11 @@ export class ToolGenerator {
         _traceability: toStoredTraceability(trace.build()),
       };
 
+      // Extract origin metadata for frontend display
+      const originMetadata = toOriginMetadata(trace.build());
+
       const targetPath = `tools/${request.name}.${toolType}`;
-      await generationService.markGenerated(generation.id, generatedContent, targetPath);
+      await generationService.markGenerated(generation.id, generatedContent, targetPath, originMetadata);
 
       // Always go to pending_approval first (required by FSM)
       await generationService.markPendingApproval(generation.id, {
@@ -229,13 +233,20 @@ export class ToolGenerator {
     // =====================================
 
     // Create tool in DB
-    await toolService.create({
+    const tool = await toolService.create({
       name: generation.name,
       description: generation.description,
       path: toolPath,
       type: 'script',
       inputSchema: content.inputSchema,
       outputSchema: content.outputSchema,
+    });
+
+    // Update generation metadata with resourceId for frontend link
+    await generationService.updateMetadata(generationId, {
+      resourceId: tool.id,
+      toolId: tool.id,
+      resourceStatus: tool.status,
     });
 
     await generationService.activate(generationId);

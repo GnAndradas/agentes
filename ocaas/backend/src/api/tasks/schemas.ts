@@ -9,6 +9,11 @@ export const CreateTaskSchema = z.object({
   parentTaskId: z.string().optional(),
   input: z.record(z.unknown()).optional(),
   metadata: z.record(z.unknown()).optional(),
+  // PROMPT 10: Enriched task creation fields
+  objective: z.string().max(2000).optional(),
+  constraints: z.string().max(2000).optional(),
+  details: z.union([z.string(), z.record(z.unknown())]).optional(),
+  expectedOutput: z.string().max(2000).optional(),
 });
 
 export const UpdateTaskSchema = z.object({
@@ -19,6 +24,11 @@ export const UpdateTaskSchema = z.object({
   agentId: z.string().optional(),
   input: z.record(z.unknown()).optional(),
   metadata: z.record(z.unknown()).optional(),
+  // PROMPT 10: Enriched task fields
+  objective: z.string().max(2000).optional(),
+  constraints: z.string().max(2000).optional(),
+  details: z.union([z.string(), z.record(z.unknown())]).optional(),
+  expectedOutput: z.string().max(2000).optional(),
 });
 
 export const AssignTaskSchema = z.object({

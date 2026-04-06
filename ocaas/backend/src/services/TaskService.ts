@@ -43,6 +43,11 @@ export interface CreateTaskInput {
   maxRetries?: number;
   input?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  // PROMPT 10: Enriched task creation fields
+  objective?: string;
+  constraints?: string;
+  details?: string | Record<string, unknown>;
+  expectedOutput?: string;
 }
 
 export interface UpdateTaskInput {
@@ -53,6 +58,11 @@ export interface UpdateTaskInput {
   agentId?: string;
   input?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  // PROMPT 10: Enriched task fields
+  objective?: string;
+  constraints?: string;
+  details?: string | Record<string, unknown>;
+  expectedOutput?: string;
 }
 
 function rowToDTO(row: typeof schema.tasks.$inferSelect): TaskDTO {
@@ -109,6 +119,26 @@ export class TaskService {
     const now = nowTimestamp();
     const id = nanoid();
 
+    // PROMPT 10: Build enriched input with context if new fields provided
+    let taskInput: Record<string, unknown> | null = input.input ? { ...input.input } : null;
+
+    const hasEnrichedFields = input.objective || input.constraints || input.details || input.expectedOutput;
+    if (hasEnrichedFields) {
+      // Build structured context
+      const context: Record<string, unknown> = {};
+      if (input.description) context.description = input.description;
+      if (input.objective) context.objective = input.objective;
+      if (input.constraints) context.constraints = input.constraints;
+      if (input.details) context.details = input.details;
+      if (input.expectedOutput) context.expectedOutput = input.expectedOutput;
+
+      taskInput = {
+        ...(taskInput || {}),
+        text: input.title,
+        context,
+      };
+    }
+
     await db.insert(schema.tasks).values({
       id,
       title: input.title,
@@ -122,7 +152,7 @@ export class TaskService {
       dependsOn: input.dependsOn ? JSON.stringify(input.dependsOn) : null,
       sequenceOrder: input.sequenceOrder,
       maxRetries: input.maxRetries ?? 3,
-      input: input.input ? JSON.stringify(input.input) : null,
+      input: taskInput ? JSON.stringify(taskInput) : null,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt: now,
       updatedAt: now,

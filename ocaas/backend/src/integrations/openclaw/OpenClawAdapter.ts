@@ -260,6 +260,67 @@ export class OpenClawAdapter {
   }
 
   // ==========================================================================
+  // AGENT RUNTIME BOOTSTRAP (PROMPT 11)
+  // ==========================================================================
+
+  /**
+   * Ensure agent is ready for execution (warm-up ping)
+   *
+   * PROMPT 11: Sends a minimal warmup request to ensure:
+   * - Gateway can reach agent
+   * - Session routing works
+   * - Agent is responsive (no wait for AI response)
+   *
+   * Does NOT block execution if warmup fails - just logs and continues.
+   */
+  async ensureAgentReady(agentId: string): Promise<{ ready: boolean; error?: string }> {
+    // Step 1: Check if hooks are configured
+    if (!this.isHooksConfigured()) {
+      logger.debug({ agentId }, 'Warmup skipped: hooks not configured');
+      return { ready: false, error: 'hooks_not_configured' };
+    }
+
+    // Step 2: Generate warmup sessionKey
+    const timestamp = Date.now();
+    const sessionKey = `hook:ocaas:warmup:${agentId}:${timestamp}`;
+
+    logger.debug({ agentId, sessionKey }, 'Sending agent warmup ping');
+
+    try {
+      // Step 3: Send minimal ping via hooks
+      const result = await this.gateway.runViaHooksAgent({
+        message: 'ping',
+        agentId,
+        sessionKey,
+        name: `OCAAS Warmup ${agentId}`,
+        wakeMode: 'now',
+        deliver: false, // Don't wait for full response
+      });
+
+      // Step 4: Interpret result
+      // If request was accepted (sent without error), agent is ready
+      if (result.success || result.accepted) {
+        logger.info({ agentId, sessionKey }, 'Agent warmup successful');
+        return { ready: true };
+      }
+
+      // Request failed
+      logger.warn({
+        agentId,
+        sessionKey,
+        error: result.error,
+      }, 'Agent warmup failed');
+
+      return { ready: false, error: result.error || 'warmup_failed' };
+
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'unknown_error';
+      logger.warn({ err, agentId, sessionKey }, 'Agent warmup threw exception');
+      return { ready: false, error: errorMsg };
+    }
+  }
+
+  // ==========================================================================
   // PRIMARY EXECUTION: Via Hooks (hooks_session mode)
   // ==========================================================================
 

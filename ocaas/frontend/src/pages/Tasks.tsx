@@ -69,6 +69,11 @@ export function Tasks() {
     description: '',
     type: '',
     priority: String(TASK_PRIORITY.NORMAL),
+    // PROMPT 10: Enriched task fields
+    objective: '',
+    constraints: '',
+    details: '',
+    expectedOutput: '',
   });
 
   const { data, isLoading } = useQuery({
@@ -81,7 +86,16 @@ export function Tasks() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       setShowCreate(false);
-      setForm({ title: '', description: '', type: '', priority: String(TASK_PRIORITY.NORMAL) });
+      setForm({
+        title: '',
+        description: '',
+        type: '',
+        priority: String(TASK_PRIORITY.NORMAL),
+        objective: '',
+        constraints: '',
+        details: '',
+        expectedOutput: '',
+      });
       addNotification({ type: 'success', title: 'Task created' });
     },
     onError: (err: Error) => {
@@ -107,12 +121,19 @@ export function Tasks() {
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    createMutation.mutate({
+    // PROMPT 10: Include enriched fields (only if not empty)
+    const payload: Parameters<typeof taskApi.create>[0] = {
       title: form.title,
-      description: form.description,
+      description: form.description || undefined,
       type: form.type,
       priority: Number(form.priority),
-    });
+    };
+    if (form.objective) payload.objective = form.objective;
+    if (form.constraints) payload.constraints = form.constraints;
+    if (form.details) payload.details = form.details;
+    if (form.expectedOutput) payload.expectedOutput = form.expectedOutput;
+
+    createMutation.mutate(payload);
   };
 
   const tasks = data?.tasks || [];
@@ -295,6 +316,42 @@ export function Tasks() {
             onChange={(e) => setForm({ ...form, priority: e.target.value })}
             options={priorityOptions}
           />
+
+          {/* PROMPT 10: Enriched task fields (all optional) */}
+          <div className="border-t border-dark-700 pt-4 mt-4">
+            <p className="text-sm text-dark-400 mb-3">Advanced Task Details (optional)</p>
+            <div className="space-y-4">
+              <Textarea
+                label="Objective"
+                placeholder="What should be accomplished?"
+                value={form.objective}
+                onChange={(e) => setForm({ ...form, objective: e.target.value })}
+                rows={2}
+              />
+              <Textarea
+                label="Constraints"
+                placeholder="Any limitations or requirements?"
+                value={form.constraints}
+                onChange={(e) => setForm({ ...form, constraints: e.target.value })}
+                rows={2}
+              />
+              <Textarea
+                label="Details"
+                placeholder="Additional context or data (JSON or text)"
+                value={form.details}
+                onChange={(e) => setForm({ ...form, details: e.target.value })}
+                rows={3}
+              />
+              <Textarea
+                label="Expected Output"
+                placeholder="What output format is expected?"
+                value={form.expectedOutput}
+                onChange={(e) => setForm({ ...form, expectedOutput: e.target.value })}
+                rows={2}
+              />
+            </div>
+          </div>
+
           <div className="flex justify-end gap-3 pt-4">
             <Button
               type="button"

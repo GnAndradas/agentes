@@ -92,6 +92,10 @@ export interface ExecutionTraceability {
   async_timeout_triggered?: boolean;
   async_timeout_ms?: number;
 
+  /** PROMPT 11: Agent warmup attempted before execution */
+  agent_warmup_attempted?: boolean;
+  agent_warmup_success?: boolean;
+
   /** Fallback used (and why) */
   execution_fallback_used: boolean;
   execution_fallback_reason?: string;
@@ -399,6 +403,13 @@ export class ExecutionTraceabilityBuilder {
   asyncTimeout(timeoutMs: number): this {
     this.trace.async_timeout_triggered = true;
     this.trace.async_timeout_ms = timeoutMs;
+    return this;
+  }
+
+  /** PROMPT 11: Mark agent warmup result */
+  warmup(success: boolean): this {
+    this.trace.agent_warmup_attempted = true;
+    this.trace.agent_warmup_success = success;
     return this;
   }
 

@@ -664,6 +664,19 @@ export class JobDispatcherService {
       // Build prompt from payload
       const prompt = this.buildPrompt(payload);
 
+      // PROMPT 11: Agent warmup before hooks_session
+      // Non-blocking: if warmup fails, we continue (fallback will cover)
+      const warmupResult = await adapter.ensureAgentReady(payload.agent.agentId);
+      traceBuilder.warmup(warmupResult.ready);
+
+      if (!warmupResult.ready) {
+        logger.warn({
+          jobId,
+          agentId: payload.agent.agentId,
+          warmupError: warmupResult.error,
+        }, 'Agent warmup failed, proceeding with execution');
+      }
+
       // HOOKS MIGRATION: Use executeViaHooks as PRIMARY execution method
       // Fallback chain: hooks_session → chat_completion → stub mode
       // TIMEOUT: Wrap execution with timeout control
@@ -1260,6 +1273,7 @@ export class JobDispatcherService {
 
   /**
    * Build prompt from JobPayload
+   * PROMPT 10: Enhanced to use enriched task context (objective, constraints, details, expectedOutput)
    */
   private buildPrompt(payload: JobPayload): string {
     const parts: string[] = [];
@@ -1272,9 +1286,43 @@ export class JobDispatcherService {
       parts.push(`## Description\n${payload.description}`);
     }
 
-    // Input data
+    // PROMPT 10: Enriched context from task.input.context
+    const enrichedContext = payload.input?.context as Record<string, unknown> | undefined;
+    if (enrichedContext) {
+      // Objective
+      if (enrichedContext.objective) {
+        parts.push(`## Objective\n${enrichedContext.objective}`);
+      }
+
+      // Constraints (task-specific, not system constraints)
+      if (enrichedContext.constraints) {
+        parts.push(`## Task Constraints\n${enrichedContext.constraints}`);
+      }
+
+      // Details (can be string or object)
+      if (enrichedContext.details) {
+        const detailsStr = typeof enrichedContext.details === 'string'
+          ? enrichedContext.details
+          : JSON.stringify(enrichedContext.details, null, 2);
+        parts.push(`## Details\n${detailsStr}`);
+      }
+
+      // Expected Output
+      if (enrichedContext.expectedOutput) {
+        parts.push(`## Expected Output\n${enrichedContext.expectedOutput}`);
+      }
+    }
+
+    // Input data (excluding context to avoid duplication)
     if (payload.input && Object.keys(payload.input).length > 0) {
-      parts.push(`## Input Data\n\`\`\`json\n${JSON.stringify(payload.input, null, 2)}\n\`\`\``);
+      // Filter out text and context that we already processed
+      const inputToShow = { ...payload.input };
+      delete inputToShow.text;
+      delete inputToShow.context;
+
+      if (Object.keys(inputToShow).length > 0) {
+        parts.push(`## Input Data\n\`\`\`json\n${JSON.stringify(inputToShow, null, 2)}\n\`\`\``);
+      }
     }
 
     // Previous results
@@ -1298,8 +1346,8 @@ export class JobDispatcherService {
       parts.push(`## User Context\n${payload.context.userContext}`);
     }
 
-    // Constraints reminder
-    parts.push(`## Constraints`);
+    // System Constraints reminder
+    parts.push(`## System Constraints`);
     parts.push(`- Autonomy: ${payload.constraints.autonomyLevel}`);
     parts.push(`- Max tool calls: ${payload.constraints.maxToolCalls}`);
     if (payload.constraints.requireConfirmation) {

@@ -115,7 +115,17 @@ export const taskApi = {
     const res = await api.get<DataResponse<import('../types').Task[]>>(`/tasks/${id}/subtasks`);
     return { subtasks: res.data };
   },
-  create: async (data: { title: string; description?: string; type: string; priority?: number }) => {
+  create: async (data: {
+    title: string;
+    description?: string;
+    type: string;
+    priority?: number;
+    // PROMPT 10: Enriched task creation fields
+    objective?: string;
+    constraints?: string;
+    details?: string | Record<string, unknown>;
+    expectedOutput?: string;
+  }) => {
     const res = await api.post<DataResponse<import('../types').Task>>('/tasks', data);
     return res.data;
   },

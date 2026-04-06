@@ -9,8 +9,6 @@ import {
   CheckCircle,
   XCircle,
   Play,
-  FileCode,
-  Settings,
   AlertTriangle,
   Copy,
   Check,
@@ -20,6 +18,12 @@ import { useAppStore } from '../stores/app';
 import { useTrackedMutation } from '../hooks/useTrackedMutation';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
 import { fromTimestamp } from '../lib/date';
+import {
+  GenerationOriginPanel,
+  GenerationContentPanel,
+  GenerationLifecyclePanel,
+  GenerationResourceLink,
+} from '../components/generations';
 
 const statusVariant = {
   draft: 'inactive',
@@ -116,17 +120,6 @@ export function GenerationDetail() {
   const canApprove = generation.status === 'generated' || generation.status === 'pending_approval';
   const canActivate = generation.status === 'approved';
 
-  // Format content for display
-  const contentJson = generation.generatedContent
-    ? JSON.stringify(generation.generatedContent, null, 2)
-    : null;
-  const validationJson = generation.validationResult
-    ? JSON.stringify(generation.validationResult, null, 2)
-    : null;
-  const metadataJson = generation.metadata
-    ? JSON.stringify(generation.metadata, null, 2)
-    : null;
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -195,129 +188,85 @@ export function GenerationDetail() {
         </Card>
       )}
 
+      {/* Resource Link - Top banner when active */}
+      <GenerationResourceLink generation={generation} />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Details */}
-        <Card className="lg:col-span-2">
-          <CardHeader title="Details" />
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm text-dark-400">Type</p>
-              <div className="flex items-center gap-2 mt-1">
-                <TypeIcon className={`w-4 h-4 ${typeColor}`} />
-                <span className="capitalize">{generation.type}</span>
-              </div>
-            </div>
-            <div>
-              <p className="text-sm text-dark-400">Status</p>
-              <Badge variant={statusVariant[generation.status]} className="mt-1">
-                {generation.status.replace('_', ' ')}
-              </Badge>
-            </div>
-            <div>
-              <p className="text-sm text-dark-400">Target Path</p>
-              <p className="text-sm mt-1 font-mono text-dark-300">
-                {generation.targetPath || '-'}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-dark-400">Created</p>
-              <p className="text-sm mt-1">{formatDate(generation.createdAt)}</p>
-            </div>
-            {generation.approvedBy && (
-              <div>
-                <p className="text-sm text-dark-400">Approved By</p>
-                <p className="text-sm mt-1">{generation.approvedBy}</p>
-              </div>
-            )}
-            {generation.approvedAt && (
-              <div>
-                <p className="text-sm text-dark-400">Approved At</p>
-                <p className="text-sm mt-1">{formatDate(generation.approvedAt)}</p>
-              </div>
-            )}
-            {generation.activatedAt && (
-              <div>
-                <p className="text-sm text-dark-400">Activated At</p>
-                <p className="text-sm mt-1">{formatDate(generation.activatedAt)}</p>
-              </div>
-            )}
-            {generation.description && (
-              <div className="col-span-2">
-                <p className="text-sm text-dark-400">Description</p>
-                <p className="text-sm mt-1">{generation.description}</p>
-              </div>
-            )}
-          </div>
-        </Card>
-
-        {/* Validation Result */}
-        {validationJson && (
+        {/* Left Column - Main Content */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Basic Details */}
           <Card>
-            <CardHeader title="Validation" />
-            <pre className="text-xs font-mono bg-dark-900 p-3 rounded-lg overflow-auto max-h-48 text-green-400">
-              {validationJson}
-            </pre>
-          </Card>
-        )}
-      </div>
-
-      {/* Prompt */}
-      {generation.prompt && (
-        <Card>
-          <CardHeader
-            title="Generation Prompt"
-            action={
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => copyToClipboard(generation.prompt)}
-              >
-                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-              </Button>
-            }
-          />
-          <pre className="text-sm font-mono bg-dark-900 p-4 rounded-lg overflow-auto max-h-64 whitespace-pre-wrap">
-            {generation.prompt}
-          </pre>
-        </Card>
-      )}
-
-      {/* Generated Content */}
-      {contentJson && (
-        <Card>
-          <CardHeader
-            title="Generated Content"
-            action={
-              <div className="flex items-center gap-2">
-                <FileCode className="w-4 h-4 text-dark-400" />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => copyToClipboard(contentJson)}
-                >
-                  {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-                </Button>
+            <CardHeader title="Details" />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-dark-400">Type</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <TypeIcon className={`w-4 h-4 ${typeColor}`} />
+                  <span className="capitalize">{generation.type}</span>
+                </div>
               </div>
-            }
-          />
-          <pre className="text-xs font-mono bg-dark-900 p-4 rounded-lg overflow-auto max-h-96 text-primary-300">
-            {contentJson}
-          </pre>
-        </Card>
-      )}
+              <div>
+                <p className="text-sm text-dark-400">Target Path</p>
+                <p className="text-sm mt-1 font-mono text-dark-300">
+                  {generation.targetPath || '-'}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-dark-400">Created</p>
+                <p className="text-sm mt-1">{formatDate(generation.createdAt)}</p>
+              </div>
+              {generation.description && (
+                <div className="col-span-2">
+                  <p className="text-sm text-dark-400">Description</p>
+                  <p className="text-sm mt-1">{generation.description}</p>
+                </div>
+              )}
+            </div>
+          </Card>
 
-      {/* Metadata */}
-      {metadataJson && (
-        <Card>
-          <CardHeader
-            title="Metadata"
-            action={<Settings className="w-4 h-4 text-dark-400" />}
-          />
-          <pre className="text-xs font-mono bg-dark-900 p-3 rounded-lg overflow-auto max-h-48 text-dark-300">
-            {metadataJson}
-          </pre>
-        </Card>
-      )}
+          {/* Generated Content - Specialized by Type */}
+          <Card>
+            <CardHeader title="Generated Content" />
+            <GenerationContentPanel generation={generation} />
+          </Card>
+
+          {/* Prompt */}
+          {generation.prompt && (
+            <Card>
+              <CardHeader
+                title="Generation Prompt"
+                action={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => copyToClipboard(generation.prompt)}
+                  >
+                    {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                }
+              />
+              <pre className="text-sm font-mono bg-dark-900 p-4 rounded-lg overflow-auto max-h-64 whitespace-pre-wrap">
+                {generation.prompt}
+              </pre>
+            </Card>
+          )}
+        </div>
+
+        {/* Right Column - Lifecycle & Origin */}
+        <div className="space-y-6">
+          {/* Lifecycle & Validation */}
+          <Card>
+            <CardHeader title="Lifecycle" />
+            <GenerationLifecyclePanel generation={generation} />
+          </Card>
+
+          {/* Origin */}
+          <Card>
+            <CardHeader title="Origin" />
+            <GenerationOriginPanel generation={generation} />
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

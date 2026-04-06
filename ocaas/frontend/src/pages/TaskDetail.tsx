@@ -522,39 +522,46 @@ export function TaskDetail() {
         </Card>
       )}
 
-      {/* Manual Agent Assignment Panel - Shows when task needs manual assignment */}
-      {(task.status === 'queued' || task.status === 'pending' || task.status === 'failed') && !task.agentId && (
+      {/* Manual Agent Assignment Panel - Shows for reassignment or new assignment */}
+      {(task.status === 'queued' || task.status === 'pending' || task.status === 'failed' || task.status === 'assigned') && (
         <Card>
           <CardHeader
             title={
               <div className="flex items-center gap-2">
                 <User className="w-4 h-4 text-primary-400" />
-                Manual Agent Assignment
+                {task.agentId ? 'Reassign Agent' : 'Manual Agent Assignment'}
               </div>
             }
           />
           <TaskManualAgentAssignPanel
             task={task}
             decisionTrace={decisionTrace}
+            currentAgent={agent}
             onAssigned={() => {
               addNotification({
                 type: 'success',
-                title: 'Agent assigned',
-                message: 'Task has been assigned to the selected agent',
+                title: task.agentId ? 'Agent reassigned' : 'Agent assigned',
+                message: task.agentId
+                  ? 'Task has been reassigned to the selected agent'
+                  : 'Task has been assigned to the selected agent',
               });
             }}
           />
         </Card>
       )}
 
-      {/* Generate Agent Flow Panel - Shows when no matching agent */}
+      {/* Generate Agent Flow Panel - Shows when no matching agent (based on decisionTrace) */}
       {(task.status === 'queued' || task.status === 'pending' || task.status === 'failed') && decisionTrace && (
+        decisionTrace.failureReason === 'NO_AGENT_MATCHING_CAPABILITIES' ||
+        decisionTrace.failureReason === 'NO_AGENTS_REGISTERED' ||
+        decisionTrace.failureReason === 'NO_ACTIVE_AGENTS'
+      ) && (
         <Card>
           <CardHeader
             title={
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-primary-400" />
-                Auto-Generate Resources
+                Generate Compatible Resources
               </div>
             }
           />
@@ -563,9 +570,9 @@ export function TaskDetail() {
             decisionTrace={decisionTrace}
             onComplete={() => {
               addNotification({
-                type: 'success',
+                type: 'info',
                 title: 'Generations created',
-                message: 'Agent, skill, and tool generations are pending approval',
+                message: 'Resources created. Approve and activate them, then retry this task.',
               });
             }}
           />

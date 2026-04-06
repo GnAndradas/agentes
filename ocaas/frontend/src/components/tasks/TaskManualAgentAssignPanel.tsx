@@ -1,8 +1,9 @@
 /**
  * TaskManualAgentAssignPanel
  *
- * Allows manual agent assignment when decision engine couldn't find a match.
+ * Allows manual agent assignment or reassignment.
  * Shows available agents with their status and capabilities.
+ * Works even when task already has an agentId (for reassignment).
  */
 
 import { useState } from 'react';
@@ -13,6 +14,7 @@ import {
   AlertTriangle,
   CheckCircle,
   XCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Button, Badge } from '../ui';
 import { agentApi, taskApi } from '../../lib/api';
@@ -22,6 +24,8 @@ interface TaskManualAgentAssignPanelProps {
   task: Task;
   decisionTrace: DecisionTrace | null | undefined;
   onAssigned?: () => void;
+  /** Current agent info if task already has an assignment */
+  currentAgent?: Agent | null;
 }
 
 // =============================================================================
@@ -114,9 +118,13 @@ export function TaskManualAgentAssignPanel({
   task,
   decisionTrace,
   onAssigned,
+  currentAgent,
 }: TaskManualAgentAssignPanelProps) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+
+  // Determine if this is a reassignment
+  const isReassignment = Boolean(task.agentId);
 
   // Fetch all agents
   const { data: agentsData, isLoading: isLoadingAgents } = useQuery({
@@ -176,10 +184,36 @@ export function TaskManualAgentAssignPanel({
 
   return (
     <div className="space-y-4 p-4">
+      {/* Current Agent Warning - for reassignment */}
+      {isReassignment && (
+        <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <RefreshCw className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm text-yellow-400 font-medium">Reassigning Agent</p>
+              <p className="text-xs text-dark-400 mt-1">
+                Current agent: <strong>{currentAgent?.name || task.agentId}</strong>
+                {currentAgent && (
+                  <Badge
+                    variant={currentAgent.status === 'active' ? 'active' : currentAgent.status === 'busy' ? 'pending' : 'inactive'}
+                    className="text-xs ml-2"
+                  >
+                    {currentAgent.status}
+                  </Badge>
+                )}
+              </p>
+              <p className="text-xs text-dark-500 mt-1">
+                Selecting a new agent will replace the current assignment
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header info */}
       <div className="flex items-center gap-2 text-sm text-dark-400">
-        <UserPlus className="w-4 h-4" />
-        <span>Select an agent to manually assign to this task</span>
+        {isReassignment ? <RefreshCw className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+        <span>{isReassignment ? 'Select a new agent to reassign this task' : 'Select an agent to manually assign to this task'}</span>
       </div>
 
       {/* Required capabilities hint */}
@@ -228,12 +262,12 @@ export function TaskManualAgentAssignPanel({
       <Button
         variant="primary"
         className="w-full"
-        disabled={!selectedAgentId}
+        disabled={!selectedAgentId || selectedAgentId === task.agentId}
         loading={assignMutation.isPending}
         onClick={() => selectedAgentId && assignMutation.mutate(selectedAgentId)}
       >
-        <UserPlus className="w-4 h-4 mr-2" />
-        Assign Agent
+        {isReassignment ? <RefreshCw className="w-4 h-4 mr-2" /> : <UserPlus className="w-4 h-4 mr-2" />}
+        {isReassignment ? 'Reassign Agent' : 'Assign Agent'}
       </Button>
 
       {/* Error display */}
@@ -249,7 +283,7 @@ export function TaskManualAgentAssignPanel({
       {assignMutation.isSuccess && (
         <div className="p-2 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-400 flex items-center gap-2">
           <CheckCircle className="w-4 h-4" />
-          Agent assigned successfully
+          {isReassignment ? 'Agent reassigned successfully' : 'Agent assigned successfully'}
         </div>
       )}
     </div>

@@ -264,14 +264,45 @@ src/orchestrator/OrgAwareDecisionEngine.ts -> Agent selection
 src/config/autonomy.ts -> Autonomy config
 ```
 
-## 13. KNOWN GAPS
+## 13. AGENT MATERIALIZATION
+
+**Auto-materialization:** Agents are automatically materialized on activation.
+- `AgentBootstrap` creates default-general-agent on startup
+- `AgentService.activate()` triggers `materializeIfNeeded()`
+- Creates workspace: `agents/<name>/agent.json` + `system-prompt.md`
+
+**Manual materialization:** From UI (AgentDetail) or API:
+```bash
+POST /api/agents/:id/materialize
+```
+
+**Lifecycle states:** `record` -> `activated` -> `materialized` -> `runtime_ready`
+
+## 14. TASK OPERATIONS
+
+**Manual agent assignment/reassignment:**
+- TaskDetail shows assignment panel for queued/pending/failed tasks
+- Works even when task already has an agent (reassignment)
+- UI: TaskManualAgentAssignPanel
+
+**Generate agent flow:**
+- TaskGenerateAgentFlowPanel tracks: generated / linked / pending approval
+- Honest status: shows real state, not optimistic assumptions
+
+**inject_task.sh:**
+```bash
+./inject_task.sh   # Creates task, prints ID, exits
+```
+Pure injector: no polling, no GET, just POST and return ID.
+
+## 15. KNOWN GAPS
 
 1. **Skills/Tools not used** - OpenClaw doesn't read workspace
 2. **Agents not "real"** - Always hooks_session or chat_completion, never real OpenClaw session
 3. **runtime_ready always false** - No real session management
 4. **Workspace not connected** - agent.json created but not loaded
 
-## 14. CLEANUP
+## 16. CLEANUP
 
 **Check if port 3001 is in use:**
 
@@ -297,7 +328,7 @@ rm -f backend/data/ocaas.db
 npm run clean && npm install && npm run build
 ```
 
-## 15. VALIDATION
+## 17. VALIDATION
 
 After startup:
 ```bash

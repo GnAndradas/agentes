@@ -3,10 +3,13 @@
  *
  * Auto-seeds a default agent if no active agents exist in the system.
  * This ensures tasks can be assigned immediately after system startup.
+ *
+ * P0-A: Now includes materialization after activation to ensure agent is runtime-ready.
  */
 
 import { getServices } from '../services/index.js';
 import { createLogger } from '../utils/logger.js';
+import { materializeAgent, getAgentWorkspace } from '../generator/AgentMaterialization.js';
 
 const logger = createLogger('AgentBootstrap');
 
@@ -43,6 +46,15 @@ export async function ensureDefaultAgent(): Promise<void> {
         { id: existingDefault.id },
         '[AgentBootstrap] activated existing default-general-agent'
       );
+
+      // P0-A: Materialize agent if not already materialized
+      await materializeAgentIfNeeded(
+        existingDefault.name,
+        existingDefault.type || 'general',
+        existingDefault.description,
+        existingDefault.capabilities || DEFAULT_AGENT_CAPABILITIES,
+        (existingDefault.config as Record<string, unknown>) || {}
+      );
       return;
     }
 
@@ -62,11 +74,65 @@ export async function ensureDefaultAgent(): Promise<void> {
       { id: newAgent.id, name: DEFAULT_AGENT_NAME },
       '[AgentBootstrap] created default-general-agent'
     );
+
+    // P0-A: Materialize newly created agent
+    await materializeAgentIfNeeded(
+      newAgent.name,
+      newAgent.type || 'general',
+      newAgent.description,
+      newAgent.capabilities || DEFAULT_AGENT_CAPABILITIES,
+      (newAgent.config as Record<string, unknown>) || {}
+    );
   } catch (error) {
     // Log error but don't fail startup - this is a convenience feature
     logger.error(
       { error },
       '[AgentBootstrap] failed to create default agent'
+    );
+  }
+}
+
+/**
+ * P0-A: Materialize agent if workspace doesn't exist
+ * Non-blocking - logs errors but doesn't fail
+ */
+async function materializeAgentIfNeeded(
+  name: string,
+  type: string,
+  description: string | undefined,
+  capabilities: string[],
+  config: Record<string, unknown>
+): Promise<void> {
+  try {
+    // Check if already materialized
+    const workspace = getAgentWorkspace(name);
+    if (workspace.exists) {
+      logger.info(
+        { agent: name, workspace: workspace.path },
+        '[AgentMaterialization] workspace already exists, skipping materialization'
+      );
+      return;
+    }
+
+    // Materialize
+    const trace = await materializeAgent(name, type, description, capabilities, config, 'system');
+
+    if (trace.final_state === 'materialized') {
+      logger.info(
+        { agent: name, state: trace.final_state, steps: trace.steps_completed },
+        '[AgentMaterialization] agent materialized successfully'
+      );
+    } else {
+      logger.warn(
+        { agent: name, state: trace.final_state, gap: trace.gap },
+        '[AgentMaterialization] agent materialization incomplete'
+      );
+    }
+  } catch (error) {
+    // Don't fail bootstrap if materialization fails
+    logger.error(
+      { agent: name, error },
+      '[AgentMaterialization] failed to materialize agent (non-blocking)'
     );
   }
 }

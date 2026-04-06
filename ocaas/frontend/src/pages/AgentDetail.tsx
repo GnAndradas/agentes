@@ -437,6 +437,7 @@ export function AgentDetail() {
           }
         />
         <AgentMaterializationPanel
+          agentId={id!}
           status={materializationStatus}
           isLoading={isMaterializationLoading}
           error={materializationError instanceof Error ? materializationError.message : null}

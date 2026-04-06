@@ -9,8 +9,11 @@ import { canCreateAgentAutonomously, requiresApprovalForAgentCreation } from '..
 import {
   computeMaterializationStatus,
   getStatusDescription,
+  materializeAgent,
+  getAgentWorkspace,
   type AgentMaterializationStatus,
   type AgentLifecycleState,
+  type MaterializationTraceability,
 } from '../generator/AgentMaterialization.js';
 import type { EventService } from './EventService.js';
 import type { AgentDTO, AgentStatus, AgentType } from '../types/domain.js';
@@ -188,6 +191,17 @@ export class AgentService {
       agentId: id,
     });
 
+    // P0-A: Auto-materialize agent on activation if not already materialized
+    try {
+      await this.materializeIfNeeded(agent);
+    } catch (err) {
+      // Non-blocking - log but don't fail activation
+      logger.warn(
+        { agentId: id, error: err },
+        '[AgentService] Materialization failed during activation (non-blocking)'
+      );
+    }
+
     return this.getById(id);
   }
 
@@ -239,8 +253,78 @@ export class AgentService {
   }
 
   // ============================================================================
-  // BLOQUE 9: MATERIALIZATION STATUS
+  // BLOQUE 9 + P0-A: MATERIALIZATION
   // ============================================================================
+
+  /**
+   * P0-A: Materialize an agent - create workspace files
+   * Call this after activation to ensure agent is ready
+   */
+  async materialize(id: string, source: 'activation' | 'manual' | 'system' = 'manual'): Promise<MaterializationTraceability> {
+    const agent = await this.getById(id);
+
+    // Check if already materialized
+    const workspace = getAgentWorkspace(agent.name);
+    if (workspace.exists) {
+      logger.info(
+        { agentId: id, agent: agent.name },
+        '[AgentMaterialization] already materialized, skipping'
+      );
+      return {
+        attempted_at: Date.now(),
+        source,
+        steps_attempted: [],
+        steps_completed: [],
+        steps_failed: [],
+        final_state: 'materialized',
+        runtime_ready: false,
+        gap: 'Already materialized',
+      };
+    }
+
+    const trace = await materializeAgent(
+      agent.name,
+      agent.type || 'general',
+      agent.description,
+      agent.capabilities || [],
+      (agent.config as Record<string, unknown>) || {},
+      source
+    );
+
+    logger.info(
+      { agentId: id, agent: agent.name, state: trace.final_state },
+      '[AgentMaterialization] materialization completed'
+    );
+
+    return trace;
+  }
+
+  /**
+   * P0-A: Internal - materialize if workspace doesn't exist
+   */
+  private async materializeIfNeeded(agent: AgentDTO): Promise<void> {
+    const workspace = getAgentWorkspace(agent.name);
+    if (workspace.exists) {
+      logger.debug({ agent: agent.name }, '[AgentMaterialization] workspace exists, skipping');
+      return;
+    }
+
+    const trace = await materializeAgent(
+      agent.name,
+      agent.type || 'general',
+      agent.description,
+      agent.capabilities || [],
+      (agent.config as Record<string, unknown>) || {},
+      'activation'
+    );
+
+    if (trace.final_state !== 'materialized') {
+      logger.warn(
+        { agent: agent.name, state: trace.final_state, gap: trace.gap },
+        '[AgentMaterialization] materialization incomplete'
+      );
+    }
+  }
 
   /**
    * Get materialization status for an agent

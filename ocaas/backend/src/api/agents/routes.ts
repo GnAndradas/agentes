@@ -16,4 +16,7 @@ export async function agentRoutes(fastify: FastifyInstance) {
   // BLOQUE 9: Materialization status endpoints
   fastify.get('/:id/materialization', h.getMaterializationStatus);
   fastify.get('/status/all', h.listWithStatus);
+
+  // P0-B: Materialization action endpoint
+  fastify.post('/:id/materialize', h.materialize);
 }

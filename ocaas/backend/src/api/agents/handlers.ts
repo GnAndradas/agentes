@@ -163,3 +163,21 @@ export async function listWithStatus(_req: FastifyRequest, reply: FastifyReply) 
     return reply.status(statusCode).send(body);
   }
 }
+
+/**
+ * P0-B: Materialize an agent (create workspace files)
+ * Can be called for agents that are activated but not materialized
+ */
+export async function materialize(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { agentService } = getServices();
+    const trace = await agentService.materialize(req.params.id, 'manual');
+    return reply.send({
+      success: true,
+      data: trace,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

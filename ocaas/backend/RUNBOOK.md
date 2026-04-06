@@ -326,6 +326,35 @@ curl http://localhost:18789/v1/chat/completions -X POST -H "Content-Type: applic
 
 ---
 
+## Materialization
+
+### Auto-Materialization
+
+Agents are automatically materialized on activation:
+```
+AgentBootstrap.ensureDefaultAgent()
+  -> agentService.activate(id)
+    -> materializeIfNeeded(agent)
+      -> materializeAgent(name, type, ...)
+```
+
+Creates workspace files:
+- `agents/<name>/agent.json` - Configuration
+- `agents/<name>/system-prompt.md` - System prompt
+
+### Manual Materialization
+
+```bash
+POST /api/agents/:id/materialize
+```
+
+Returns `MaterializationTraceability` with:
+- `steps_attempted`, `steps_completed`, `steps_failed`
+- `final_state`: record | activated | materialized | runtime_ready
+- `gap`: explanation if not fully materialized
+
+---
+
 ## Gaps Conocidos
 
 ### Gap 1: Skills/Tools No Usados

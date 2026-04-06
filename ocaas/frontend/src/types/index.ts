@@ -876,6 +876,18 @@ export interface AgentMaterializationStatus {
   lifecycle?: AgentLifecycleState;
 }
 
+/** Traceability for materialization attempt - matches backend MaterializationTraceability */
+export interface MaterializationTraceability {
+  attempted_at: number;
+  source: 'activation' | 'manual' | 'system';
+  steps_attempted: string[];
+  steps_completed: string[];
+  steps_failed: string[];
+  final_state: AgentLifecycleState;
+  runtime_ready: boolean;
+  gap?: string;
+}
+
 /** Agent materialization status (legacy alias) */
 export type MaterializationStatus =
   | 'not_materialized'
@@ -903,56 +915,6 @@ export interface AgentRuntimeStatus {
 /** Extended agent with runtime status */
 export interface AgentWithStatus extends Agent {
   runtime?: AgentRuntimeStatus;
-}
-
-// =============================================================================
-// GENERATION TRACEABILITY TYPES
-// =============================================================================
-
-/** Generation traceability for auditing */
-export interface GenerationTraceability {
-  generationId: string;
-  type: GenerationType;
-  trigger: {
-    source: 'user' | 'agent' | 'system' | 'feedback';
-    sourceId?: string;
-    feedbackId?: string;
-    taskId?: string;
-  };
-  llmCalls: Array<{
-    callId: string;
-    model: string;
-    promptTokens: number;
-    completionTokens: number;
-    cost: number;
-    timestamp: number;
-    duration: number;
-  }>;
-  validation: {
-    attempts: number;
-    lastResult?: Record<string, unknown>;
-    errors: string[];
-  };
-  approval?: {
-    status: ApprovalStatus;
-    approvedBy?: string;
-    approvedAt?: number;
-    reason?: string;
-  };
-  deployment?: {
-    deployedAt?: number;
-    path?: string;
-    version?: string;
-    rollbackAvailable: boolean;
-  };
-  totalCost: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/** Extended generation with traceability */
-export interface GenerationWithTraceability extends Generation {
-  traceability?: GenerationTraceability;
 }
 
 // =============================================================================

@@ -3,8 +3,10 @@
  *
  * Shows the real materialization state of an agent.
  * Distinguishes between DB-only (activated) vs actually ready to execute.
+ * P0-B: Includes action button for manual materialization.
  */
 
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CheckCircle,
   XCircle,
@@ -14,11 +16,14 @@ import {
   FileCode,
   Play,
   Server,
+  RefreshCw,
 } from 'lucide-react';
-import { Badge } from '../ui';
+import { Badge, Button } from '../ui';
+import { agentMaterializationApi } from '../../lib/api';
 import type { AgentMaterializationStatus, AgentLifecycleState } from '../../types';
 
 interface AgentMaterializationPanelProps {
+  agentId: string;
   status: AgentMaterializationStatus | null | undefined;
   isLoading?: boolean;
   error?: string | null;
@@ -99,10 +104,23 @@ function StatusIndicator({
 // =============================================================================
 
 export function AgentMaterializationPanel({
+  agentId,
   status,
   isLoading,
   error,
 }: AgentMaterializationPanelProps) {
+  const queryClient = useQueryClient();
+
+  // P0-B: Materialize mutation
+  const materializeMutation = useMutation({
+    mutationFn: () => agentMaterializationApi.materialize(agentId),
+    onSuccess: () => {
+      // Refresh materialization status
+      queryClient.invalidateQueries({ queryKey: ['agents', agentId, 'materialization'] });
+      queryClient.invalidateQueries({ queryKey: ['agents', agentId] });
+    },
+  });
+
   // Loading state
   if (isLoading) {
     return (
@@ -247,6 +265,35 @@ export function AgentMaterializationPanel({
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* P0-B: Materialize Action Button */}
+      {!isReady && status.db_record && !status.workspace_exists && (
+        <Button
+          variant="primary"
+          className="w-full"
+          loading={materializeMutation.isPending}
+          onClick={() => materializeMutation.mutate()}
+        >
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Materialize Agent
+        </Button>
+      )}
+
+      {/* Materialization result feedback */}
+      {materializeMutation.isSuccess && (
+        <div className="p-2 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-400 flex items-center gap-2">
+          <CheckCircle className="w-4 h-4" />
+          Materialization triggered successfully
+        </div>
+      )}
+
+      {materializeMutation.isError && (
+        <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
+          {materializeMutation.error instanceof Error
+            ? materializeMutation.error.message
+            : 'Materialization failed'}
         </div>
       )}
     </div>

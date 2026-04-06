@@ -739,35 +739,15 @@ export const agentMaterializationApi = {
     return res.data;
   },
 
-  // NOTE: materialize, dematerialize, ping endpoints do NOT exist in backend yet
-  // These are placeholders for future implementation
-};
-
-// =============================================================================
-// GENERATION TRACEABILITY API
-// =============================================================================
-
-// NOTE: Backend does NOT have traceability endpoints yet.
-// These are placeholders that return empty/default values to avoid breaking the UI.
-export const generationTraceabilityApi = {
-  /** Get generation with full traceability info - NOT IMPLEMENTED IN BACKEND */
-  getWithTraceability: async (id: string) => {
-    // Fallback: return regular generation without traceability
-    const res = await api.get<DataResponse<import('../types').Generation>>(`/generations/${id}`);
-    return { ...res.data, traceability: undefined } as import('../types').GenerationWithTraceability;
-  },
-
-  /** Get traceability info for a generation - NOT IMPLEMENTED IN BACKEND */
-  getTraceability: async (_id: string): Promise<import('../types').GenerationTraceability | null> => {
-    // Backend doesn't support this - return null
-    return null;
-  },
-
-  /** List generations with traceability - NOT IMPLEMENTED IN BACKEND */
-  listWithTraceability: async (params?: { type?: string; status?: string }) => {
-    // Fallback: return regular generations without traceability
-    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : '';
-    const res = await api.get<DataResponse<import('../types').Generation[]>>(`/generations${query}`);
-    return res.data.map(g => ({ ...g, traceability: undefined })) as import('../types').GenerationWithTraceability[];
+  /**
+   * P0-B: Trigger manual materialization for an agent
+   * Backend route: POST /agents/:id/materialize
+   * Creates workspace files (agent.json, system-prompt.md)
+   */
+  materialize: async (agentId: string) => {
+    const res = await api.post<{ success: boolean; data: import('../types').MaterializationTraceability }>(
+      `/agents/${agentId}/materialize`
+    );
+    return res;
   },
 };

@@ -10,3 +10,5 @@ export { DiagnosticsPanel } from './DiagnosticsPanel';
 export { TaskDecisionTracePanel } from './TaskDecisionTracePanel';
 export { GenerationTracePanel } from './GenerationTracePanel';
 export { ToolUsagePanel } from './ToolUsagePanel';
+export { TaskManualAgentAssignPanel } from './TaskManualAgentAssignPanel';
+export { TaskGenerateAgentFlowPanel } from './TaskGenerateAgentFlowPanel';

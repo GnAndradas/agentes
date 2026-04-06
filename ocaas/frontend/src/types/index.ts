@@ -852,7 +852,31 @@ export interface BudgetDiagnostics {
 // AGENT MATERIALIZATION TYPES
 // =============================================================================
 
-/** Agent materialization status */
+/** Agent lifecycle state - matches backend AgentLifecycleState */
+export type AgentLifecycleState =
+  | 'record'        // DB record only
+  | 'generated'     // Generation exists but not activated
+  | 'activated'     // Activated but not materialized
+  | 'materialized'  // Workspace ready but no session
+  | 'runtime_ready'; // OpenClaw session active
+
+/** Agent materialization status - matches backend AgentMaterializationStatus */
+export interface AgentMaterializationStatus {
+  state: AgentLifecycleState;
+  db_record: boolean;
+  generation_active: boolean;
+  workspace_exists: boolean;
+  config_written: boolean;
+  runtime_possible: boolean;
+  openclaw_session: boolean;
+  materialization_attempted_at?: number;
+  materialization_succeeded: boolean;
+  materialization_reason?: string;
+  target_workspace?: string;
+  lifecycle?: AgentLifecycleState;
+}
+
+/** Agent materialization status (legacy alias) */
 export type MaterializationStatus =
   | 'not_materialized'
   | 'materializing'

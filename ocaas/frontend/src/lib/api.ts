@@ -155,6 +155,18 @@ export const taskApi = {
       return null;
     }
   },
+
+  /**
+   * Manually assign an agent to a task
+   * Used when decision engine couldn't find a matching agent
+   */
+  assignAgent: async (taskId: string, agentId: string): Promise<import('../types').Task> => {
+    const res = await api.post<DataResponse<import('../types').Task>>(
+      `/tasks/${taskId}/assign`,
+      { agentId }
+    );
+    return res.data;
+  },
 };
 
 // Skill API
@@ -714,7 +726,7 @@ export const budgetApi = {
 export const agentMaterializationApi = {
   /** Get materialization status for an agent */
   getMaterialization: async (agentId: string) => {
-    const res = await api.get<DataResponse<import('../types').AgentRuntimeStatus>>(`/agents/${agentId}/materialization`);
+    const res = await api.get<DataResponse<import('../types').AgentMaterializationStatus>>(`/agents/${agentId}/materialization`);
     return res.data;
   },
 

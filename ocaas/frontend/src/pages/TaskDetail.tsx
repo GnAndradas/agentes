@@ -20,6 +20,7 @@ import {
   Pause,
   Play,
   Wrench,
+  Sparkles,
 } from 'lucide-react';
 import { DelegationHistory } from '../components/DelegationHistory';
 import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi, generationApi } from '../lib/api';
@@ -36,6 +37,8 @@ import {
   TaskDecisionTracePanel,
   GenerationTracePanel,
   ToolUsagePanel,
+  TaskManualAgentAssignPanel,
+  TaskGenerateAgentFlowPanel,
 } from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
@@ -515,6 +518,56 @@ export function TaskDetail() {
             canRetry={canRetry}
             isRetrying={retryMutation.isPending}
             onRetry={canRetry ? () => retryMutation.mutate(task.id) : undefined}
+          />
+        </Card>
+      )}
+
+      {/* Manual Agent Assignment Panel - Shows when task needs manual assignment */}
+      {(task.status === 'queued' || task.status === 'pending' || task.status === 'failed') && !task.agentId && (
+        <Card>
+          <CardHeader
+            title={
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-primary-400" />
+                Manual Agent Assignment
+              </div>
+            }
+          />
+          <TaskManualAgentAssignPanel
+            task={task}
+            decisionTrace={decisionTrace}
+            onAssigned={() => {
+              addNotification({
+                type: 'success',
+                title: 'Agent assigned',
+                message: 'Task has been assigned to the selected agent',
+              });
+            }}
+          />
+        </Card>
+      )}
+
+      {/* Generate Agent Flow Panel - Shows when no matching agent */}
+      {(task.status === 'queued' || task.status === 'pending' || task.status === 'failed') && decisionTrace && (
+        <Card>
+          <CardHeader
+            title={
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-primary-400" />
+                Auto-Generate Resources
+              </div>
+            }
+          />
+          <TaskGenerateAgentFlowPanel
+            task={task}
+            decisionTrace={decisionTrace}
+            onComplete={() => {
+              addNotification({
+                type: 'success',
+                title: 'Generations created',
+                message: 'Agent, skill, and tool generations are pending approval',
+              });
+            }}
           />
         </Card>
       )}

@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X, Zap, Crown, Briefcase, Users, User, Wrench, Layers } from 'lucide-react';
-import { agentApi, taskApi, skillApi, jobApi, orgApi } from '../lib/api';
+import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X, Zap, Crown, Briefcase, Users, User, Wrench, Layers, Server } from 'lucide-react';
+import { agentApi, taskApi, skillApi, jobApi, orgApi, agentMaterializationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import type { Skill, JobStatus } from '../types';
-import { AgentCapabilitiesPanel } from '../components/agents';
+import { AgentCapabilitiesPanel, AgentMaterializationPanel } from '../components/agents';
 import {
   Button,
   Badge,
@@ -107,6 +107,20 @@ export function AgentDetail() {
   const { data: orgProfile } = useQuery({
     queryKey: ['org', 'profile', id],
     queryFn: () => orgApi.getAgentProfile(id!),
+    enabled: !!id,
+    retry: false,
+  });
+
+  // Materialization status
+  const { data: materializationStatus, isLoading: isMaterializationLoading, error: materializationError } = useQuery({
+    queryKey: ['agents', id, 'materialization'],
+    queryFn: async () => {
+      try {
+        return await agentMaterializationApi.getMaterialization(id!);
+      } catch {
+        return null; // 404 = not materialized yet
+      }
+    },
     enabled: !!id,
     retry: false,
   });
@@ -409,6 +423,23 @@ export function AgentDetail() {
           skills={assignedSkills}
           directTools={directTools}
           isLoading={skillsLoading || toolsLoading}
+        />
+      </Card>
+
+      {/* Agent Materialization Status - Real runtime readiness */}
+      <Card>
+        <CardHeader
+          title={
+            <div className="flex items-center gap-2">
+              <Server className="w-4 h-4 text-cyan-400" />
+              Materialization Status
+            </div>
+          }
+        />
+        <AgentMaterializationPanel
+          status={materializationStatus}
+          isLoading={isMaterializationLoading}
+          error={materializationError instanceof Error ? materializationError.message : null}
         />
       </Card>
 

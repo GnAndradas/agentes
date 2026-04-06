@@ -20,6 +20,7 @@ import {
   TaskStateSnapshot,
   TaskStateCommand,
   TaskStateEvent,
+  ToolExecutionRecord,
   isValidPhaseTransition,
   toSnapshot,
 } from './types.js';
@@ -69,6 +70,9 @@ export class TaskStateManager {
       version: 1,
       createdAt: now,
       updatedAt: now,
+      // Tool execution tracking
+      toolCallsCount: 0,
+      toolExecutions: [],
     };
 
     await this.saveState(state);
@@ -490,6 +494,72 @@ export class TaskStateManager {
     state.sessionKey = sessionKey;
     await this.updateState(state, 'Session key set');
     return state;
+  }
+
+  // ==========================================================================
+  // TOOL EXECUTION TRACKING
+  // ==========================================================================
+
+  /**
+   * Record a tool execution in the task state
+   */
+  async recordToolExecution(
+    taskId: string,
+    record: ToolExecutionRecord
+  ): Promise<TaskExecutionState> {
+    const state = await this.getOrInitState(taskId);
+
+    // Increment tool calls count
+    state.toolCallsCount = (state.toolCallsCount || 0) + 1;
+
+    // Update last tool used
+    state.lastToolUsed = record.toolName;
+
+    // Add to tool executions (keep last 10)
+    if (!state.toolExecutions) {
+      state.toolExecutions = [];
+    }
+    state.toolExecutions.push(record);
+    if (state.toolExecutions.length > 10) {
+      state.toolExecutions = state.toolExecutions.slice(-10);
+    }
+
+    await this.updateState(state, `Tool executed: ${record.toolName}`);
+
+    logger.debug({
+      taskId,
+      toolName: record.toolName,
+      success: record.success,
+      durationMs: record.durationMs,
+    }, 'Tool execution recorded in state');
+
+    return state;
+  }
+
+  /**
+   * Get tool execution summary for a task
+   */
+  async getToolExecutionSummary(taskId: string): Promise<{
+    totalCalls: number;
+    lastToolUsed?: string;
+    successCount: number;
+    failureCount: number;
+    recentExecutions: ToolExecutionRecord[];
+  } | null> {
+    const state = await this.getState(taskId);
+    if (!state) return null;
+
+    const executions = state.toolExecutions || [];
+    const successCount = executions.filter(e => e.success).length;
+    const failureCount = executions.filter(e => !e.success).length;
+
+    return {
+      totalCalls: state.toolCallsCount || 0,
+      lastToolUsed: state.lastToolUsed,
+      successCount,
+      failureCount,
+      recentExecutions: executions,
+    };
   }
 
   // ==========================================================================

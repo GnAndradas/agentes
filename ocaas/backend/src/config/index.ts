@@ -61,6 +61,9 @@ export const config = {
     humanTimeout: env.AUTONOMY_HUMAN_TIMEOUT,
     fallback: env.AUTONOMY_FALLBACK,
   },
+  execution: {
+    jobTimeoutMs: env.JOB_EXECUTION_TIMEOUT_MS,
+  },
 } as const;
 
 export type Config = typeof config;

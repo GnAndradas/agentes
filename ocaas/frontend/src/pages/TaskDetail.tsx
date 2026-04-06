@@ -32,6 +32,7 @@ import {
   CheckpointsPanel,
   BudgetPanel,
   DiagnosticsPanel,
+  TaskDecisionTracePanel,
 } from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
@@ -177,6 +178,21 @@ export function TaskDetail() {
     retry: false,
   });
 
+  // Fetch decision trace - explains WHY task is queued/pending
+  const { data: decisionTrace, isLoading: isDecisionTraceLoading } = useQuery({
+    queryKey: ['tasks', id, 'decision-trace'],
+    queryFn: async () => {
+      try {
+        return await taskApi.getDecisionTrace(id!);
+      } catch {
+        return null; // 404 = no trace available yet
+      }
+    },
+    enabled: !!id && (task?.status === 'queued' || task?.status === 'pending' || task?.status === 'assigned'),
+    refetchInterval: 10000,
+    retry: false,
+  });
+
   const cancelMutation = useMutation({
     mutationFn: taskApi.cancel,
     onSuccess: () => {
@@ -188,8 +204,27 @@ export function TaskDetail() {
   const retryMutation = useMutation({
     mutationFn: taskApi.retry,
     onSuccess: () => {
+      // Invalidate all task-related queries to refresh UI immediately
       queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-      addNotification({ type: 'success', title: 'Task retried' });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'decision-trace'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'state'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'diagnostics'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'timeline'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', id, 'checkpoints'] });
+      queryClient.invalidateQueries({ queryKey: ['budget', 'task', id] });
+      queryClient.invalidateQueries({ queryKey: ['jobs', 'task', id] });
+      addNotification({
+        type: 'success',
+        title: 'Retry triggered',
+        message: 'Task has been queued for re-evaluation. Decision trace will update shortly.',
+      });
+    },
+    onError: (error) => {
+      addNotification({
+        type: 'error',
+        title: 'Retry failed',
+        message: error instanceof Error ? error.message : 'Failed to retry task',
+      });
     },
   });
 
@@ -250,7 +285,10 @@ export function TaskDetail() {
   const isPaused = taskState?.pausedAt !== undefined && taskState.pausedAt > 0;
   const canPause = task.status === 'running' && !isPaused;
   const canResume = isPaused;
-  const hasAdvancedData = diagnostics || taskState || timelineResponse || checkpoints || taskCost;
+  // Check for meaningful advanced data (arrays need length check)
+  const hasCheckpoints = Array.isArray(checkpoints) && checkpoints.length > 0;
+  const hasTimeline = timelineResponse?.timeline && Array.isArray(timelineResponse.timeline) && timelineResponse.timeline.length > 0;
+  const hasAdvancedData = diagnostics || taskState || hasTimeline || hasCheckpoints || taskCost;
 
   return (
     <div className="space-y-6">
@@ -440,6 +478,28 @@ export function TaskDetail() {
           </Card>
         )}
       </div>
+
+      {/* Decision Trace Panel - Shows WHY task is queued/pending */}
+      {(task.status === 'queued' || task.status === 'pending' || task.status === 'assigned' || decisionTrace) && (
+        <Card>
+          <CardHeader
+            title={
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-yellow-400" />
+                Decision Trace
+              </div>
+            }
+          />
+          <TaskDecisionTracePanel
+            trace={decisionTrace}
+            isLoading={isDecisionTraceLoading}
+            taskStatus={task.status}
+            canRetry={canRetry}
+            isRetrying={retryMutation.isPending}
+            onRetry={canRetry ? () => retryMutation.mutate(task.id) : undefined}
+          />
+        </Card>
+      )}
 
       {task.output && (
         <Card>

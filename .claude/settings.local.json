@@ -40,7 +40,8 @@
       "Bash(npm run db:push:*)",
       "Bash(npm run typecheck:*)",
       "Bash(npx tsx:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(npx drizzle-kit:*)"
     ],
     "deny": [],
     "ask": []

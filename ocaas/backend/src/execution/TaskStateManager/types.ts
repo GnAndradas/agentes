@@ -116,6 +116,26 @@ export type ExecutionPhase =
   | 'cancelled';     // User cancelled
 
 /**
+ * Tool execution record within task state
+ */
+export interface ToolExecutionRecord {
+  /** Execution ID */
+  executionId: string;
+  /** Tool name */
+  toolName: string;
+  /** Success flag */
+  success: boolean;
+  /** Duration in ms */
+  durationMs: number;
+  /** Executed at timestamp */
+  executedAt: number;
+  /** Output summary (truncated) */
+  outputSummary?: string;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
  * Full execution state for a task
  */
 export interface TaskExecutionState {
@@ -160,6 +180,19 @@ export interface TaskExecutionState {
 
   /** Updated timestamp */
   updatedAt: number;
+
+  // ===========================================================================
+  // TOOL EXECUTION TRACKING
+  // ===========================================================================
+
+  /** Total tool calls executed */
+  toolCallsCount: number;
+
+  /** Last tool used */
+  lastToolUsed?: string;
+
+  /** Recent tool executions (last 10) */
+  toolExecutions: ToolExecutionRecord[];
 }
 
 // ============================================================================
@@ -249,6 +282,10 @@ export interface TaskStateSnapshot {
   resumeFromCheckpointId?: string;
   lastMeaningfulUpdateAt: number;
   warnings: string[];
+  /** Total tool calls count */
+  toolCallsCount: number;
+  /** Last tool used */
+  lastToolUsed?: string;
 }
 
 /**
@@ -272,6 +309,8 @@ export function toSnapshot(state: TaskExecutionState): TaskStateSnapshot {
     resumeFromCheckpointId: state.resumeFromCheckpointId,
     lastMeaningfulUpdateAt: state.lastMeaningfulUpdateAt,
     warnings: state.warnings,
+    toolCallsCount: state.toolCallsCount || 0,
+    lastToolUsed: state.lastToolUsed,
   };
 }
 

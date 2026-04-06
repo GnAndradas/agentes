@@ -277,3 +277,59 @@ export async function getTimeline(req: FastifyRequest<IdParam>, reply: FastifyRe
     return reply.status(statusCode).send(body);
   }
 }
+
+/**
+ * Get decision trace for a task
+ *
+ * Returns structured traceability explaining WHY a task was/wasn't assigned.
+ * Covers:
+ * - NO_AGENTS_REGISTERED: No agents in system
+ * - NO_ACTIVE_AGENTS: Agents exist but none active
+ * - NO_AGENT_MATCHING_CAPABILITIES: Active agents but no capability match
+ * - ASSIGNED: Successfully assigned to an agent
+ */
+export async function getDecisionTrace(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    // Lazy import to avoid circular dependencies
+    const { getDecisionTraceStore } = await import('../../orchestrator/decision/DecisionTrace.js');
+    const traceStore = getDecisionTraceStore();
+    const trace = traceStore.get(req.params.id);
+
+    if (!trace) {
+      return reply.status(404).send({
+        success: false,
+        error: 'Decision trace not found',
+        message: 'No decision trace exists for this task. The task may not have gone through the decision engine yet.',
+      });
+    }
+
+    return reply.send({
+      success: true,
+      data: trace,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * Get decision trace statistics
+ *
+ * Returns aggregate statistics about decision outcomes.
+ */
+export async function getDecisionTraceStats(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const { getDecisionTraceStore } = await import('../../orchestrator/decision/DecisionTrace.js');
+    const traceStore = getDecisionTraceStore();
+    const stats = traceStore.getStats();
+
+    return reply.send({
+      success: true,
+      data: stats,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

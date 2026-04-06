@@ -71,6 +71,11 @@ import {
   type BudgetCheckResult,
   type BudgetTraceability,
 } from '../../budget/index.js';
+import {
+  getDecisionTraceStore,
+  buildDecisionTrace,
+  type DecisionTraceBuilder,
+} from './DecisionTrace.js';
 
 const logger = orchestratorLogger.child({ component: 'SmartDecisionEngine' });
 
@@ -1028,11 +1033,6 @@ export class SmartDecisionEngine {
     agents: AgentDTO[],
     startTime: number
   ): StructuredDecision {
-    // Skip validation for escalations (already safe)
-    if (!needsValidation(decision)) {
-      return this.attachTraceability(decision, null);
-    }
-
     // Infer required capabilities from task
     const requiredCapabilities = inferCapabilities({
       id: task.id,
@@ -1045,6 +1045,13 @@ export class SmartDecisionEngine {
       input: task.input,
       metadata: task.metadata,
     });
+
+    // Skip validation for escalations (already safe)
+    if (!needsValidation(decision)) {
+      // Still record decision trace for traceability
+      this.recordDecisionTrace(task, agents, decision, requiredCapabilities, startTime);
+      return this.attachTraceability(decision, null);
+    }
 
     // Validate the decision
     const validation = validateDecision(
@@ -1068,8 +1075,62 @@ export class SmartDecisionEngine {
       warnings: validation.warnings.length,
     }, 'Decision validated');
 
+    // Record decision trace for traceability
+    this.recordDecisionTrace(task, agents, validation.decision, requiredCapabilities, startTime);
+
     // Return validated decision with traceability
     return this.attachTraceability(validation.decision, validation);
+  }
+
+  /**
+   * Record decision trace for audit and debugging
+   */
+  private recordDecisionTrace(
+    task: TaskDTO,
+    agents: AgentDTO[],
+    decision: StructuredDecision,
+    requiredCapabilities: string[],
+    startTime: number
+  ): void {
+    const traceStore = getDecisionTraceStore();
+
+    const builder: DecisionTraceBuilder = {
+      taskId: task.id,
+      taskType: task.type,
+      taskPriority: task.priority,
+      requiredCapabilities,
+      startTime,
+    };
+
+    // Map agents to trace format
+    const agentData = agents.map(a => ({
+      id: a.id,
+      name: a.name,
+      status: a.status,
+      capabilities: a.capabilities || [],
+    }));
+
+    // Determine method for trace
+    const method = decision.method === 'heuristic' || decision.method === 'fallback'
+      ? 'heuristic'
+      : decision.method === 'cached'
+      ? 'cached'
+      : decision.method.startsWith('llm')
+      ? 'llm'
+      : 'fallback';
+
+    const trace = buildDecisionTrace(
+      builder,
+      agentData,
+      decision.targetAgent,
+      decision.confidenceScore,
+      decision.reasoning,
+      method,
+      decision.confidenceScore,
+      undefined // no error
+    );
+
+    traceStore.record(trace);
   }
 
   /**

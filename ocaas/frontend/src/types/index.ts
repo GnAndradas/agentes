@@ -790,6 +790,24 @@ export interface BudgetCostSummary {
   periodEnd?: number;
 }
 
+/**
+ * Real backend response for task/agent cost
+ * GET /api/budget/cost/task/:taskId
+ * GET /api/budget/cost/agent/:agentId
+ *
+ * This is what the backend actually returns (AccumulatedCost + id)
+ */
+export interface TaskCostResponse {
+  task_id?: string;
+  agent_id?: string;
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  operation_count: number;
+  last_updated: number;
+  period_start: number;
+}
+
 /** Full budget diagnostics */
 export interface BudgetDiagnostics {
   config: BudgetConfig;
@@ -892,4 +910,78 @@ export interface GenerationTraceability {
 /** Extended generation with traceability */
 export interface GenerationWithTraceability extends Generation {
   traceability?: GenerationTraceability;
+}
+
+// =============================================================================
+// DECISION TRACE TYPES (Task → Agent assignment traceability)
+// =============================================================================
+
+/** Decision outcome for a task */
+export type DecisionOutcome =
+  | 'assigned'          // Successfully assigned to an agent
+  | 'no_agents'         // No agents registered in system
+  | 'no_active_agents'  // Agents exist but none are active
+  | 'no_match'          // Active agents but no capability match
+  | 'escalated'         // Escalated to human or supervisor
+  | 'waiting'           // Waiting for resource/approval
+  | 'error';            // Error during decision
+
+/** Failure reason for queued tasks */
+export type DecisionFailureReason =
+  | 'NO_AGENTS_REGISTERED'
+  | 'NO_ACTIVE_AGENTS'
+  | 'NO_AGENT_MATCHING_CAPABILITIES'
+  | 'BUDGET_BLOCKED'
+  | 'MAX_RETRIES_EXCEEDED'
+  | 'ESCALATED_TO_HUMAN'
+  | 'WAITING_FOR_APPROVAL'
+  | 'WAITING_FOR_RESOURCE'
+  | 'DECISION_ERROR';
+
+/** Agent evaluated during decision process */
+export interface EvaluatedAgent {
+  agentId: string;
+  agentName: string;
+  status: 'active' | 'inactive' | 'busy' | 'error';
+  capabilities: string[];
+  match: boolean;
+  matchScore: number;
+  matchReason?: string;
+  exclusionReason?: string;
+}
+
+/** Full decision trace for a task */
+export interface DecisionTrace {
+  id: string;
+  taskId: string;
+  createdAt: number;
+
+  // Decision outcome
+  decision: DecisionOutcome;
+  failureReason?: DecisionFailureReason;
+  explanation: string;
+
+  // Agent evaluation
+  evaluatedAgents: EvaluatedAgent[];
+  totalAgents: number;
+  activeAgents: number;
+  matchingAgents: number;
+
+  // Selection result
+  selectedAgentId?: string;
+  selectionScore?: number;
+  selectionReason?: string;
+
+  // Context
+  taskType: string;
+  taskPriority: number;
+  requiredCapabilities: string[];
+
+  // Method
+  decisionMethod: 'heuristic' | 'llm' | 'fallback' | 'cached';
+  confidence: number;
+  processingTimeMs: number;
+
+  // Error info
+  error?: string;
 }

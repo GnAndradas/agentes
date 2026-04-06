@@ -121,6 +121,23 @@ export const taskApi = {
   },
   cancel: (id: string) => api.post(`/tasks/${id}/cancel`),
   retry: (id: string) => api.post(`/tasks/${id}/retry`),
+
+  /**
+   * Get decision trace for a task
+   * Explains WHY a task is queued (no agents, no match, waiting, etc.)
+   * Returns null if no trace exists (task not yet processed by decision engine)
+   */
+  getDecisionTrace: async (taskId: string): Promise<import('../types').DecisionTrace | null> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').DecisionTrace }>(
+        `/tasks/${taskId}/decision-trace`
+      );
+      return res.data || null;
+    } catch {
+      // 404 = no trace yet, not an error
+      return null;
+    }
+  },
 };
 
 // Skill API
@@ -648,18 +665,20 @@ export const budgetApi = {
   /**
    * Get cost summary for a specific task
    * Backend route: GET /budget/cost/task/:taskId
+   * Returns AccumulatedCost shape (total_cost_usd, operation_count, etc.)
    */
   getTaskCost: async (taskId: string) => {
-    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/cost/task/${taskId}`);
+    const res = await api.get<DataResponse<import('../types').TaskCostResponse>>(`/budget/cost/task/${taskId}`);
     return res.data;
   },
 
   /**
    * Get daily cost summary for a specific agent
    * Backend route: GET /budget/cost/agent/:agentId
+   * Returns AccumulatedCost shape (total_cost_usd, operation_count, etc.)
    */
   getAgentCost: async (agentId: string) => {
-    const res = await api.get<DataResponse<import('../types').BudgetCostSummary>>(`/budget/cost/agent/${agentId}`);
+    const res = await api.get<DataResponse<import('../types').TaskCostResponse>>(`/budget/cost/agent/${agentId}`);
     return res.data;
   },
 

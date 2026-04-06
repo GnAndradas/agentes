@@ -12,6 +12,7 @@ import { createApp } from './app.js';
 import { createLogger } from './utils/logger.js';
 import { validateOrExit } from './bootstrap/validate.js';
 import { runProductionChecks } from './bootstrap/productionChecks.js';
+import { ensureDefaultAgent } from './bootstrap/AgentBootstrap.js';
 import { getJobSafetyService } from './execution/JobSafetyService.js';
 import { cleanupOldLogs } from './utils/dbLogger.js';
 
@@ -42,6 +43,9 @@ async function main() {
     // Initialize Job Safety Service (production hardening)
     const jobSafety = getJobSafetyService();
     jobSafety.initialize();
+
+    // Ensure at least one active agent exists (auto-seed if needed)
+    await ensureDefaultAgent();
 
     // Run production checks
     await runProductionChecks();

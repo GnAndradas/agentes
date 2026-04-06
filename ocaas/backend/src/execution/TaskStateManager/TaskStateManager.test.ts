@@ -50,6 +50,8 @@ describe('TaskStateManager Types', () => {
         version: 1,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        toolCallsCount: 0,
+        toolExecutions: [],
       };
 
       const snapshot = toSnapshot(state);
@@ -77,6 +79,8 @@ describe('TaskStateManager Types', () => {
         version: 1,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        toolCallsCount: 0,
+        toolExecutions: [],
       };
 
       const snapshot = toSnapshot(state);

@@ -69,3 +69,15 @@ export {
   type ValidationErrorCode,
   type ValidatorConfig,
 } from './DecisionValidator.js';
+
+// Decision traceability
+export {
+  getDecisionTraceStore,
+  resetDecisionTraceStore,
+  buildDecisionTrace,
+  type DecisionTrace,
+  type DecisionOutcome,
+  type FailureReason,
+  type EvaluatedAgent,
+  type DecisionTraceBuilder,
+} from './DecisionTrace.js';

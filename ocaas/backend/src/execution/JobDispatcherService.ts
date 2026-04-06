@@ -19,6 +19,7 @@ import { getOpenClawAdapter } from '../integrations/openclaw/OpenClawAdapter.js'
 import { getServices } from '../services/index.js';
 import { getAgentHierarchyStore } from '../organization/AgentHierarchyStore.js';
 import { db, schema } from '../db/index.js';
+import { config } from '../config/index.js';
 import type { OrgAwareDecision } from '../orchestrator/OrgAwareDecisionEngine.js';
 import type { TaskDTO, AgentDTO } from '../types/domain.js';
 import type {
@@ -51,12 +52,89 @@ import {
   type BudgetCheckResult,
 } from '../budget/index.js';
 import { getTaskStateManager } from './TaskStateManager/index.js';
+import { getToolExecutionService, type ToolExecutionResult } from './ToolExecutionService.js';
 
 const logger = createLogger('JobDispatcherService');
+
+// =============================================================================
+// TOOL CALL DETECTION
+// =============================================================================
+
+/**
+ * Pattern to detect tool call in IA response
+ * Format: "run_command: <command>" or similar
+ */
+const TOOL_CALL_PATTERNS = [
+  // run_command: echo hello
+  /run_command:\s*(.+?)(?:\n|$)/i,
+  // [run_command] echo hello
+  /\[run_command\]\s*(.+?)(?:\n|$)/i,
+  // ```run_command\necho hello\n```
+  /```run_command\n(.+?)\n```/is,
+  // <tool>run_command</tool><input>echo hello</input>
+  /<tool>run_command<\/tool>\s*<input>(.+?)<\/input>/is,
+];
+
+interface DetectedToolCall {
+  toolName: string;
+  input: Record<string, unknown>;
+  rawMatch: string;
+}
+
+/**
+ * Detect tool call intention in IA response
+ */
+function detectToolCall(response: string): DetectedToolCall | null {
+  for (const pattern of TOOL_CALL_PATTERNS) {
+    const match = response.match(pattern);
+    if (match && match[1]) {
+      const command = match[1].trim();
+      if (command) {
+        return {
+          toolName: 'run_command',
+          input: { command },
+          rawMatch: match[0],
+        };
+      }
+    }
+  }
+  return null;
+}
 
 /** Generate a unique ID with prefix */
 function generateId(prefix: string): string {
   return `${prefix}_${nanoid(12)}`;
+}
+
+/** Timeout error for job execution */
+class JobTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Job execution timed out after ${timeoutMs}ms`);
+    this.name = 'JobTimeoutError';
+  }
+}
+
+/** Wraps a promise with timeout control */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  abortController?: AbortController
+): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      abortController?.abort();
+      reject(new JobTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    return result;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 // ============================================================================
@@ -391,7 +469,15 @@ export class JobDispatcherService {
 
       // Store job
       this.jobStore.create(payload);
-      logger.info({ jobId, taskId: task.id, agentId }, 'Job created');
+
+      // STRUCTURED LOG: JOB_CREATED
+      logger.info({
+        jobId,
+        taskId: task.id,
+        agentId,
+        goal: payload.goal.slice(0, 100),
+        event: 'JOB_CREATED',
+      }, 'Job created');
 
       // Dispatch to OpenClaw
       return await this.executeJob(payload, options);
@@ -449,30 +535,16 @@ export class JobDispatcherService {
     );
     traceBuilder.runtimeReady(runtimeCheck.ready, runtimeCheck.materialization_status);
 
-    // Check OpenClaw availability
-    if (!gatewayConfigured) {
-      const trace = traceBuilder
-        .fallbackUsed('OpenClaw not configured')
-        .completed()
-        .build();
-
-      this.jobStore.setStatus(jobId, 'failed');
-      return {
-        jobId,
-        dispatched: false,
-        error: {
-          code: 'resource_error',
-          message: 'OpenClaw not configured',
-          retryable: false,
-        },
-        response: {
-          jobId,
-          status: 'failed',
-          traceability: trace,
-          completedAt: nowTimestamp(),
-        },
-      };
-    }
+    // Log execution attempt - let executeViaHooks handle the full fallback chain:
+    // 1. hooks_session (if OPENCLAW_HOOKS_TOKEN configured)
+    // 2. chat_completion (if OPENCLAW_API_KEY configured)
+    // 3. Returns stub mode if nothing available (we then use executeStubJob)
+    logger.info({
+      jobId,
+      taskId: payload.taskId,
+      gatewayConfigured,
+      hooksConfigured,
+    }, 'Attempting execution via OpenClaw fallback chain');
 
     // BLOQUE 10: Check runtime_ready
     if (!runtimeCheck.ready) {
@@ -481,7 +553,7 @@ export class JobDispatcherService {
         agentId,
         reason: runtimeCheck.reason,
         lifecycleState: runtimeCheck.lifecycle_state,
-      }, 'Agent not runtime_ready - executing with fallback');
+      }, 'Agent not runtime_ready - will use available fallback');
 
       traceBuilder.fallbackUsed(runtimeCheck.reason || 'Agent not runtime_ready');
     }
@@ -545,10 +617,23 @@ export class JobDispatcherService {
       }, 'BUDGET WARNING: Approaching budget limit for execution');
     }
 
+    // Determine timeout - use config or default
+    const timeoutMs = config.execution.jobTimeoutMs || this.config.defaultTimeoutMs;
+    const executionStartTime = Date.now();
+
     try {
       // Update status to running
       this.jobStore.setStatus(jobId, 'running');
       this.jobStore.addEvent(jobId, { type: 'START', sessionId: '' });
+
+      // STRUCTURED LOG: EXECUTION_STARTED
+      logger.info({
+        jobId,
+        taskId: payload.taskId,
+        agentId,
+        timeoutMs,
+        event: 'EXECUTION_STARTED',
+      }, 'Job execution started');
 
       // TASK STATE: Track job start as a step
       const taskStateManager = getTaskStateManager();
@@ -566,19 +651,41 @@ export class JobDispatcherService {
       const prompt = this.buildPrompt(payload);
 
       // HOOKS MIGRATION: Use executeViaHooks as PRIMARY execution method
-      const hooksResult = await adapter.executeViaHooks({
-        agentId: payload.agent.agentId,
-        taskId: payload.taskId,
-        jobId: jobId,
-        prompt,
-        name: payload.agent.name,
-        context: {
-          tools: payload.allowedResources.tools,
-          skills: payload.allowedResources.skills,
-          maxTokens: payload.constraints.maxTokens,
-          temperature: payload.agent.temperature,
-        },
-      });
+      // Fallback chain: hooks_session → chat_completion → stub mode
+      // TIMEOUT: Wrap execution with timeout control
+      const hooksResult = await withTimeout(
+        adapter.executeViaHooks({
+          agentId: payload.agent.agentId,
+          taskId: payload.taskId,
+          jobId: jobId,
+          prompt,
+          name: payload.agent.name,
+          context: {
+            tools: payload.allowedResources.tools,
+            skills: payload.allowedResources.skills,
+            maxTokens: payload.constraints.maxTokens,
+            temperature: payload.agent.temperature,
+          },
+        }),
+        timeoutMs,
+        abortController
+      );
+
+      // If executeViaHooks returned stub mode with failure, use our executeStubJob
+      // which produces a proper completed result with state/timeline/cost
+      if (hooksResult.executionMode === 'stub' && !hooksResult.success) {
+        logger.info({
+          jobId,
+          taskId: payload.taskId,
+          reason: hooksResult.fallbackReason,
+        }, 'OpenClaw unavailable, falling back to stub execution');
+
+        // Clean up the step we started before falling back
+        await taskStateManager.failStep(payload.taskId, stepId, 'Falling back to stub');
+        this.activeJobs.delete(jobId);
+
+        return this.executeStubJob(payload, traceBuilder);
+      }
 
       // HOOKS MIGRATION: Update traceability based on execution result
       traceBuilder.mode(
@@ -603,6 +710,108 @@ export class JobDispatcherService {
         traceBuilder.responseReceived();
       }
 
+      // =========================================================================
+      // TOOL-CALLING LOOP (Max 1 tool call per task)
+      // =========================================================================
+      let finalResponse = hooksResult.response;
+      let toolExecutionResult: ToolExecutionResult | null = null;
+
+      if (hooksResult.success && hooksResult.response) {
+        const detectedTool = detectToolCall(hooksResult.response);
+
+        if (detectedTool) {
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            toolName: detectedTool.toolName,
+            input: detectedTool.input,
+            event: 'TOOL_CALL_DETECTED',
+          }, `[ToolLoop] Detected tool call: ${detectedTool.toolName}`);
+
+          // Execute the tool
+          const toolService = getToolExecutionService();
+          toolExecutionResult = await toolService.execute({
+            toolName: detectedTool.toolName,
+            input: detectedTool.input,
+            taskId: payload.taskId,
+            agentId,
+            jobId,
+          });
+
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            toolName: detectedTool.toolName,
+            success: toolExecutionResult.success,
+            durationMs: toolExecutionResult.durationMs,
+            event: 'TOOL_CALL_EXECUTED',
+          }, `[ToolLoop] Tool executed: ${toolExecutionResult.success ? 'success' : 'failed'}`);
+
+          // Build follow-up prompt with tool result
+          const toolResultContext = this.buildToolResultContext(detectedTool, toolExecutionResult);
+
+          // Make follow-up IA call to interpret the result
+          const followUpPrompt = `${prompt}\n\n${toolResultContext}`;
+
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            event: 'TOOL_LOOP_FOLLOWUP',
+          }, '[ToolLoop] Making follow-up IA call with tool result');
+
+          const followUpResult = await withTimeout(
+            adapter.executeViaHooks({
+              agentId: payload.agent.agentId,
+              taskId: payload.taskId,
+              jobId: jobId,
+              prompt: followUpPrompt,
+              name: payload.agent.name,
+              context: {
+                tools: payload.allowedResources.tools,
+                skills: payload.allowedResources.skills,
+                maxTokens: payload.constraints.maxTokens,
+                temperature: payload.agent.temperature,
+              },
+            }),
+            timeoutMs,
+            abortController
+          );
+
+          if (followUpResult.success && followUpResult.response) {
+            // Use the follow-up response as final
+            finalResponse = followUpResult.response;
+
+            // Record additional cost for follow-up call
+            const followUpInputTokens = Math.ceil(followUpPrompt.length / 4);
+            const followUpOutputTokens = Math.ceil(followUpResult.response.length / 4);
+            budgetManager.recordCost({
+              task_id: payload.taskId,
+              agent_id: agentId,
+              operation: 'execution',
+              tier: 'medium',
+              input_tokens: followUpInputTokens,
+              output_tokens: followUpOutputTokens,
+              estimated_cost_usd: budgetCheck.estimated_cost_usd * 0.5, // Estimate half cost for follow-up
+              budget_decision: budgetCheck.decision,
+            });
+
+            logger.info({
+              jobId,
+              taskId: payload.taskId,
+              event: 'TOOL_LOOP_COMPLETED',
+            }, '[ToolLoop] Follow-up IA call completed');
+          } else {
+            // Follow-up failed, include tool output directly in response
+            finalResponse = `${hooksResult.response}\n\n[Tool Execution Result]\n${toolResultContext}`;
+            logger.warn({
+              jobId,
+              taskId: payload.taskId,
+              event: 'TOOL_LOOP_FOLLOWUP_FAILED',
+            }, '[ToolLoop] Follow-up IA call failed, using tool output directly');
+          }
+        }
+      }
+
       // Build final traceability
       const trace = traceBuilder.completed().build();
 
@@ -611,7 +820,7 @@ export class JobDispatcherService {
       const adaptedResult = {
         success: hooksResult.success,
         sessionId: hooksResult.sessionKey, // Use sessionKey as identifier
-        response: hooksResult.response,
+        response: finalResponse, // Use final response (may include tool loop result)
         error: hooksResult.error,
         // NEW: Pass async handling info
         accepted: hooksResult.accepted,
@@ -619,6 +828,23 @@ export class JobDispatcherService {
       };
 
       const response = this.processExecutionResult(jobId, adaptedResult, payload);
+
+      // Attach tool execution info to response if tool was used
+      if (toolExecutionResult) {
+        if (response.result) {
+          response.result.toolsUsed = [toolExecutionResult.toolName];
+          response.result.data = {
+            ...response.result.data,
+            toolExecution: {
+              executionId: toolExecutionResult.executionId,
+              toolName: toolExecutionResult.toolName,
+              success: toolExecutionResult.success,
+              output: toolExecutionResult.output,
+              durationMs: toolExecutionResult.durationMs,
+            },
+          };
+        }
+      }
 
       // BUDGET: Record execution cost (estimate since hooks don't return tokens)
       // For hooks_session, we estimate based on prompt length; for chat_completion, similar
@@ -654,20 +880,17 @@ export class JobDispatcherService {
         await taskStateManager.block(payload.taskId, response.blocked?.description || 'Blocked');
       }
 
-      // Log execution traceability
+      // STRUCTURED LOG: EXECUTION_COMPLETED
+      const durationMs = Date.now() - executionStartTime;
       logger.info({
         jobId,
+        taskId: payload.taskId,
         agentId,
         execution_mode: trace.execution_mode,
-        transport: trace.transport,
-        session_key: trace.session_key,
-        runtime_ready: trace.runtime_ready_at_execution,
-        transport_success: trace.transport_success,
-        response_received: trace.response_received,
-        fallback_used: trace.execution_fallback_used,
-        fallback_reason: trace.execution_fallback_reason,
-        gap: trace.gap,
-      }, 'Job execution traced (HOOKS MIGRATION)');
+        outcome: response.status,
+        durationMs,
+        event: 'EXECUTION_COMPLETED',
+      }, `Job ${response.status} in ${durationMs}ms`);
 
       // Handle blocking
       if (response.status === 'blocked' && response.blocked) {
@@ -681,33 +904,52 @@ export class JobDispatcherService {
         response,
       };
     } catch (err) {
+      const durationMs = Date.now() - executionStartTime;
+      const isTimeout = err instanceof JobTimeoutError;
+
       // BLOQUE 10: Mark transport failure
       traceBuilder.transportSuccess(false);
       const trace = traceBuilder.completed().build();
 
       const error: JobError = {
-        code: 'execution_failed',
+        code: isTimeout ? 'timeout' : 'execution_failed',
         message: err instanceof Error ? err.message : String(err),
-        retryable: this.isRetryableError(err),
+        retryable: isTimeout ? false : this.isRetryableError(err),
       };
 
       const response: JobResponse = {
         jobId,
-        status: 'failed',
+        status: isTimeout ? 'timeout' as JobStatus : 'failed',
         error,
-        traceability: trace, // BLOQUE 10: Include traceability even on failure
+        traceability: trace,
         completedAt: nowTimestamp(),
       };
 
       this.jobStore.setResponse(jobId, response);
-      this.jobStore.addEvent(jobId, { type: 'FAIL', error });
+      this.jobStore.addEvent(jobId, { type: isTimeout ? 'TIMEOUT' : 'FAIL', error });
 
+      // TASK STATE: Update state on failure/timeout
+      const taskStateManager = getTaskStateManager();
+      const stepId = `job-${jobId}`;
+      await taskStateManager.failStep(
+        payload.taskId,
+        stepId,
+        isTimeout ? `Execution timed out after ${timeoutMs}ms` : error.message
+      );
+
+      // STRUCTURED LOG: EXECUTION_FAILED or EXECUTION_TIMEOUT
+      const event = isTimeout ? 'EXECUTION_TIMEOUT' : 'EXECUTION_FAILED';
       logger.error({
-        err,
         jobId,
+        taskId: payload.taskId,
+        agentId,
         execution_mode: trace.execution_mode,
-        transport_success: trace.transport_success,
-      }, 'Job execution failed (HOOKS MIGRATION)');
+        durationMs,
+        timeoutMs: isTimeout ? timeoutMs : undefined,
+        errorCode: error.code,
+        errorMessage: error.message,
+        event,
+      }, `Job ${isTimeout ? 'timed out' : 'failed'} after ${durationMs}ms: ${error.message}`);
 
       return {
         jobId,
@@ -1213,6 +1455,43 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
     return ['timeout', 'rate_limited', 'connection_error'].includes(code || '');
   }
 
+  /**
+   * Build context string with tool execution result for follow-up IA call
+   */
+  private buildToolResultContext(
+    detectedTool: DetectedToolCall,
+    result: ToolExecutionResult
+  ): string {
+    const parts: string[] = [];
+
+    parts.push('## Tool Execution Result');
+    parts.push(`Tool: ${detectedTool.toolName}`);
+    parts.push(`Command: ${(detectedTool.input as { command?: string }).command || 'N/A'}`);
+    parts.push(`Status: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+
+    if (result.output) {
+      if (result.output.stdout) {
+        const stdout = result.output.stdout.slice(0, 2000); // Limit output size
+        parts.push(`\nOutput:\n\`\`\`\n${stdout}\n\`\`\``);
+      }
+      if (result.output.stderr && result.output.stderr.trim()) {
+        const stderr = result.output.stderr.slice(0, 500);
+        parts.push(`\nStderr:\n\`\`\`\n${stderr}\n\`\`\``);
+      }
+      if (result.output.exitCode !== undefined) {
+        parts.push(`\nExit code: ${result.output.exitCode}`);
+      }
+    }
+
+    if (result.error) {
+      parts.push(`\nError: ${result.error.message}`);
+    }
+
+    parts.push('\nPlease interpret this result and provide your response.');
+
+    return parts.join('\n');
+  }
+
   private extractSummary(response: string): string {
     // Try to extract summary section
     const summaryMatch = response.match(/(?:summary|completed|done)[:\s]*(.{10,200})/i);
@@ -1235,6 +1514,99 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
     }
 
     return Array.from(tools);
+  }
+
+  /**
+   * Execute a stub job when OpenClaw is not configured.
+   * Produces a minimal but complete execution with state, timeline, and cost.
+   */
+  private async executeStubJob(
+    payload: JobPayload,
+    traceBuilder: ReturnType<typeof createExecutionTraceability>
+  ): Promise<DispatchResult> {
+    const { jobId, taskId } = payload;
+    const agentId = payload.agent.agentId;
+
+    // Build trace with stub mode
+    const trace = traceBuilder
+      .mode('stub', 'none')
+      .fallbackUsed('OpenClaw not configured - stub execution')
+      .transportSuccess(true)
+      .responseReceived()
+      .completed()
+      .build();
+
+    // Update job status
+    this.jobStore.setStatus(jobId, 'running');
+    this.jobStore.addEvent(jobId, { type: 'START', sessionId: 'stub' });
+
+    // TASK STATE: Create execution state
+    const taskStateManager = getTaskStateManager();
+    const stepId = `job-${jobId}`;
+    await taskStateManager.addSteps(taskId, [{
+      id: stepId,
+      name: `Job: ${payload.goal.slice(0, 50)}`,
+      description: payload.description || 'Stub execution',
+      status: 'pending',
+      order: 1,
+    }]);
+    await taskStateManager.startStep(taskId, stepId, jobId);
+
+    // Generate stub response
+    const stubOutput = `[STUB] Task "${payload.goal}" acknowledged.\n\nThis is a stub execution because OpenClaw is not configured.\n\nInput received:\n${JSON.stringify(payload.input, null, 2)}\n\nTo enable full execution, configure OPENCLAW_API_KEY environment variable.`;
+
+    // Build successful result
+    const result: JobResult = {
+      output: stubOutput,
+      actionsSummary: 'Stub execution completed - OpenClaw not configured',
+      toolsUsed: [],
+    };
+
+    const response: JobResponse = {
+      jobId,
+      status: 'completed',
+      sessionId: 'stub',
+      result,
+      traceability: trace,
+      completedAt: nowTimestamp(),
+    };
+
+    // BUDGET: Record minimal cost for stub execution
+    const budgetManager = getGlobalBudgetManager();
+    budgetManager.recordCost({
+      task_id: taskId,
+      agent_id: agentId,
+      operation: 'execution',
+      tier: 'short',
+      input_tokens: 100,  // Minimal stub tokens
+      output_tokens: 50,
+      estimated_cost_usd: 0.0001, // ~$0.0001 for stub
+      budget_decision: 'allow',
+    });
+
+    // Update job store
+    this.jobStore.setResponse(jobId, response);
+    this.jobStore.addEvent(jobId, { type: 'COMPLETE', result });
+
+    // TASK STATE: Mark step as completed
+    await taskStateManager.completeStep(taskId, stepId, { output: stubOutput });
+
+    // STRUCTURED LOG: EXECUTION_COMPLETED (stub)
+    logger.info({
+      jobId,
+      taskId,
+      agentId,
+      execution_mode: 'stub',
+      outcome: 'completed',
+      event: 'EXECUTION_COMPLETED',
+    }, 'Stub job completed');
+
+    return {
+      jobId,
+      dispatched: true,
+      sessionId: 'stub',
+      response,
+    };
   }
 
   /**

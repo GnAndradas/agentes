@@ -23,6 +23,10 @@ export async function taskRoutes(fastify: FastifyInstance) {
   fastify.get('/:id/diagnostics', h.getDiagnostics);
   fastify.get('/:id/timeline', h.getTimeline);
 
+  // DECISION TRACEABILITY: Why task was/wasn't assigned
+  fastify.get('/:id/decision-trace', h.getDecisionTrace);
+  fastify.get('/decision-trace/stats', h.getDecisionTraceStats);
+
   // TASK STATE: Execution state endpoints
   fastify.get('/:id/state', state.getTaskState);
   fastify.get('/:id/state/snapshot', state.getTaskStateSnapshot);

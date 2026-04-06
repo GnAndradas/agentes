@@ -28,7 +28,7 @@ export interface TimelineEntry {
   /** Unique identifier */
   id: string;
   /** Entry type */
-  type: 'event' | 'state_change' | 'checkpoint' | 'error' | 'retry' | 'escalation' | 'approval' | 'resource';
+  type: 'event' | 'state_change' | 'checkpoint' | 'error' | 'retry' | 'escalation' | 'approval' | 'resource' | 'tool_execution';
   /** Timestamp */
   timestamp: number;
   /** Title/summary */
@@ -40,7 +40,7 @@ export interface TimelineEntry {
   /** Additional metadata */
   data?: Record<string, unknown>;
   /** Source of this entry */
-  source: 'event' | 'task' | 'checkpoint' | 'feedback';
+  source: 'event' | 'task' | 'checkpoint' | 'feedback' | 'tool';
 }
 
 /** Complete task timeline */
@@ -62,6 +62,7 @@ export interface TaskTimeline {
     errors: number;
     retries: number;
     escalations: number;
+    toolCalls: number;
     durationMs: number;
     currentBlocker?: string;
   };
@@ -338,6 +339,7 @@ export class TaskTimelineService {
     // Calculate summary
     const errors = entries.filter(e => e.type === 'error').length;
     const stateChanges = entries.filter(e => e.type === 'state_change').length;
+    const toolCalls = entries.filter(e => e.type === 'tool_execution').length;
     const escalationCount = escalations.length;
     const durationMs = task.completedAt
       ? (task.completedAt - task.createdAt) * 1000
@@ -360,6 +362,7 @@ export class TaskTimelineService {
         errors,
         retries: task.retryCount,
         escalations: escalationCount,
+        toolCalls,
         durationMs,
         currentBlocker: checkpoint?.lastKnownBlocker ?? undefined,
       },
@@ -740,9 +743,21 @@ export class TaskTimelineService {
   private eventToTimelineEntry(event: EventDTO): TimelineEntry {
     let type: TimelineEntry['type'] = 'event';
     let severity: TimelineEntry['severity'] = 'info';
+    let source: TimelineEntry['source'] = 'event';
 
     // Determine type based on event type
-    if (event.type.includes('error') || event.type.includes('failed')) {
+    if (event.type.includes('TOOL_EXECUTION')) {
+      // Tool execution events
+      type = 'tool_execution';
+      source = 'tool';
+      if (event.type.includes('FAILED') || event.type.includes('BLOCKED')) {
+        severity = 'warning';
+      } else if (event.type.includes('COMPLETED')) {
+        severity = 'success';
+      } else {
+        severity = 'info';
+      }
+    } else if (event.type.includes('error') || event.type.includes('failed')) {
       type = 'error';
       severity = 'error';
     } else if (event.type.includes('retry')) {
@@ -780,7 +795,7 @@ export class TaskTimelineService {
       description: event.message,
       severity,
       data: event.data,
-      source: 'event',
+      source,
     };
   }
 

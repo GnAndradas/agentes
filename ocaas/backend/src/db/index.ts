@@ -351,6 +351,34 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_jobs_agent ON jobs(agent_id);
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
     CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
+
+    -- Decision traces table (for audit trail of task→agent assignment decisions)
+    CREATE TABLE IF NOT EXISTS decision_traces (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      failure_reason TEXT,
+      explanation TEXT NOT NULL,
+      selected_agent_id TEXT,
+      selection_score REAL,
+      selection_reason TEXT,
+      total_agents INTEGER NOT NULL DEFAULT 0,
+      active_agents INTEGER NOT NULL DEFAULT 0,
+      matching_agents INTEGER NOT NULL DEFAULT 0,
+      evaluated_agents_json TEXT,
+      task_type TEXT NOT NULL DEFAULT 'general',
+      task_priority INTEGER NOT NULL DEFAULT 0,
+      required_capabilities_json TEXT,
+      decision_method TEXT,
+      confidence REAL,
+      processing_time_ms INTEGER,
+      error TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_decision_traces_task ON decision_traces(task_id);
+    CREATE INDEX IF NOT EXISTS idx_decision_traces_decision ON decision_traces(decision);
+    CREATE INDEX IF NOT EXISTS idx_decision_traces_created ON decision_traces(created_at);
   `);
 
   // Verify critical tables exist after initialization
@@ -358,6 +386,7 @@ export async function initDatabase(): Promise<void> {
     'tasks', 'agents', 'skills', 'tools', 'skill_tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
     'task_checkpoints', 'execution_leases', 'human_escalations', 'jobs',
+    'decision_traces',
   ];
 
   const existingTables = sqlite.prepare(`

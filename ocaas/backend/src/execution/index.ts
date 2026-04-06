@@ -101,3 +101,14 @@ export {
   // Builder
   ExecutionTraceabilityBuilder,
 } from './ExecutionTraceability.js';
+
+// Tool Execution Service
+export {
+  ToolExecutionService,
+  getToolExecutionService,
+  resetToolExecutionService,
+  type ToolExecutionInput,
+  type ToolExecutionResult,
+  type CommandExecutionInput,
+  type CommandExecutionOutput,
+} from './ToolExecutionService.js';

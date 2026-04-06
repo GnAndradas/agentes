@@ -22,6 +22,8 @@ import {
   getExecutionLeaseStore,
   getCheckpointStore,
 } from './resilience/index.js';
+import { getJobDispatcherService } from '../execution/JobDispatcherService.js';
+import type { OrgAwareDecision } from './OrgAwareDecisionEngine.js';
 
 const logger = orchestratorLogger.child({ component: 'TaskRouter' });
 
@@ -433,76 +435,105 @@ export class TaskRouter {
       // Renew lease after each significant operation
       leaseStore.renew(task.id, executionId);
 
-      // Ensure agent has an active session
-      if (!sessionManager.hasActiveSession(assignment.agentId)) {
-        const { agentService } = getServices();
-        const agent = await agentService.getById(assignment.agentId);
-        const sessionId = await sessionManager.spawnAgent(
-          assignment.agentId,
-          agent.config?.systemPrompt as string ?? `You are agent ${agent.name}. Execute assigned tasks.`
-        );
-        if (!sessionId) {
-          throw new Error(`Failed to spawn session for agent ${assignment.agentId}`);
-        }
-        checkpointStore.updateAgent(task.id, assignment.agentId, sessionId);
-      }
-      checkpointStore.updateStage(task.id, 'executing', 'session_ready', 40);
+      // =========================================================================
+      // STAGE: Dispatch via JobDispatcherService
+      // =========================================================================
+      // Build OrgAwareDecision-compatible object for JobDispatcher
+      const dispatchDecision: OrgAwareDecision = {
+        taskId: task.id,
+        decidedAt: Date.now(),
+        analysis: decision.analysis,
+        assignment: {
+          taskId: task.id,
+          agentId: assignment.agentId,
+          score: assignment.score,
+          reason: assignment.reason,
+        },
+        suggestedActions: decision.suggestedActions || [],
+        usedFallback: decision.usedFallback,
+        usedHierarchy: false,
+      };
 
-      // =========================================================================
-      // STAGE: Starting execution
-      // =========================================================================
+      const jobDispatcher = getJobDispatcherService();
+      checkpointStore.updateStage(task.id, 'executing', 'dispatching_job', 40);
+
+      // Start task before dispatch
       await taskService.start(task.id);
-      checkpointStore.updateStage(task.id, 'awaiting_response', 'task_started', 50);
+      checkpointStore.updateStage(task.id, 'awaiting_response', 'job_dispatched', 50);
 
-      // Renew lease before long operation
+      // Dispatch job - this handles:
+      // - Job creation in DB
+      // - TaskState tracking
+      // - Cost recording
+      // - OpenClaw execution (or fallback)
+      const dispatchResult = await jobDispatcher.dispatch(dispatchDecision, task, {
+        waitForCompletion: true,
+      });
+
+      // Renew lease after dispatch
       leaseStore.renew(task.id, executionId);
 
-      // Send to agent via session
-      const response = await sessionManager.sendToAgent(
-        assignment.agentId,
-        `Execute task: ${task.title}\n\nDescription: ${task.description ?? 'No description'}\n\nInput: ${JSON.stringify(task.input ?? {})}`,
-        { taskId: task.id, ...task.input }
-      );
+      if (dispatchResult.dispatched && dispatchResult.response) {
+        const jobResponse = dispatchResult.response;
 
-      if (response) {
-        // =========================================================================
-        // STAGE: Processing result - save partial result BEFORE completing
-        // =========================================================================
-        checkpointStore.updateStage(task.id, 'processing_result', 'response_received', 80);
-        checkpointStore.savePartialResult(task.id, { response });
+        if (jobResponse.status === 'completed') {
+          // =========================================================================
+          // STAGE: Completing task
+          // =========================================================================
+          checkpointStore.updateStage(task.id, 'completing', 'saving_result', 90);
+          await taskService.complete(task.id, {
+            jobId: jobResponse.jobId,
+            response: jobResponse.result?.output,
+            data: jobResponse.result?.data,
+          });
 
-        // Renew lease before final DB write
-        leaseStore.renew(task.id, executionId);
+          // Mark checkpoint as completed
+          checkpointStore.markCompleted(task.id);
 
-        // =========================================================================
-        // STAGE: Completing task
-        // =========================================================================
-        checkpointStore.updateStage(task.id, 'completing', 'saving_result', 90);
-        await taskService.complete(task.id, { response });
+          // Release lease
+          leaseStore.release(task.id, executionId);
 
-        // Mark checkpoint as completed
-        checkpointStore.markCompleted(task.id);
+          this.queue.markDone(task.id);
 
-        // Release lease
-        leaseStore.release(task.id, executionId);
+          // Clear any feedback and pending retries for this task
+          await getFeedbackService().clearForTask(task.id);
+          getResourceRetryService().clearForTask(task.id);
 
-        this.queue.markDone(task.id);
+          // Check if this is a subtask and parent needs to be completed
+          if (task.parentTaskId) {
+            const decomposer = getTaskDecomposer();
+            await decomposer.checkParentCompletion(task);
+          }
 
-        // Clear any feedback and pending retries for this task
-        await getFeedbackService().clearForTask(task.id);
-        getResourceRetryService().clearForTask(task.id);
-
-        // Check if this is a subtask and parent needs to be completed
-        if (task.parentTaskId) {
-          const decomposer = getTaskDecomposer();
-          await decomposer.checkParentCompletion(task);
+          logger.info({ taskId: task.id, executionId, jobId: jobResponse.jobId }, 'Task completed successfully via JobDispatcher');
+          return true;
         }
 
-        logger.info({ taskId: task.id, executionId }, 'Task completed successfully');
-        return true;
+        if (jobResponse.status === 'accepted') {
+          // Async execution accepted - task stays running
+          checkpointStore.updateStage(task.id, 'awaiting_response', 'async_accepted', 60);
+          logger.info({ taskId: task.id, jobId: jobResponse.jobId }, 'Task accepted for async execution');
+          return true;
+        }
+
+        if (jobResponse.status === 'failed') {
+          throw new Error(jobResponse.error?.message || 'Job execution failed');
+        }
+
+        if (jobResponse.status === 'blocked') {
+          // Task blocked - stays in running, waiting for resource
+          checkpointStore.updateBlocker(task.id, jobResponse.blocked?.description || 'Blocked');
+          logger.warn({ taskId: task.id, jobId: jobResponse.jobId, reason: jobResponse.blocked?.reason }, 'Task blocked');
+          return false;
+        }
       }
 
-      // If no response, task might still be running async - keep lease active
+      // Dispatch failed without response
+      if (!dispatchResult.dispatched) {
+        throw new Error(dispatchResult.error?.message || 'Job dispatch failed');
+      }
+
+      // Async dispatch without immediate response
       checkpointStore.updateStage(task.id, 'awaiting_response', 'async_execution', 60);
       return true;
 

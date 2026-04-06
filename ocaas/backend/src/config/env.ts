@@ -41,6 +41,9 @@ const envSchema = z.object({
   AUTONOMY_LEVEL: z.enum(['manual', 'supervised', 'autonomous']).default('supervised'),
   AUTONOMY_HUMAN_TIMEOUT: z.coerce.number().default(300000), // 5 minutes
   AUTONOMY_FALLBACK: z.enum(['pause', 'reject', 'auto_approve']).default('pause'),
+
+  // Execution timeouts
+  JOB_EXECUTION_TIMEOUT_MS: z.coerce.number().default(60000), // 60 seconds default
 });
 
 export type Env = z.infer<typeof envSchema>;

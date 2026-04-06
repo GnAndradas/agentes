@@ -612,11 +612,23 @@ export interface TaskCheckpoint {
   createdAt: number;
 }
 
+/** Tool execution record within task state */
+export interface ToolExecutionRecord {
+  executionId: string;
+  toolName: string;
+  success: boolean;
+  durationMs: number;
+  executedAt: number;
+  outputSummary?: string;
+  error?: string;
+}
+
 /** Full task execution state */
 export interface TaskExecutionState {
   taskId: string;
   phase: ExecutionPhase;
   currentStepIndex: number;
+  currentStepId?: string;
   steps: TaskStep[];
   context: Record<string, unknown>;
   errors: Array<{ stepId?: string; error: string; timestamp: number; recoverable: boolean }>;
@@ -634,6 +646,10 @@ export interface TaskExecutionState {
   version: number;
   createdAt: number;
   updatedAt: number;
+  // Tool execution tracking (P0-03)
+  toolCallsCount?: number;
+  lastToolUsed?: string;
+  toolExecutions?: ToolExecutionRecord[];
 }
 
 /** Lightweight snapshot for diagnostics */
@@ -648,6 +664,9 @@ export interface TaskStateSnapshot {
   hasCheckpoints: boolean;
   lastCheckpointAt?: number;
   updatedAt: number;
+  // Tool execution tracking (P0-03)
+  toolCallsCount?: number;
+  lastToolUsed?: string;
 }
 
 /** Timeline event for task execution history */
@@ -984,4 +1003,62 @@ export interface DecisionTrace {
 
   // Error info
   error?: string;
+}
+
+// =============================================================================
+// EXECUTION GENERATION TRACE (P0-02: End-to-end traceability)
+// =============================================================================
+
+/** AI Execution mode used during task generation */
+export type AIExecutionMode = 'hooks_session' | 'chat_completion' | 'stub' | 'real_agent';
+
+/**
+ * Generation trace - REAL traceability of what happened during execution
+ * Eliminates the "black box" problem
+ */
+export interface ExecutionGenerationTrace {
+  id: string;
+  taskId: string;
+  jobId?: string;
+
+  /** Execution mode used */
+  executionMode: AIExecutionMode;
+
+  /** Was AI execution requested? */
+  aiRequested: boolean;
+
+  /** Was AI execution actually attempted? */
+  aiAttempted: boolean;
+
+  /** Did AI execution succeed (got response)? */
+  aiSucceeded: boolean;
+
+  /** Was fallback used instead of primary mode? */
+  fallbackUsed: boolean;
+
+  /** Reason for fallback if used */
+  fallbackReason?: string;
+
+  /** Raw output from AI (may be truncated) */
+  rawOutput?: string;
+
+  /** Final processed output */
+  finalOutput?: string;
+
+  /** Token usage */
+  tokenUsage?: {
+    input: number;
+    output: number;
+  };
+
+  /** Model used */
+  model?: string;
+
+  /** Execution duration in ms */
+  durationMs?: number;
+
+  /** Error message if failed */
+  error?: string;
+
+  createdAt: number;
 }

@@ -19,9 +19,10 @@ import {
   Bug,
   Pause,
   Play,
+  Wrench,
 } from 'lucide-react';
 import { DelegationHistory } from '../components/DelegationHistory';
-import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi } from '../lib/api';
+import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi, generationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
 import { SubtasksPanel } from '../components/SubtasksPanel';
@@ -33,6 +34,8 @@ import {
   BudgetPanel,
   DiagnosticsPanel,
   TaskDecisionTracePanel,
+  GenerationTracePanel,
+  ToolUsagePanel,
 } from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
@@ -189,6 +192,21 @@ export function TaskDetail() {
       }
     },
     enabled: !!id && (task?.status === 'queued' || task?.status === 'pending' || task?.status === 'assigned'),
+    refetchInterval: 10000,
+    retry: false,
+  });
+
+  // P0-02: Fetch generation trace - REAL execution traceability
+  const { data: generationTrace, isLoading: isGenerationTraceLoading } = useQuery({
+    queryKey: ['tasks', id, 'generation-trace'],
+    queryFn: async () => {
+      try {
+        return await taskApi.getGenerationTrace(id!);
+      } catch {
+        return null; // 404 = no trace available yet
+      }
+    },
+    enabled: !!id,
     refetchInterval: 10000,
     retry: false,
   });
@@ -547,13 +565,50 @@ export function TaskDetail() {
                     <BlockedJobView
                       blocked={selectedJob.blocked}
                       jobId={selectedJob.id}
-                      onApproveGeneration={(suggestion) => {
-                        addNotification({
-                          type: 'info',
-                          title: 'Generation triggered',
-                          message: `Creating ${suggestion.target}...`,
-                        });
-                        // TODO: Integrate with generation API
+                      onApproveGeneration={async (suggestion) => {
+                        // Map suggestion type to generation type
+                        const typeMap: Record<string, string> = {
+                          create_tool: 'tool',
+                          create_skill: 'skill',
+                        };
+                        const generationType = typeMap[suggestion.type];
+
+                        if (!generationType) {
+                          addNotification({
+                            type: 'warning',
+                            title: 'Cannot auto-generate',
+                            message: `${suggestion.type} requires manual action`,
+                          });
+                          return;
+                        }
+
+                        try {
+                          addNotification({
+                            type: 'info',
+                            title: 'Generation started',
+                            message: `Creating ${generationType}: ${suggestion.target}...`,
+                          });
+
+                          await generationApi.create({
+                            type: generationType,
+                            name: suggestion.target,
+                            description: suggestion.description,
+                            prompt: `Auto-generated from blocked job. Task context: ${task?.type || 'unknown'}. Original description: ${suggestion.description}`,
+                          });
+
+                          queryClient.invalidateQueries({ queryKey: ['generations'] });
+                          addNotification({
+                            type: 'success',
+                            title: 'Generation created',
+                            message: `${suggestion.target} generation is pending approval`,
+                          });
+                        } catch (err) {
+                          addNotification({
+                            type: 'error',
+                            title: 'Generation failed',
+                            message: err instanceof Error ? err.message : 'Unknown error',
+                          });
+                        }
                       }}
                       onReject={async () => {
                         await jobApi.abort(selectedJob.id);
@@ -710,6 +765,40 @@ export function TaskDetail() {
                 <BudgetPanel
                   cost={taskCost}
                   isLoading={isCostLoading}
+                />
+              </Card>
+
+              {/* P0-02: Generation Trace Panel */}
+              <Card className="lg:col-span-2">
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-cyan-400" />
+                      Generation Trace
+                    </div>
+                  }
+                />
+                <GenerationTracePanel
+                  trace={generationTrace}
+                  isLoading={isGenerationTraceLoading}
+                />
+              </Card>
+
+              {/* P0-03: Tool Usage Panel */}
+              <Card>
+                <CardHeader
+                  title={
+                    <div className="flex items-center gap-2">
+                      <Wrench className="w-4 h-4 text-cyan-400" />
+                      Tool Usage
+                    </div>
+                  }
+                />
+                <ToolUsagePanel
+                  toolExecutions={taskState?.toolExecutions}
+                  toolCallsCount={taskState?.toolCallsCount}
+                  lastToolUsed={taskState?.lastToolUsed}
+                  isLoading={isStateLoading}
                 />
               </Card>
 

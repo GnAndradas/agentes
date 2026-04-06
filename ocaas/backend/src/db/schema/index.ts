@@ -16,3 +16,4 @@ export * from './jobs.js';
 export * from './logs.js';
 export * from './taskStates.js';
 export * from './decisionTraces.js';
+export * from './generationTraces.js';

@@ -333,3 +333,59 @@ export async function getDecisionTraceStats(_req: FastifyRequest, reply: Fastify
     return reply.status(statusCode).send(body);
   }
 }
+
+// ============================================================================
+// P0-02: GENERATION TRACEABILITY
+// ============================================================================
+
+/**
+ * Get generation trace for a task
+ *
+ * Returns REAL traceability of what happened during execution:
+ * - execution_mode (hooks_session | chat_completion | stub)
+ * - ai_requested, ai_attempted, ai_succeeded
+ * - fallback_used, fallback_reason
+ * - raw_output (truncated), final_output
+ */
+export async function getGenerationTrace(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getGenerationTraceService } = await import('../../execution/GenerationTraceService.js');
+    const traceService = getGenerationTraceService();
+    const trace = traceService.getByTask(req.params.id);
+
+    if (!trace) {
+      return reply.status(404).send({
+        success: false,
+        error: 'Generation trace not found',
+        message: 'No generation trace exists for this task. The task may not have been executed yet.',
+      });
+    }
+
+    return reply.send({
+      success: true,
+      data: trace,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+/**
+ * Get all generation traces for a task (history)
+ */
+export async function getGenerationTraceHistory(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getGenerationTraceService } = await import('../../execution/GenerationTraceService.js');
+    const traceService = getGenerationTraceService();
+    const traces = traceService.listByTask(req.params.id);
+
+    return reply.send({
+      success: true,
+      data: traces,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

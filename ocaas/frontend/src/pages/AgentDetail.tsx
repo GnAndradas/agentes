@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X, Zap, Crown, Briefcase, Users, User, Wrench } from 'lucide-react';
+import { ArrowLeft, Power, PowerOff, Trash2, Edit2, Sparkles, Plus, X, Zap, Crown, Briefcase, Users, User, Wrench, Layers } from 'lucide-react';
 import { agentApi, taskApi, skillApi, jobApi, orgApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import type { Skill, JobStatus } from '../types';
+import { AgentCapabilitiesPanel } from '../components/agents';
 import {
   Button,
   Badge,
@@ -77,6 +78,13 @@ export function AgentDetail() {
   const { data: assignedSkills, isLoading: skillsLoading } = useQuery({
     queryKey: ['agents', id, 'skills'],
     queryFn: () => agentApi.getSkills(id!),
+    enabled: !!id,
+  });
+
+  // Direct tools assigned to this agent
+  const { data: directTools, isLoading: toolsLoading } = useQuery({
+    queryKey: ['agents', id, 'tools'],
+    queryFn: () => agentApi.getTools(id!),
     enabled: !!id,
   });
 
@@ -387,10 +395,27 @@ export function AgentDetail() {
         )}
       </Card>
 
-      {/* Assigned Skills */}
+      {/* Agent Capabilities - Hierarchical view of Skills → Tools */}
       <Card>
         <CardHeader
-          title="Assigned Skills"
+          title={
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-primary-400" />
+              Capabilities
+            </div>
+          }
+        />
+        <AgentCapabilitiesPanel
+          skills={assignedSkills}
+          directTools={directTools}
+          isLoading={skillsLoading || toolsLoading}
+        />
+      </Card>
+
+      {/* Assigned Skills - Management UI */}
+      <Card>
+        <CardHeader
+          title="Manage Skills"
           action={
             <Button size="sm" onClick={() => setShowAssignSkill(true)}>
               <Plus className="w-4 h-4" />

@@ -53,6 +53,7 @@ import {
 } from '../budget/index.js';
 import { getTaskStateManager } from './TaskStateManager/index.js';
 import { getToolExecutionService, type ToolExecutionResult } from './ToolExecutionService.js';
+import { getGenerationTraceService } from './GenerationTraceService.js';
 
 const logger = createLogger('JobDispatcherService');
 
@@ -864,6 +865,29 @@ export class JobDispatcherService {
       // BLOQUE 10: Attach traceability to response
       response.traceability = trace;
 
+      // P0-02: Save generation trace for full traceability
+      const durationMs = Date.now() - executionStartTime;
+      const generationTraceService = getGenerationTraceService();
+      generationTraceService.save({
+        taskId: payload.taskId,
+        jobId,
+        executionMode: trace.execution_mode,
+        aiRequested: true, // We always request AI in executeJob
+        aiAttempted: hooksResult.executionMode !== 'stub',
+        aiSucceeded: hooksResult.success && !!hooksResult.response,
+        fallbackUsed: trace.execution_fallback_used,
+        fallbackReason: trace.execution_fallback_reason,
+        rawOutput: hooksResult.response, // Original AI response
+        finalOutput: finalResponse, // May include tool loop result
+        tokenUsage: {
+          input: estimatedInputTokens,
+          output: estimatedOutputTokens,
+        },
+        model: hooksResult.executionMode === 'chat_completion' ? 'gpt-4' : undefined,
+        durationMs,
+        error: hooksResult.error?.message,
+      });
+
       this.jobStore.setResponse(jobId, response);
 
       // TASK STATE: Track job outcome
@@ -881,7 +905,6 @@ export class JobDispatcherService {
       }
 
       // STRUCTURED LOG: EXECUTION_COMPLETED
-      const durationMs = Date.now() - executionStartTime;
       logger.info({
         jobId,
         taskId: payload.taskId,
@@ -927,6 +950,23 @@ export class JobDispatcherService {
 
       this.jobStore.setResponse(jobId, response);
       this.jobStore.addEvent(jobId, { type: isTimeout ? 'TIMEOUT' : 'FAIL', error });
+
+      // P0-02: Save generation trace for failed/timeout execution
+      const generationTraceService = getGenerationTraceService();
+      generationTraceService.save({
+        taskId: payload.taskId,
+        jobId,
+        executionMode: trace.execution_mode,
+        aiRequested: true,
+        aiAttempted: trace.execution_mode !== 'stub',
+        aiSucceeded: false,
+        fallbackUsed: trace.execution_fallback_used,
+        fallbackReason: trace.execution_fallback_reason,
+        rawOutput: undefined,
+        finalOutput: undefined,
+        durationMs,
+        error: error.message,
+      });
 
       // TASK STATE: Update state on failure/timeout
       const taskStateManager = getTaskStateManager();
@@ -1582,6 +1622,23 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
       output_tokens: 50,
       estimated_cost_usd: 0.0001, // ~$0.0001 for stub
       budget_decision: 'allow',
+    });
+
+    // P0-02: Save generation trace for stub execution
+    const generationTraceService = getGenerationTraceService();
+    generationTraceService.save({
+      taskId,
+      jobId,
+      executionMode: 'stub',
+      aiRequested: true,
+      aiAttempted: false, // Stub = no actual AI call
+      aiSucceeded: false,
+      fallbackUsed: true,
+      fallbackReason: 'OpenClaw not configured - stub execution',
+      rawOutput: undefined, // No AI output
+      finalOutput: stubOutput,
+      tokenUsage: { input: 100, output: 50 },
+      durationMs: 0,
     });
 
     // Update job store

@@ -112,3 +112,11 @@ export {
   type CommandExecutionInput,
   type CommandExecutionOutput,
 } from './ToolExecutionService.js';
+
+// Generation Trace Service (P0-02: End-to-end traceability)
+export {
+  getGenerationTraceService,
+  resetGenerationTraceService,
+  type GenerationTrace,
+  type GenerationTraceInput,
+} from './GenerationTraceService.js';

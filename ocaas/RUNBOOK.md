@@ -5,67 +5,94 @@
 OCAAS = Control plane para orquestar agentes AI.
 OpenClaw = Runtime que ejecuta los agentes.
 
-OCAAS decide QUÉ hacer → OpenClaw ejecuta CÓMO hacerlo.
+OCAAS decide QUE hacer -> OpenClaw ejecuta COMO hacerlo.
 
 ## 2. ARCHITECTURE
 
 ```
 User/Channel
-     ↓
+     |
+     v
 OCAAS API (Tasks)
-     ↓
+     |
+     v
 TaskRouter
-     ↓
+     |
+     v
 OrgAwareDecisionEngine
-     ↓
+     |
+     v
 Agent (role-based selection)
-     ↓
+     |
+     v
 JobDispatcherService
-     ↓
-OpenClaw Gateway
-     ↓
+     |
+     v
+OpenClaw Gateway (hooks_session | chat_completion | stub)
+     |
+     v
 LLM + Tools Execution
-     ↓
+     |
+     v
 JobResponse
-     ↓
-JobResolutionService (if blocked)
-     ↓
+     |
+     v
+GenerationTraceService (traceability)
+     |
+     v
 Task update + UI
-     ↓
-SQLite (state: tasks, jobs, delegation)
+     |
+     v
+SQLite (state: tasks, jobs, generation_traces)
 ```
 
 - OCAAS = control plane (tasks, org, decisions, approvals)
 - OpenClaw = execution runtime (LLM + tools)
-- Jobs = unidad de ejecución
-- Organization = controla delegación
+- Jobs = unidad de ejecucion
+- Organization = controla delegacion
 - Resolution = maneja bloqueos y retry
 
-## 3. EXECUTION FLOW
+## 3. EXECUTION MODES
+
+| Mode | Transport | Priority | Description |
+|------|-----------|----------|-------------|
+| `hooks_session` | `/hooks/agent` | PRIMARY | Stateful session via OPENCLAW_HOOKS_TOKEN |
+| `chat_completion` | `/v1/chat/completions` | FALLBACK | Stateless via OPENCLAW_API_KEY |
+| `stub` | none | EMERGENCY | Mock when nothing connected |
+
+**Fallback chain:** hooks_session -> chat_completion -> stub
+
+## 4. EXECUTION FLOW
 
 ```
-Task → TaskRouter → OrgAwareDecision → JobDispatcher → OpenClaw → Response
-                         ↓                                ↓
-                    Agent Selection              blocked? → Resolution → Retry
+Task -> TaskRouter -> OrgAwareDecision -> JobDispatcher -> OpenClaw -> Response
+                         |                      |
+                    Agent Selection        Mode detection:
+                                           1. hooks_session?
+                                           2. chat_completion?
+                                           3. stub
 ```
 
-**Estados Job:** `pending` → `running` → `completed|failed|blocked|timeout`
+**Job states:** `pending` -> `running` -> `completed|failed|blocked|timeout`
 
-**Blocked Flow:** blocked → suggestion → approval → resource created → retry
+**Blocked Flow:** blocked -> suggestion -> approval -> resource created -> retry
 
-## 4. CORE COMPONENTS
+## 5. CORE COMPONENTS
 
-| Component | Role |
-|-----------|------|
-| TaskRouter | Queue + dispatch tasks |
-| OrgAwareDecisionEngine | Select agent by role/capability |
-| JobDispatcherService | Build payload, send to OpenClaw |
-| JobResolutionService | Handle blocked, schedule retry |
-| OpenClawAdapter | HTTP/WS to gateway |
+| Component | File | Role |
+|-----------|------|------|
+| TaskRouter | orchestrator/ | Queue + dispatch tasks |
+| OrgAwareDecisionEngine | orchestrator/ | Select agent by role/capability |
+| JobDispatcherService | execution/ | Build payload, detect mode, execute |
+| ExecutionTraceability | execution/ | Track real execution mode |
+| GenerationTraceService | execution/ | Persist AI generation traces |
+| OpenClawAdapter | integrations/openclaw/ | HTTP to gateway |
+| DiagnosticService | services/ | Full diagnostics |
+| TaskStateManager | execution/TaskStateManager/ | Execution state + tools |
 
-## 5. JOBS
+## 6. JOBS
 
-**Payload mínimo:**
+**Payload minimo:**
 ```typescript
 { jobId, taskId, goal, agent: { agentId, role, capabilities },
   allowedResources: { tools[], skills[] }, constraints: { autonomyLevel } }
@@ -79,16 +106,16 @@ Task → TaskRouter → OrgAwareDecision → JobDispatcher → OpenClaw → Resp
 
 **Blocking reasons:** `missing_tool | missing_skill | missing_permission | awaiting_approval`
 
-**Resolution:** POST `/api/jobs/:id/resolve` → creates generation + approval → auto-retry
+**Resolution:** POST `/api/jobs/:id/resolve` -> creates generation + approval -> auto-retry
 
-## 6. INSTALLATION
+## 7. INSTALLATION
 
 **Backend-first setup (recommended):**
 ```bash
 cd ocaas/backend
 npm install
 cp .env.example .env
-npx drizzle-kit push || echo "db:push failed (non-blocking, runtime init handles tables)"
+npx drizzle-kit push || echo "db:push failed (non-blocking)"
 npm run dev
 ```
 
@@ -99,16 +126,18 @@ npm install
 npm run dev
 ```
 
-> **Note:** Always run `npm install` in frontend/ after cloning or deleting node_modules.
-> Do not run backend commands from monorepo root for initial setup.
-> db:push is optional if initDatabase creates required tables at runtime.
-
 **Env (backend/.env):**
 ```bash
 PORT=3001
 OPENCLAW_GATEWAY_URL=http://localhost:18789
-OPENCLAW_API_KEY=<token>
 API_SECRET_KEY=<min-16-chars>
+
+# For hooks_session (PRIMARY)
+OPENCLAW_HOOKS_TOKEN=<token>
+
+# For chat_completion (FALLBACK)
+OPENCLAW_API_KEY=<key>
+
 AUTONOMY_LEVEL=supervised
 ```
 
@@ -117,13 +146,13 @@ AUTONOMY_LEVEL=supervised
 2. Backend: `npm run dev` (from backend/)
 3. Frontend: `npm run dev` (from frontend/)
 
-## 7. CRITICAL CHECKS
+## 8. CRITICAL CHECKS
 
 ```bash
 # Health
 curl localhost:3001/health
 
-# Gateway connection
+# Gateway + mode detection
 curl localhost:3001/api/system/diagnostics | jq '.openclaw'
 
 # Create test task
@@ -133,17 +162,21 @@ curl -X POST localhost:3001/api/tasks \
 ```
 
 **Expected:**
-- `/health` → `{"status":"ok"}`
-- `openclaw.configured` → `true`
-- Task creates → Job dispatches
+- `/health` -> `{"status":"ok"}`
+- `openclaw.configured` -> `true`
+- Task creates -> Job dispatches via detected mode
 
-## 8. OPERATIONS
+## 9. OPERATIONS
 
 **Tasks:**
 ```bash
-GET  /api/tasks                  # List
-GET  /api/tasks/:id              # Detail
-POST /api/tasks/:id/retry        # Retry failed
+GET  /api/tasks                       # List
+GET  /api/tasks/:id                   # Detail
+GET  /api/tasks/:id/diagnostics       # Full diagnostics
+GET  /api/tasks/:id/timeline          # Timeline
+GET  /api/tasks/:id/state             # Execution state + tools
+GET  /api/tasks/:id/generation-trace  # AI trace
+POST /api/tasks/:id/retry             # Retry failed
 ```
 
 **Jobs:**
@@ -162,23 +195,30 @@ POST /api/approvals/:id/approve
 POST /api/approvals/:id/reject
 ```
 
+**Generations:**
+```bash
+GET  /api/generations/:id
+POST /api/generations/:id/approve
+POST /api/generations/:id/reject
+```
+
 **Autonomy:**
 ```bash
 GET   /api/system/autonomy
 PATCH /api/system/autonomy -d '{"level":"autonomous"}'
 ```
 
-## 9. TROUBLESHOOTING
+## 10. TROUBLESHOOTING
 
 | Problem | Check | Fix |
 |---------|-------|-----|
 | Job stuck running | `/api/jobs/active` | `POST /jobs/:id/abort` |
 | Job blocked | `/api/jobs/blocked` | Approve missing resource, retry |
-| Tasks not processing | `/api/system/diagnostics` | Check orchestrator, restart |
-| OpenClaw disconnected | diagnostics.openclaw | Verify gateway URL, restart |
-| Agent not responding | `/api/agents/:id` | Check status, recreate session |
-| Approval timeout | `/api/approvals?status=pending` | Approve or change autonomy level |
-| Frontend "Cannot find @vitejs/plugin-react" | Missing node_modules | `cd frontend && npm install` |
+| hooks_session fails | OPENCLAW_HOOKS_TOKEN | Configure token or use chat_completion |
+| chat_completion fails | OPENCLAW_API_KEY | Configure API key |
+| All modes fail | `/api/system/diagnostics` | Check gateway URL, restart |
+| Task not processing | `/api/tasks/:id/diagnostics` | Check gaps, warnings |
+| Frontend errors | Missing node_modules | `cd frontend && npm install` |
 
 **Logs:**
 ```bash
@@ -186,7 +226,7 @@ tail -f logs/ocaas.log
 LOG_LEVEL=debug npm run dev
 ```
 
-## 10. SECURITY & LIMITS
+## 11. SECURITY & LIMITS
 
 **Auth:** `X-API-Key` header = `API_SECRET_KEY`
 
@@ -199,50 +239,46 @@ LOG_LEVEL=debug npm run dev
 | Human timeout | 5 min |
 
 **Autonomy levels:**
-- `manual` → all needs approval
-- `supervised` → high priority needs approval
-- `autonomous` → no approval needed
+- `manual` -> all needs approval
+- `supervised` -> high priority needs approval
+- `autonomous` -> no approval needed
 
-**Telegram:** Set `TELEGRAM_ALLOWED_USER_IDS` to restrict approvers.
-
-## 11. QUICK REFERENCE
+## 12. QUICK REFERENCE
 
 **Key endpoints:**
 ```
-/health                     → Quick check
-/api/system/diagnostics     → Full status
-/api/jobs/blocked           → Needs attention
-/api/approvals?status=pending → Waiting human
+/health                          -> Quick check
+/api/system/diagnostics          -> Full status + mode detection
+/api/tasks/:id/diagnostics       -> Task diagnostics
+/api/tasks/:id/generation-trace  -> AI execution trace
+/api/jobs/blocked                -> Needs attention
+/api/approvals?status=pending    -> Waiting human
 ```
 
 **Key files:**
 ```
-src/execution/JobDispatcherService.ts  → Job creation
-src/execution/JobResolutionService.ts  → Blocked handling
-src/orchestrator/OrgAwareDecisionEngine.ts → Agent selection
-src/config/autonomy.ts → Autonomy config
+src/execution/JobDispatcherService.ts   -> Job creation + mode detection
+src/execution/ExecutionTraceability.ts  -> Mode definitions
+src/execution/GenerationTraceService.ts -> AI trace persistence
+src/orchestrator/OrgAwareDecisionEngine.ts -> Agent selection
+src/config/autonomy.ts -> Autonomy config
 ```
 
-**Role hierarchy:** CEO > Manager > Supervisor > Specialist > Worker
+## 13. KNOWN GAPS
 
-**Delegation tracking:** Task.delegationHistory[] shows A → B → C chain
+1. **Skills/Tools not used** - OpenClaw doesn't read workspace
+2. **Agents not "real"** - Always hooks_session or chat_completion, never real OpenClaw session
+3. **runtime_ready always false** - No real session management
+4. **Workspace not connected** - agent.json created but not loaded
 
-## 12. OLD INSTALLATION CLEANUP (CRITICAL)
+## 14. CLEANUP
 
 **Check if port 3001 is in use:**
 
 Linux/Mac:
 ```bash
 lsof -i :3001
-ps -fp <pid>
 kill -9 <pid>
-```
-
-If using systemd:
-```bash
-systemctl status ocaas
-sudo systemctl stop ocaas
-sudo systemctl disable ocaas
 ```
 
 Windows:
@@ -251,12 +287,9 @@ netstat -ano | findstr :3001
 taskkill /PID <pid> /F
 ```
 
-> **Important:** If frontend shows errors after update, verify backend process is the correct version.
-
-**Reset database (safe mode):**
+**Reset database:**
 ```bash
 rm -f backend/data/ocaas.db
-# Runtime init handles table creation
 ```
 
 **Full clean rebuild:**
@@ -264,15 +297,20 @@ rm -f backend/data/ocaas.db
 npm run clean && npm install && npm run build
 ```
 
-## 13. VALIDATION (REQUIRED)
+## 15. VALIDATION
 
 After startup:
 ```bash
 curl localhost:3001/health
-curl localhost:3001/api/system/diagnostics
+curl localhost:3001/api/system/diagnostics | jq
 ```
 
 Check:
 - `status` = `ok`
 - `healthy` = `true`
-- `commit` matches expected version
+- `openclaw.configured` = `true`
+- Execution mode detected (hooks_session or chat_completion)
+
+---
+
+*Updated: 2026-04-06*

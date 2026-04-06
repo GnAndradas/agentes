@@ -138,6 +138,23 @@ export const taskApi = {
       return null;
     }
   },
+
+  /**
+   * Get generation trace for a task (P0-02: End-to-end traceability)
+   * Shows REAL execution details: execution_mode, AI status, raw/final output
+   * Returns null if no trace exists (task not executed yet)
+   */
+  getGenerationTrace: async (taskId: string): Promise<import('../types').ExecutionGenerationTrace | null> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').ExecutionGenerationTrace }>(
+        `/tasks/${taskId}/generation-trace`
+      );
+      return res.data || null;
+    } catch {
+      // 404 = no trace yet, not an error
+      return null;
+    }
+  },
 };
 
 // Skill API

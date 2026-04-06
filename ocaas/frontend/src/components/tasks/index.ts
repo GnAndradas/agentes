@@ -8,3 +8,5 @@ export { CheckpointsPanel } from './CheckpointsPanel';
 export { BudgetPanel } from './BudgetPanel';
 export { DiagnosticsPanel } from './DiagnosticsPanel';
 export { TaskDecisionTracePanel } from './TaskDecisionTracePanel';
+export { GenerationTracePanel } from './GenerationTracePanel';
+export { ToolUsagePanel } from './ToolUsagePanel';

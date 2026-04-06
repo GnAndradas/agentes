@@ -35,4 +35,8 @@ export async function taskRoutes(fastify: FastifyInstance) {
   fastify.post('/:id/checkpoint', state.createCheckpoint);
   fastify.post('/:id/pause', state.pauseTask);
   fastify.post('/:id/resume', state.resumeTask);
+
+  // P0-02: Generation traceability endpoints
+  fastify.get('/:id/generation-trace', h.getGenerationTrace);
+  fastify.get('/:id/generation-trace/history', h.getGenerationTraceHistory);
 }

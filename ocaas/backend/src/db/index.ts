@@ -379,6 +379,29 @@ export async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_decision_traces_task ON decision_traces(task_id);
     CREATE INDEX IF NOT EXISTS idx_decision_traces_decision ON decision_traces(decision);
     CREATE INDEX IF NOT EXISTS idx_decision_traces_created ON decision_traces(created_at);
+
+    -- Generation traces table (for execution traceability)
+    CREATE TABLE IF NOT EXISTS generation_traces (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      job_id TEXT,
+      execution_mode TEXT NOT NULL,
+      ai_requested INTEGER NOT NULL DEFAULT 0,
+      ai_attempted INTEGER NOT NULL DEFAULT 0,
+      ai_succeeded INTEGER NOT NULL DEFAULT 0,
+      fallback_used INTEGER NOT NULL DEFAULT 0,
+      fallback_reason TEXT,
+      raw_output TEXT,
+      final_output TEXT,
+      token_usage TEXT,
+      model TEXT,
+      duration_ms INTEGER,
+      error TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_generation_traces_task ON generation_traces(task_id);
+    CREATE INDEX IF NOT EXISTS idx_generation_traces_job ON generation_traces(job_id);
   `);
 
   // Verify critical tables exist after initialization
@@ -386,7 +409,7 @@ export async function initDatabase(): Promise<void> {
     'tasks', 'agents', 'skills', 'tools', 'skill_tools', 'events',
     'resource_drafts', 'approvals', 'agent_feedback',
     'task_checkpoints', 'execution_leases', 'human_escalations', 'jobs',
-    'decision_traces',
+    'decision_traces', 'generation_traces',
   ];
 
   const existingTables = sqlite.prepare(`

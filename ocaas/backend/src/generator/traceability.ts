@@ -130,7 +130,9 @@ export class GenerationTraceabilityBuilder {
   aiResult(
     success: boolean,
     model?: string,
-    tokens?: { input?: number; output?: number; inputTokens?: number; outputTokens?: number }
+    tokens?: { input?: number; output?: number; inputTokens?: number; outputTokens?: number },
+    provider?: string,
+    runtime?: 'agent' | 'chat_completion'
   ): this {
     this.trace.ai_generation_succeeded = success;
     if (success) {
@@ -139,6 +141,13 @@ export class GenerationTraceabilityBuilder {
     }
     if (model) {
       this.trace.ai_model = model;
+    }
+    // PROMPT 16: Always set provider to 'openclaw' when AI is used
+    // This makes it explicit that generation went through the OpenClaw gateway
+    this.trace.ai_provider = provider ?? 'openclaw';
+    // PROMPT 16B: Track runtime mode (agent vs chat_completion)
+    if (runtime) {
+      this.trace.ai_runtime = runtime;
     }
     if (tokens) {
       // Normalize token format (support both {input, output} and {inputTokens, outputTokens})
@@ -235,6 +244,10 @@ export function toStoredTraceability(trace: FullGenerationTraceability): Record<
     fallback_reason: trace.fallback_reason,
     fallback_template_name: trace.fallback_template_name,
     ai_model: trace.ai_model,
+    // PROMPT 16: Include provider for explicit OpenClaw traceability
+    ai_provider: trace.ai_provider,
+    // PROMPT 16B: Include runtime mode
+    ai_runtime: trace.ai_runtime,
     validator_passed: trace.validator_passed,
     activation_attempted: trace.activation_attempted,
     activation_succeeded: trace.activation_succeeded,
@@ -270,6 +283,10 @@ export function toOriginMetadata(trace: FullGenerationTraceability): Record<stri
     fallback_used: trace.fallback_used,
     fallback_reason: trace.fallback_reason,
     model: trace.ai_model,
+    // PROMPT 16: Include provider for frontend display
+    provider: trace.ai_provider,
+    // PROMPT 16B: Include runtime mode for frontend display
+    runtime: trace.ai_runtime,
     tokens_used: trace.ai_tokens ? (trace.ai_tokens.input + trace.ai_tokens.output) : undefined,
   };
 }

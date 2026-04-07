@@ -98,8 +98,8 @@ export class ToolGenerator {
           outputSchema = response.parsed.outputSchema;
           generatedBy = 'ai';
 
-          // BLOQUE 7: Mark AI success with usage info
-          trace.aiResult(true, 'claude', response.usage);
+          // BLOQUE 7 + PROMPT 16B: Mark AI success with usage and runtime info
+          trace.aiResult(true, 'claude', response.usage, 'openclaw', response.runtime);
 
           logger.debug({
             name: request.name,

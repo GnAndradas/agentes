@@ -28,6 +28,7 @@ interface OriginMetadata {
   fallback_used?: boolean;
   fallback_reason?: string;
   model?: string;
+  /** PROMPT 16: Provider/gateway used for generation */
   provider?: string;
   temperature?: number;
   tokens_used?: number;

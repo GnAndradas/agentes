@@ -40,6 +40,12 @@ export interface GenerationTraceability {
   /** Modelo AI usado (null si fallback) */
   ai_model?: string;
 
+  /** PROMPT 16: Provider/gateway usado para la generación */
+  ai_provider?: string;
+
+  /** PROMPT 16B: Runtime mode usado (agent vs chat_completion) */
+  ai_runtime?: 'agent' | 'chat_completion';
+
   /** Tokens consumidos (null si fallback) */
   ai_tokens?: {
     input: number;

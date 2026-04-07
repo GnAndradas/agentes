@@ -111,8 +111,8 @@ export class AgentGenerator {
           config = response.parsed.config || {};
           generatedBy = 'ai';
 
-          // Record AI success with usage
-          trace.aiResult(true, 'claude', response.usage);
+          // PROMPT 16B: Record AI success with usage and runtime info
+          trace.aiResult(true, 'claude', response.usage, 'openclaw', response.runtime);
 
           logger.debug({
             name: request.name,

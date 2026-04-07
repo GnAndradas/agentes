@@ -6,6 +6,9 @@ import { getGlobalBudgetManager } from '../budget/index.js';
 
 const logger = createLogger('AIClient');
 
+// PROMPT 16B: Default agent for generation via agent runtime
+const GENERATOR_AGENT_ID = 'default-general-agent';
+
 export interface AIGenerationRequest {
   type: 'skill' | 'tool' | 'agent';
   name: string;
@@ -21,6 +24,8 @@ export interface AIGenerationResponse<T = unknown> {
     inputTokens: number;
     outputTokens: number;
   };
+  /** PROMPT 16B: Runtime mode used */
+  runtime?: 'agent' | 'chat_completion';
 }
 
 // Response structures for each type
@@ -68,11 +73,11 @@ export class AIClient {
   /**
    * Generate content using OpenClaw LLM
    *
+   * PROMPT 16B: Primary path is now agent runtime via /hooks/agent.
+   * Falls back to /v1/chat/completions if agent runtime fails.
+   *
    * Uses request.prompt as the primary input (user-provided)
    * Adds structured system prompt based on type to ensure JSON output
-   *
-   * IMPORTANT: No precheck of connectivity. The real request determines
-   * if the gateway is available. This avoids blocking on stale cached state.
    *
    * BUDGET INTEGRATION: Checks budget before generation.
    * May block if budget exceeded.
@@ -117,23 +122,96 @@ export class AIClient {
       }, 'BUDGET WARNING: Approaching budget limit for generation');
     }
 
-    // No precheck - let the actual request determine connectivity
     const systemPrompt = this.buildSystemPrompt(request.type);
     const userPrompt = this.buildUserPrompt(request);
+    const fullPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}`;
 
-    const result = await adapter.generate({
-      systemPrompt,
-      userPrompt,
-      maxTokens: 8192, // Increased for larger generations
-    });
+    // PROMPT 16B: Try agent runtime first (PRIMARY PATH)
+    let content: string | undefined;
+    let runtime: 'agent' | 'chat_completion' = 'chat_completion';
 
-    if (!result.success || !result.content) {
-      throw new GenerationError(`Generation failed: ${result.error?.message ?? 'No content returned'}`);
+    if (adapter.isHooksConfigured()) {
+      logger.debug({
+        type: request.type,
+        name: request.name,
+        agentId: GENERATOR_AGENT_ID,
+      }, 'Attempting generation via agent runtime (PRIMARY)');
+
+      try {
+        const agentResult = await adapter.executeViaHooks({
+          agentId: GENERATOR_AGENT_ID,
+          prompt: fullPrompt,
+          name: `OCAAS Generator: ${request.type}/${request.name}`,
+        });
+
+        if (agentResult.success && agentResult.response) {
+          // Validate response is usable (non-empty, can be parsed)
+          const trimmed = agentResult.response.trim();
+          if (trimmed.length > 10) {
+            content = trimmed;
+            runtime = 'agent';
+            logger.info({
+              type: request.type,
+              name: request.name,
+              executionMode: agentResult.executionMode,
+              responseLength: content.length,
+            }, 'Generation succeeded via agent runtime');
+          } else {
+            logger.warn({
+              type: request.type,
+              name: request.name,
+              responseLength: trimmed.length,
+            }, 'Agent runtime returned empty/short response, falling back');
+          }
+        } else {
+          logger.warn({
+            type: request.type,
+            name: request.name,
+            error: agentResult.error?.message,
+            fallbackReason: agentResult.fallbackReason,
+          }, 'Agent runtime failed, falling back to chat_completion');
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        logger.warn({
+          type: request.type,
+          name: request.name,
+          error: errMsg,
+        }, 'Agent runtime threw exception, falling back to chat_completion');
+      }
+    } else {
+      logger.debug({
+        type: request.type,
+        name: request.name,
+      }, 'Hooks not configured, using chat_completion directly');
     }
 
-    // BUDGET: Record actual cost
-    const inputTokens = result.usage?.inputTokens || 1200; // deep tier estimate
-    const outputTokens = result.usage?.outputTokens || 800;
+    // FALLBACK: Use /v1/chat/completions if agent runtime didn't produce content
+    if (!content) {
+      const result = await adapter.generate({
+        systemPrompt,
+        userPrompt,
+        maxTokens: 8192,
+      });
+
+      if (!result.success || !result.content) {
+        throw new GenerationError(`Generation failed: ${result.error?.message ?? 'No content returned'}`);
+      }
+
+      content = result.content;
+      runtime = 'chat_completion';
+
+      logger.info({
+        type: request.type,
+        name: request.name,
+        inputTokens: result.usage?.inputTokens,
+        outputTokens: result.usage?.outputTokens,
+      }, 'Generation completed via chat_completion (fallback)');
+    }
+
+    // BUDGET: Record cost (estimate for agent runtime, actual for chat_completion)
+    const inputTokens = 1200; // deep tier estimate
+    const outputTokens = 800;
     budgetManager.recordCost({
       task_id: taskId,
       agent_id: agentId,
@@ -148,25 +226,24 @@ export class AIClient {
     // Parse JSON from LLM response (handles markdown fences, etc.)
     let parsed: T;
     try {
-      parsed = parseJsonFromLLM<T>(result.content);
+      parsed = parseJsonFromLLM<T>(content);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'JSON parse error';
-      logger.error({ content: result.content.slice(0, 500) }, `Failed to parse LLM response: ${message}`);
+      logger.error({ content: content.slice(0, 500), runtime }, `Failed to parse LLM response: ${message}`);
       throw new GenerationError(`Invalid LLM response: ${message}`);
     }
 
     logger.info({
       type: request.type,
       name: request.name,
-      inputTokens: result.usage?.inputTokens,
-      outputTokens: result.usage?.outputTokens,
+      runtime,
       budget_decision: budgetCheck.decision,
-    }, 'AI generation completed via OpenClaw Gateway');
+    }, `AI generation completed via OpenClaw (${runtime})`);
 
     return {
-      content: result.content,
+      content,
       parsed,
-      usage: result.usage,
+      runtime,
     };
   }
 

@@ -394,4 +394,73 @@ export class AgentService {
       };
     });
   }
+
+  // ============================================================================
+  // PROMPT 13: BUNDLE GUARD
+  // ============================================================================
+
+  /**
+   * Check if agent is from an incomplete bundle
+   *
+   * PROMPT 13: Agents from partial bundles should NOT be used for task execution.
+   * Returns true if agent belongs to a bundle with bundleStatus !== 'complete'
+   */
+  async isFromIncompleteBundle(id: string): Promise<boolean> {
+    const agent = await this.getById(id);
+    const config = agent.config as Record<string, unknown> | undefined;
+
+    // Check if agent config has bundle metadata
+    const bundleId = config?.bundleId as string | undefined;
+    const bundleStatus = config?.bundleStatus as string | undefined;
+
+    // If no bundle metadata, agent is not from a bundle - OK to use
+    if (!bundleId) {
+      return false;
+    }
+
+    // If bundleStatus explicitly set in config, use it
+    if (bundleStatus) {
+      return bundleStatus !== 'complete';
+    }
+
+    // Fallback: check generation record if agent has generationId
+    const generationId = config?.generationId as string | undefined;
+    if (generationId) {
+      try {
+        // Query generation directly to avoid circular dependency
+        const rows = await db
+          .select()
+          .from(schema.generations)
+          .where(eq(schema.generations.id, generationId))
+          .limit(1);
+
+        if (rows.length > 0) {
+          const genMeta = parseJsonSafe(rows[0]!.metadata) as Record<string, unknown> | undefined;
+          if (genMeta?.bundleStatus) {
+            return genMeta.bundleStatus !== 'complete';
+          }
+        }
+      } catch {
+        // If query fails, assume incomplete for safety
+        logger.warn({ agentId: id, generationId }, 'Failed to check bundle status from generation');
+        return true;
+      }
+    }
+
+    // Has bundleId but no status - treat as incomplete
+    return true;
+  }
+
+  /**
+   * Validate agent is ready for execution
+   *
+   * PROMPT 13: Guards against using agents from incomplete bundles.
+   * Throws ForbiddenError if agent cannot be used.
+   */
+  async validateForExecution(id: string): Promise<void> {
+    const isIncomplete = await this.isFromIncompleteBundle(id);
+    if (isIncomplete) {
+      throw new ForbiddenError('Agent bundle incomplete - cannot execute');
+    }
+  }
 }

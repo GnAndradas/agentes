@@ -1,8 +1,22 @@
 /**
- * Generation Traceability (BLOQUE 7)
+ * Generation Traceability (BLOQUE 7 + PROMPT 13)
  *
  * Tipos y helpers para trazabilidad explícita de generación.
  * Distingue claramente: AI real, fallback, manual, activación.
+ *
+ * PROMPT 13: AI Generation Status Summary
+ * =========================================
+ * | State                  | Fields                                                    |
+ * |------------------------|-----------------------------------------------------------|
+ * | AI attempted + success | ai_generation_attempted=true, ai_generation_succeeded=true|
+ * | AI attempted + failed  | ai_generation_attempted=true, ai_generation_succeeded=false, fallback_used=true |
+ * | AI not configured      | ai_available=false, fallback_used=true, fallback_reason='ai_not_configured' |
+ * | Fallback used          | fallback_used=true, fallback_reason=<reason>, fallback_template_name=<template> |
+ *
+ * generation_mode = 'ai' | 'fallback' | 'manual'
+ *   - 'ai': AI generated successfully
+ *   - 'fallback': Template used (AI failed or not configured)
+ *   - 'manual': User-created resource
  */
 
 import type { GenerationTraceability } from '../types/contracts.js';

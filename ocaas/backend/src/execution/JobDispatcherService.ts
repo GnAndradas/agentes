@@ -523,6 +523,23 @@ export class JobDispatcherService {
     const { jobId } = payload;
     const agentId = payload.agent.agentId;
 
+    // PROMPT 13: Guard against incomplete bundles
+    const { agentService } = getServices();
+    try {
+      await agentService.validateForExecution(agentId);
+    } catch (err) {
+      logger.error({ jobId, agentId }, 'Agent bundle incomplete - cannot execute');
+      return {
+        jobId,
+        dispatched: false,
+        error: {
+          code: 'agent_bundle_incomplete',
+          message: 'Agent bundle incomplete - cannot execute',
+          retryable: false,
+        },
+      };
+    }
+
     // BLOQUE 10: Initialize execution traceability
     const traceBuilder = createExecutionTraceability(agentId);
 

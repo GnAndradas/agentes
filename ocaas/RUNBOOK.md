@@ -272,6 +272,30 @@ Cada generation del bundle tiene:
 
 **Solo `complete` significa bundle usable.**
 
+### [NEW] PROMPT 13: Bundle Guard
+
+Agents from incomplete bundles are **blocked from execution**.
+
+```typescript
+// JobDispatcherService.executeJob checks:
+await agentService.validateForExecution(agentId);
+// Throws if bundleStatus !== 'complete'
+```
+
+Error returned:
+```json
+{
+  "status": "failed",
+  "error": {
+    "code": "agent_bundle_incomplete",
+    "message": "Agent bundle incomplete - cannot execute",
+    "retryable": false
+  }
+}
+```
+
+**Important:** This guard prevents task execution with partially-created agents.
+
 ### API Usage
 
 ```typescript
@@ -636,11 +660,28 @@ POST /api/agents/:id/materialize
 - TaskGenerateAgentFlowPanel tracks: generated / linked / pending approval
 - Honest status: shows real state, not optimistic assumptions
 
-**inject_task.sh:**
+**inject_task.sh (PROMPT 12):**
 ```bash
-./inject_task.sh   # Creates task, prints ID, exits
+# FSM-compliant task injection: pending -> queued
+./inject_task.sh
+
+# With optional agent assignment: pending -> queued -> assigned
+./inject_task.sh --assign <AGENT_ID>
 ```
-Pure injector: no polling, no GET, just POST and return ID.
+Validates backend reachable, creates task, queues it properly.
+
+**inject_bundle_google_search.ts (PROMPT 12):**
+```bash
+# From repo root:
+cd backend && npx tsx ../inject_bundle_google_search.ts
+```
+Creates tool + skill + agent bundle. Requires `OPENCLAW_API_KEY`.
+
+**smoke_test_hooks.sh (PROMPT 12):**
+```bash
+./smoke_test_hooks.sh
+```
+Validates env vars, backend health, gateway connectivity, task FSM.
 
 ## 20. KNOWN GAPS
 
@@ -732,7 +773,45 @@ Check:
 - `openclaw.configured` = `true`
 - Execution mode detected (hooks_session or chat_completion)
 
+## 24. [NEW] AI GENERATION STATUS (PROMPT 13)
+
+### Generation Traceability Fields
+
+| Field | Description |
+|-------|-------------|
+| `ai_generation_attempted` | True if AI generation was tried |
+| `ai_generation_succeeded` | True if AI returned valid response |
+| `fallback_used` | True if template was used instead |
+| `fallback_reason` | Why fallback: `ai_not_configured`, `ai_request_failed`, etc. |
+| `generation_mode` | Final mode: `'ai'` \| `'fallback'` \| `'manual'` |
+
+### Status Interpretation
+
+| Scenario | Fields |
+|----------|--------|
+| AI success | `ai_generation_attempted=true`, `ai_generation_succeeded=true`, `generation_mode='ai'` |
+| AI failed | `ai_generation_attempted=true`, `ai_generation_succeeded=false`, `fallback_used=true` |
+| No AI configured | `ai_available=false`, `fallback_used=true`, `fallback_reason='ai_not_configured'` |
+| Manual creation | `generation_mode='manual'` |
+
+### Important: generation != resource
+
+```
+generation created  ≠  resource usable
+
+Lifecycle:
+1. Generation created (status: 'pending')
+2. Generation generated (status: 'generated')
+3. Generation pending_approval (status: 'pending_approval')
+4. Generation approved (status: 'approved')
+5. Resource activated (agent/tool/skill created in DB)
+6. Resource materialized (workspace files created)
+
+Only after step 5 is the resource usable.
+For bundles: bundleStatus must be 'complete'.
+```
+
 ---
 
-*Updated: 2026-04-06*
-*Sections marked [NEW] or [UPDATED] reflect PROMPT 7-11 changes*
+*Updated: 2026-04-07*
+*Sections marked [NEW] or [UPDATED] reflect PROMPT 7-13 changes*

@@ -10,9 +10,10 @@ const envSchema = z.object({
   // OpenClaw REST API (synchronous - for AI generation)
   OPENCLAW_GATEWAY_URL: z.string().url().default('http://localhost:18789'),
   OPENCLAW_WORKSPACE_PATH: z.string().default('~/.openclaw/workspace'),
-  // Token for REST API (/v1/chat/completions, /v1/models)
+  // Token for REST API (/v1/chat/completions, /v1/models) - used in chat_completion fallback mode
   OPENCLAW_API_KEY: z.string().optional(),
-  // Token for Webhooks (/hooks/agent, /hooks/wake) - defaults to API_KEY if not set
+  // Token for Webhooks (/hooks/agent, /hooks/wake) - SEPARATE from API_KEY, no fallback
+  // PROMPT 13: Tokens are independent, not interchangeable
   OPENCLAW_HOOKS_TOKEN: z.string().optional(),
   // Enable generation probe during diagnostics (tests actual AI generation)
   OPENCLAW_ENABLE_GENERATION_PROBE: z.coerce.boolean().default(false),

@@ -400,6 +400,27 @@ interface BundleOutput {
 | `partial` | Bundle en progreso o fallo parcial | Check error, may have orphaned resources |
 | `complete` | Todos los pasos exitosos | Bundle usable |
 
+### [NEW] PROMPT 13: Bundle Guard
+
+Agents from incomplete bundles are **blocked from execution** in `JobDispatcherService.executeJob()`:
+
+```typescript
+await agentService.validateForExecution(agentId);
+// Throws ForbiddenError if bundleStatus !== 'complete'
+```
+
+Error response:
+```json
+{
+  "status": "failed",
+  "error": {
+    "code": "agent_bundle_incomplete",
+    "message": "Agent bundle incomplete - cannot execute",
+    "retryable": false
+  }
+}
+```
+
 ### Usage
 
 ```typescript
@@ -915,5 +936,69 @@ curl localhost:3001/api/tasks/{id}/generation-trace | jq
 
 ---
 
-*Actualizado: 2026-04-06*
-*Sections marked [NEW] or [UPDATED] reflect PROMPT 7-11 changes*
+## [NEW] AI Generation Status (PROMPT 13)
+
+### Generation Traceability Fields
+
+| Field | Description |
+|-------|-------------|
+| `ai_generation_attempted` | True if AI generation was tried |
+| `ai_generation_succeeded` | True if AI returned valid response |
+| `fallback_used` | True if template was used instead |
+| `fallback_reason` | Why fallback: `ai_not_configured`, `ai_request_failed`, etc. |
+| `generation_mode` | Final mode: `'ai'` \| `'fallback'` \| `'manual'` |
+
+### Status Interpretation
+
+| Scenario | Fields |
+|----------|--------|
+| AI success | `ai_generation_attempted=true`, `ai_generation_succeeded=true`, `generation_mode='ai'` |
+| AI failed | `ai_generation_attempted=true`, `ai_generation_succeeded=false`, `fallback_used=true` |
+| No AI configured | `ai_available=false`, `fallback_used=true`, `fallback_reason='ai_not_configured'` |
+
+### Important: generation != resource
+
+```
+generation created  ≠  resource usable
+
+Lifecycle:
+1. Generation created (status: 'pending')
+2. Generation generated (status: 'generated')
+3. Generation pending_approval
+4. Generation approved
+5. Resource activated (agent/tool/skill in DB)
+6. Resource materialized (workspace files)
+
+Only after step 5 is the resource usable.
+For bundles: bundleStatus must be 'complete'.
+```
+
+---
+
+## [NEW] Test Scripts (PROMPT 12)
+
+### inject_task.sh
+```bash
+# FSM-compliant: pending -> queued
+./inject_task.sh
+
+# With agent assignment: pending -> queued -> assigned
+./inject_task.sh --assign <AGENT_ID>
+```
+
+### inject_bundle_google_search.ts
+```bash
+cd backend && npx tsx ../inject_bundle_google_search.ts
+```
+Requires `OPENCLAW_API_KEY` for AI generation.
+
+### smoke_test_hooks.sh
+```bash
+./smoke_test_hooks.sh
+```
+Validates env vars, backend, gateway, task FSM.
+
+---
+
+*Actualizado: 2026-04-07*
+*Sections marked [NEW] or [UPDATED] reflect PROMPT 7-13 changes*

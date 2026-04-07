@@ -272,6 +272,7 @@ export type JobErrorCode =
   | 'tool_error'
   | 'skill_error'
   | 'resource_error'
+  | 'agent_bundle_incomplete' // PROMPT 13: Agent from incomplete bundle
   | 'unknown';
 
 // ============================================================================

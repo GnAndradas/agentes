@@ -62,11 +62,11 @@ const logger = createLogger('JobDispatcherService');
 // =============================================================================
 
 /**
- * Timeout for accepted_async execution before fallback/failure
- * When hooks_session accepts dispatch but no immediate response,
- * wait this long before triggering fallback or marking failed.
+ * PROMPT 17: Timeout for accepted_async before fallback
+ * Reduced from 10s to 3s - hooks is fire-and-forget, no point waiting long.
+ * If hooks can't return sync response, fallback immediately.
  */
-const HOOKS_ASYNC_TIMEOUT_MS = 10000; // 10 seconds
+const HOOKS_ASYNC_TIMEOUT_MS = 3000; // 3 seconds
 
 // =============================================================================
 // TOOL CALL DETECTION
@@ -746,8 +746,11 @@ export class JobDispatcherService {
         traceBuilder.fallbackUsed(hooksResult.fallbackReason || 'Unknown fallback reason');
       }
 
-      // BLOQUE 10: Mark transport success
-      traceBuilder.transportSuccess(hooksResult.success);
+      // PROMPT 17: transport_success should only be true if we got an actual response
+      // OR if fallback was used successfully (set later)
+      // hooks accepted but no response = transport NOT complete yet
+      const hooksGotResponse = hooksResult.success && !!hooksResult.response;
+      traceBuilder.transportSuccess(hooksGotResponse);
 
       // HOOKS MIGRATION: Mark accepted_async for hooks_session without immediate response
       if (hooksResult.success && hooksResult.accepted && !hooksResult.response && hooksResult.executionMode === 'hooks_session') {
@@ -830,6 +833,8 @@ export class JobDispatcherService {
             usedAsyncFallback = true;
             traceBuilder.fallbackUsed('async_timeout_fallback_to_chat_completion');
             traceBuilder.responseReceived();
+            // PROMPT 17: Mark transport success now that fallback worked
+            traceBuilder.transportSuccess(true);
             traceBuilder.mode('chat_completion', 'rest_api');
 
             logger.info({

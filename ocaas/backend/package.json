@@ -11,6 +11,8 @@
     "bootstrap": "tsx src/bootstrap/startup.ts",
     "doctor": "tsx src/bootstrap/doctor.ts",
     "smoke-test": "tsx scripts/smoke-test.ts",
+    "inject-bundle": "tsx scripts/inject-bundle.ts",
+    "inject-task": "tsx scripts/inject-task.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "npx drizzle-kit push",
     "db:studio": "drizzle-kit studio",

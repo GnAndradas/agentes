@@ -233,14 +233,27 @@ export class AgentGenerator {
       throw new Error('Missing or invalid generated content for agent');
     }
 
-    // BLOQUE 9: Attempt real materialization (workspace + config files)
+    // PROMPT 17: Extract linked tools/skills from metadata
+    const meta = generation.metadata || {};
+    const linkedTools: string[] = [];
+    const linkedSkills: string[] = [];
+
+    // Check for linked resources in metadata
+    if (meta.linkedToolId) linkedTools.push(meta.linkedToolId as string);
+    if (meta.tools && Array.isArray(meta.tools)) linkedTools.push(...(meta.tools as string[]));
+    if (meta.linkedSkillId) linkedSkills.push(meta.linkedSkillId as string);
+    if (meta.skills && Array.isArray(meta.skills)) linkedSkills.push(...(meta.skills as string[]));
+
+    // BLOQUE 9 + PROMPT 17: Attempt real materialization (workspace + config files + tools/skills)
     const materializationTrace = await materializeAgent(
       generation.name,
       content.type,
       generation.description,
       content.capabilities,
       content.config,
-      'activation'
+      'activation',
+      linkedTools.length > 0 ? linkedTools : undefined,
+      linkedSkills.length > 0 ? linkedSkills : undefined
     );
 
     // Compute final materialization status

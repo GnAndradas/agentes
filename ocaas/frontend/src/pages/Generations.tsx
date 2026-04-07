@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { History, CheckCircle, XCircle, Play, Bot, Sparkles, Wrench, Eye } from 'lucide-react';
+import { History, CheckCircle, XCircle, Play, Bot, Sparkles, Wrench, Eye, Ban } from 'lucide-react';
 import { generationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -18,6 +18,39 @@ import {
 } from '../components/ui';
 import type { Generation } from '../types';
 import { fromTimestamp } from '../lib/date';
+
+// PROMPT 14: Helper to determine origin for list display
+function getOriginBadge(generation: Generation): { label: string; variant: 'success' | 'pending' | 'inactive' } | null {
+  const meta = generation.metadata || {};
+  const generatedBy = meta.generated_by as string | undefined;
+  const aiAttempted = meta.ai_attempted as boolean | undefined;
+  const aiSucceeded = meta.ai_succeeded as boolean | undefined;
+  const fallbackUsed = meta.fallback_used as boolean | undefined;
+
+  // AI successful
+  if (generatedBy === 'ai' || (aiAttempted && aiSucceeded)) {
+    return { label: 'AI', variant: 'success' };
+  }
+
+  // Fallback used
+  if (generatedBy === 'fallback' || fallbackUsed || (aiAttempted && !aiSucceeded)) {
+    return { label: 'Fallback', variant: 'pending' };
+  }
+
+  return null;
+}
+
+// PROMPT 14: Check for bundle partial
+function isBundlePartial(generation: Generation): boolean {
+  const meta = generation.metadata || {};
+  return !!(meta.bundleId && meta.bundleStatus === 'partial');
+}
+
+// PROMPT 15: Check if ready for execution
+function isReadyForExecution(generation: Generation): boolean {
+  if (generation.status !== 'active') return false;
+  return !isBundlePartial(generation);
+}
 
 const statusVariant = {
   draft: 'inactive',
@@ -140,9 +173,33 @@ export function Generations() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={statusVariant[generation.status]}>
-                        {generation.status.replace('_', ' ')}
-                      </Badge>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge variant={statusVariant[generation.status]}>
+                          {generation.status.replace('_', ' ')}
+                        </Badge>
+                        {/* PROMPT 14: Origin indicator */}
+                        {(() => {
+                          const origin = getOriginBadge(generation);
+                          return origin ? (
+                            <Badge variant={origin.variant} className="text-xs">
+                              {origin.label}
+                            </Badge>
+                          ) : null;
+                        })()}
+                        {/* PROMPT 15: Ready for Execution indicator */}
+                        {isReadyForExecution(generation) && (
+                          <Badge variant="success" className="text-xs">
+                            <span className="mr-1">●</span>Ready
+                          </Badge>
+                        )}
+                        {/* PROMPT 14: Bundle partial warning */}
+                        {isBundlePartial(generation) && (
+                          <Badge variant="error" className="text-xs">
+                            <Ban className="w-3 h-3 mr-1" />
+                            Not Usable
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-dark-400 text-xs">
                       {formatDate(generation.createdAt)}

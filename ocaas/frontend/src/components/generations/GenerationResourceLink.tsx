@@ -1,6 +1,11 @@
 /**
  * GenerationResourceLink
  *
+ * PROMPT 14: Enhanced to clearly show:
+ * - Generation status vs Resource state
+ * - Bundle partial warning
+ * - Clear "not usable yet" messaging
+ *
  * Links to the final activated resource (agent/skill/tool) if it exists.
  * Shows resource status and quick navigation.
  */
@@ -14,6 +19,8 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
+  Clock,
+  Ban,
 } from 'lucide-react';
 import { Badge } from '../ui';
 import type { Generation, GenerationType } from '../../types';
@@ -80,6 +87,49 @@ function extractResourceStatus(generation: Generation): string | null {
   return (meta.resourceStatus as string) || null;
 }
 
+/**
+ * PROMPT 14: Check if this is from an incomplete bundle
+ */
+function extractBundleStatus(generation: Generation): {
+  isBundle: boolean;
+  bundleStatus: string | null;
+  bundleId: string | null;
+} {
+  const meta = generation.metadata || {};
+  const bundleId = (meta.bundleId as string) || null;
+  const bundleStatus = (meta.bundleStatus as string) || null;
+
+  return {
+    isBundle: !!bundleId,
+    bundleStatus,
+    bundleId,
+  };
+}
+
+/**
+ * PROMPT 14: Determine if resource is actually usable
+ */
+function isResourceUsable(generation: Generation): { usable: boolean; reason?: string } {
+  // Not active = not usable
+  if (generation.status !== 'active') {
+    return { usable: false, reason: 'Generation not activated' };
+  }
+
+  // Bundle partial = not usable
+  const bundle = extractBundleStatus(generation);
+  if (bundle.isBundle && bundle.bundleStatus !== 'complete') {
+    return { usable: false, reason: 'Bundle incomplete' };
+  }
+
+  // No resource ID = might be usable but can't link
+  const resourceId = extractResourceId(generation);
+  if (!resourceId) {
+    return { usable: true, reason: 'Resource ID not recorded' };
+  }
+
+  return { usable: true };
+}
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
@@ -89,34 +139,94 @@ export function GenerationResourceLink({ generation }: GenerationResourceLinkPro
   const Icon = config.icon;
   const resourceId = extractResourceId(generation);
   const resourceStatus = extractResourceStatus(generation);
+  const bundle = extractBundleStatus(generation);
+  // Note: isResourceUsable available for future use
+  void isResourceUsable; // Suppress unused warning
 
-  // Not activated yet
-  if (generation.status !== 'active') {
+  // PROMPT 14: Bundle partial warning - show prominently
+  if (bundle.isBundle && bundle.bundleStatus === 'partial') {
     return (
-      <div className="p-4 bg-dark-800 border border-dark-700 rounded-lg">
+      <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
+            <Ban className="w-5 h-5 text-red-400" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-red-400 font-medium">Bundle Incomplete</p>
+              <Badge variant="error" className="text-xs">Not Usable</Badge>
+            </div>
+            <p className="text-xs text-red-300 mt-0.5">
+              This {config.label.toLowerCase()} is part of an incomplete bundle and cannot be used for execution.
+            </p>
+          </div>
+          <AlertTriangle className="w-5 h-5 text-red-400" />
+        </div>
+      </div>
+    );
+  }
+
+  // PROMPT 14: Not activated yet - clearer messaging by status
+  if (generation.status !== 'active') {
+    // Determine specific message and styling
+    let message: string;
+    let subMessage: string;
+    let StatusIcon: React.ElementType;
+    let borderColor: string;
+    let iconColor: string;
+
+    switch (generation.status) {
+      case 'rejected':
+        message = 'Generation Rejected';
+        subMessage = 'This generation was rejected and no resource was created';
+        StatusIcon = XCircle;
+        borderColor = 'border-red-500/30';
+        iconColor = 'text-red-400';
+        break;
+      case 'failed':
+        message = 'Generation Failed';
+        subMessage = 'Generation process failed - no resource created';
+        StatusIcon = XCircle;
+        borderColor = 'border-red-500/30';
+        iconColor = 'text-red-400';
+        break;
+      case 'pending_approval':
+        message = 'Awaiting Approval';
+        subMessage = 'Generation ready. Approve and activate to create the actual resource.';
+        StatusIcon = Clock;
+        borderColor = 'border-yellow-500/30';
+        iconColor = 'text-yellow-400';
+        break;
+      case 'approved':
+        // PROMPT 15: Clearer label
+        message = 'Approved (Not Activated)';
+        subMessage = 'Approved but not yet activated. Click Activate to create the resource.';
+        StatusIcon = Clock;
+        borderColor = 'border-blue-500/30';
+        iconColor = 'text-blue-400';
+        break;
+      default:
+        message = 'Resource Not Yet Created';
+        subMessage = 'Complete the generation workflow to create the resource';
+        StatusIcon = AlertTriangle;
+        borderColor = 'border-dark-600';
+        iconColor = 'text-dark-400';
+    }
+
+    return (
+      <div className={`p-4 bg-dark-800 border ${borderColor} rounded-lg`}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-dark-700 flex items-center justify-center">
             <Icon className="w-5 h-5 text-dark-500" />
           </div>
           <div className="flex-1">
-            <p className="text-sm text-dark-400">Resource Not Created</p>
-            <p className="text-xs text-dark-500 mt-0.5">
-              {generation.status === 'rejected'
-                ? 'This generation was rejected'
-                : generation.status === 'failed'
-                ? 'This generation failed'
-                : 'Approve and activate to create the resource'}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-dark-300">{message}</p>
+              <Badge variant="inactive" className="text-xs">No Resource</Badge>
+            </div>
+            <p className="text-xs text-dark-500 mt-0.5">{subMessage}</p>
           </div>
-          {generation.status === 'rejected' && (
-            <XCircle className="w-5 h-5 text-red-400" />
-          )}
-          {generation.status === 'failed' && (
-            <AlertTriangle className="w-5 h-5 text-red-400" />
-          )}
-          {generation.status !== 'rejected' && generation.status !== 'failed' && (
-            <AlertTriangle className="w-5 h-5 text-yellow-400" />
-          )}
+          <StatusIcon className={`w-5 h-5 ${iconColor}`} />
         </div>
       </div>
     );
@@ -147,6 +257,9 @@ export function GenerationResourceLink({ generation }: GenerationResourceLinkPro
   // Have resource ID - show link
   const resourceUrl = `${config.route}/${resourceId}`;
 
+  // PROMPT 15: Check if ready for execution
+  const isReadyForExecution = generation.status === 'active' && bundle.bundleStatus !== 'partial';
+
   return (
     <Link
       to={resourceUrl}
@@ -157,7 +270,7 @@ export function GenerationResourceLink({ generation }: GenerationResourceLinkPro
           <Icon className={`w-5 h-5 ${config.color}`} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-medium truncate">
               {generation.name}
             </p>
@@ -171,6 +284,12 @@ export function GenerationResourceLink({ generation }: GenerationResourceLinkPro
                 className="text-xs"
               >
                 {resourceStatus}
+              </Badge>
+            )}
+            {/* PROMPT 15: Ready for Execution badge */}
+            {isReadyForExecution && (
+              <Badge variant="success" className="text-xs">
+                <span className="mr-1">●</span>Ready
               </Badge>
             )}
           </div>

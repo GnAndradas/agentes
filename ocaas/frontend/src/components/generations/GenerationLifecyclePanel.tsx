@@ -283,19 +283,92 @@ export function GenerationLifecyclePanel({ generation }: GenerationLifecyclePane
         </div>
       </div>
 
-      {/* Current Status Badge */}
-      <div className="flex items-center justify-between p-3 bg-dark-800 rounded-lg">
-        <span className="text-sm text-dark-400">Current Status</span>
-        <Badge
-          variant={
-            generation.status === 'active' || generation.status === 'approved' ? 'success' :
-            generation.status === 'rejected' || generation.status === 'failed' ? 'error' :
-            generation.status === 'pending_approval' || generation.status === 'generated' ? 'pending' :
-            'inactive'
+      {/* PROMPT 14 + 15: Current Status Badge with clear labels */}
+      <div className="space-y-2">
+        {/* Generation Status */}
+        <div className="flex items-center justify-between p-3 bg-dark-800 rounded-lg">
+          <span className="text-sm text-dark-400">Generation Status</span>
+          <Badge
+            variant={
+              generation.status === 'active' || generation.status === 'approved' ? 'success' :
+              generation.status === 'rejected' || generation.status === 'failed' ? 'error' :
+              generation.status === 'pending_approval' || generation.status === 'generated' ? 'pending' :
+              'inactive'
+            }
+          >
+            {generation.status.replace('_', ' ')}
+          </Badge>
+        </div>
+
+        {/* PROMPT 15: Resource Status - separate from generation */}
+        <div className="flex items-center justify-between p-3 bg-dark-800 rounded-lg">
+          <span className="text-sm text-dark-400">Resource State</span>
+          {generation.status === 'active' ? (
+            <Badge variant="active">Active</Badge>
+          ) : generation.status === 'approved' ? (
+            <Badge variant="pending">Approved (Not Activated)</Badge>
+          ) : generation.status === 'rejected' || generation.status === 'failed' ? (
+            <Badge variant="error">Not Created</Badge>
+          ) : (
+            <Badge variant="inactive">Not Created</Badge>
+          )}
+        </div>
+
+        {/* PROMPT 15: Ready for Execution indicator */}
+        {(() => {
+          const meta = generation.metadata || {};
+          const isBundle = !!meta.bundleId;
+          const bundlePartial = meta.bundleStatus === 'partial';
+
+          if (generation.status === 'active' && !bundlePartial) {
+            return (
+              <div className="p-2 bg-green-500/10 border border-green-500/30 rounded">
+                <div className="flex items-center gap-2">
+                  <span className="text-green-400">●</span>
+                  <span className="text-xs text-green-400 font-medium">Ready for Execution</span>
+                </div>
+              </div>
+            );
           }
-        >
-          {generation.status.replace('_', ' ')}
-        </Badge>
+
+          if (isBundle && bundlePartial) {
+            return (
+              <div className="p-2 bg-red-500/10 border border-red-500/30 rounded">
+                <div className="flex items-center gap-2">
+                  <span className="text-red-400">●</span>
+                  <span className="text-xs text-red-400 font-medium">Not Usable (Bundle Incomplete)</span>
+                </div>
+              </div>
+            );
+          }
+
+          // Not active yet
+          if (generation.status !== 'active') {
+            return (
+              <div className="p-2 bg-dark-900 border border-dark-700 rounded">
+                <p className="text-xs text-dark-400">
+                  {generation.status === 'pending_approval' && (
+                    <>Resource will be created after approval and activation.</>
+                  )}
+                  {generation.status === 'approved' && (
+                    <>Resource will be created when activated.</>
+                  )}
+                  {generation.status === 'generated' && (
+                    <>Awaiting review. Approve to proceed.</>
+                  )}
+                  {(generation.status === 'rejected' || generation.status === 'failed') && (
+                    <>This generation cannot create a resource.</>
+                  )}
+                  {generation.status === 'draft' && (
+                    <>Generation in progress.</>
+                  )}
+                </p>
+              </div>
+            );
+          }
+
+          return null;
+        })()}
       </div>
 
       {/* Validation Result */}

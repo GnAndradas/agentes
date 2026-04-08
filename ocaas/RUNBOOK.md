@@ -137,16 +137,62 @@ Flujo:
 
 ## 6. [NEW] OPENCLAW INTEGRATION
 
+### Chat Completions Endpoint Configuration
+
+**Required configuration in OpenClaw:**
+
+Edit `~/.openclaw/openclaw.json` to enable Chat Completions:
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}
+```
+
+**Critical:** If `chatCompletions.enabled` is false, `/v1/chat/completions` returns 404.
+- El campo "model" debe ser un target de OpenClaw (ej: "openclaw/default"), no un modelo directo de proveedor.
+
+### Token Synchronization
+
+**Step 1: Obtain token from OpenClaw**
+```bash
+openclaw config get gateway.token
+```
+
+**Step 2: Copy token to OCAAS environment**
+File: `backend/.env` (ruta relativa al proyecto)
+```bash
+OPENCLAW_API_KEY=<token_from_step_1>
+```
+- OpenClaw es la fuente de verdad del token (gateway.token). OCAAS solo replica ese valor.
+
+**Token usage locations in OCAAS:**
+- `src/config/env.ts` - Environment variable definition
+- `src/openclaw/gateway.ts` - Bearer token for REST API calls
+- `src/integrations/openclaw/OpenClawAdapter.ts` - HTTP client authentication
+
+**Important:** When token is regenerated in OpenClaw, it must be updated in both OpenClaw and OCAAS.
+
 ### Token Separation
 
 ```bash
 # REST API (fallback mode)
-OPENCLAW_API_KEY=<key>
+OPENCLAW_API_KEY=<token_from_openclaw>
 # Used for: /v1/chat/completions, /v1/models
+# Header: Authorization: Bearer <token>
 
 # Hooks/Webhooks (primary mode)
-OPENCLAW_HOOKS_TOKEN=<token>
+OPENCLAW_HOOKS_TOKEN=<separate_token>
 # Used for: /hooks/agent, /hooks/wake
+# Header: x-openclaw-token: <token>
 ```
 
 **IMPORTANTE:** Los tokens son SEPARADOS. No hay fallback automatico de uno al otro.
@@ -478,15 +524,18 @@ API_SECRET_KEY=<min-16-chars>
 OPENCLAW_HOOKS_TOKEN=<token>
 
 # For chat_completion (FALLBACK) - REQUIRED for fallback
-OPENCLAW_API_KEY=<key>
+OPENCLAW_API_KEY=<token_from_openclaw_config>
 
 AUTONOMY_LEVEL=supervised
 ```
 
 **Startup order:**
-1. OpenClaw gateway
-2. Backend: `npm run dev` (from backend/)
-3. Frontend: `npm run dev` (from frontend/)
+1. Configure OpenClaw: Edit `~/.openclaw/openclaw.json` to enable chatCompletions
+2. Get OpenClaw token: `openclaw config get gateway.token`
+3. Configure OCAAS: Add token to `backend/.env` as `OPENCLAW_API_KEY`
+4. Start OpenClaw gateway
+5. Start Backend: `npm run dev` (from backend/)
+6. Start Frontend: `npm run dev` (from frontend/)
 
 ## 13. CRITICAL CHECKS
 
@@ -497,6 +546,19 @@ curl localhost:3001/health
 # Gateway + mode detection
 curl localhost:3001/api/system/diagnostics | jq '.openclaw'
 
+# Verify OpenClaw gateway
+curl http://localhost:18789/health
+- Debe responder OK antes de probar /v1/models o /v1/chat/completions
+
+# Verify OpenClaw endpoints
+curl localhost:18789/v1/models -H "Authorization: Bearer $OPENCLAW_API_KEY"
+- Debe devolver una lista no vacía.
+- Si devuelve vacío o error, el gateway no está correctamente configurado.
+curl -X POST localhost:18789/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENCLAW_API_KEY" \
+  -d '{"model":"openclaw/default","messages":[{"role":"user","content":"test"}]}'
+
 # Create test task
 curl -X POST localhost:3001/api/tasks \
   -H "Content-Type: application/json" \
@@ -506,6 +568,9 @@ curl -X POST localhost:3001/api/tasks \
 **Expected:**
 - `/health` -> `{"status":"ok"}`
 - `openclaw.configured` -> `true`
+- `/health` -> OK
+- `/v1/models` returns non-empty list
+- `/v1/chat/completions` returns response (not 404)
 - Task creates -> Job dispatches via detected mode
 
 ## 14. OPERATIONS
@@ -564,6 +629,20 @@ PATCH /api/system/autonomy -d '{"level":"autonomous"}'
 | [NEW] Warmup fails | Check logs | Non-blocking, execution continues |
 | [NEW] accepted_async timeout | Normal behavior | Fallback will handle |
 | [NEW] Bundle partial | Check error in result | Retry or manual fix |
+
+### Failure Symptoms
+
+**404 on /v1/chat/completions**
+- Cause: Chat Completions endpoint not enabled in OpenClaw
+- Fix: Edit `~/.openclaw/openclaw.json` and set `gateway.http.endpoints.chatCompletions.enabled = true`
+
+**Auth / provider / fallback errors**
+- Cause: Token mismatch or incorrect configuration
+- Fix: Verify `OPENCLAW_API_KEY` matches `openclaw config get gateway.token`
+
+**OCAAS stuck in fallback mode**
+- Cause: Token synchronization issue or gateway configuration problem
+- Fix: Re-sync token from OpenClaw to OCAAS, verify gateway configuration
 
 ### [NEW] Common Error Patterns
 

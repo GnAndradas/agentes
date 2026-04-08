@@ -45,4 +45,7 @@ export async function systemRoutes(fastify: FastifyInstance) {
   fastify.get('/system/logs', h.getLogs);
   fastify.get('/system/logs/errors', h.getLogsErrors);
   fastify.get('/system/logs/recent', h.getLogsRecent);
+
+  // PROMPT 20: Full diagnostics for Settings panel
+  fastify.get('/system/full-diagnostics', h.fullDiagnostics);
 }

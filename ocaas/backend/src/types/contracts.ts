@@ -10,6 +10,30 @@
 // ============================================================================
 
 /**
+ * PROMPT 19: AI error stages for precise diagnostics
+ */
+export type AIErrorStage =
+  | 'gateway_unreachable'    // Gateway/OpenClaw not reachable
+  | 'hooks_not_configured'   // Hooks not configured in adapter
+  | 'hooks_dispatch_failed'  // Hooks dispatch returned error
+  | 'no_response'            // No response received from AI
+  | 'timeout'                // Request timed out
+  | 'empty_response'         // Response received but content empty
+  | 'invalid_shape'          // Response format invalid (not JSON, missing fields)
+  | 'validator_failed'       // Content parsed but failed validation
+  | 'parse_failed'           // Could not parse response content
+  | 'provider_error'         // Provider/model returned explicit error
+  | 'unknown';               // Unknown error
+
+/**
+ * PROMPT 19: AI error classification
+ */
+export type AIErrorType =
+  | 'technical'              // Gateway/network/timeout issues
+  | 'unusable_response'      // AI responded but content not usable
+  | 'none';                  // No error
+
+/**
  * Trazabilidad de generación AI
  */
 export interface GenerationTraceability {
@@ -51,6 +75,37 @@ export interface GenerationTraceability {
     input: number;
     output: number;
   };
+
+  // =========================================================================
+  // PROMPT 19: Detailed AI error tracking
+  // =========================================================================
+
+  /** PROMPT 19: Request started (attempted to call AI) */
+  ai_request_started?: boolean;
+
+  /** PROMPT 19: Request reached gateway (connection established) */
+  ai_request_reached_gateway?: boolean;
+
+  /** PROMPT 19: Raw response received from AI (before parsing) */
+  ai_raw_response_received?: boolean;
+
+  /** PROMPT 19: Content was usable (parsed and validated successfully) */
+  ai_content_usable?: boolean;
+
+  /** PROMPT 19: Error type classification */
+  ai_error_type?: AIErrorType;
+
+  /** PROMPT 19: Error stage (where exactly it failed) */
+  ai_error_stage?: AIErrorStage;
+
+  /** PROMPT 19: Error code (if provider returned one) */
+  ai_error_code?: string;
+
+  /** PROMPT 19: Error message (human readable) */
+  ai_error_message?: string;
+
+  /** PROMPT 19: Raw response snippet for debugging (truncated) */
+  ai_raw_response_snippet?: string;
 }
 
 /**

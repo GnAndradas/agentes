@@ -1,8 +1,12 @@
 import { getOpenClawAdapter } from '../integrations/openclaw/index.js';
 import { createLogger } from '../utils/logger.js';
-import { GenerationError, BudgetExceededError } from '../utils/errors.js';
+import { GenerationError, BudgetExceededError, AIGenerationError } from '../utils/errors.js';
 import { parseJsonFromLLM } from '../utils/helpers.js';
 import { getGlobalBudgetManager } from '../budget/index.js';
+import type { AIErrorStage, AIErrorType } from '../types/contracts.js';
+
+// Re-export for convenience
+export { AIGenerationError } from '../utils/errors.js';
 
 const logger = createLogger('AIClient');
 
@@ -17,6 +21,17 @@ export interface AIGenerationRequest {
   requirements?: string[];
 }
 
+/**
+ * PROMPT 19: Detailed AI error info for traceability
+ */
+export interface AIErrorInfo {
+  type: AIErrorType;
+  stage: AIErrorStage;
+  message: string;
+  code?: string;
+  rawResponseSnippet?: string;
+}
+
 export interface AIGenerationResponse<T = unknown> {
   content: string; // Raw LLM response
   parsed: T; // Parsed JSON object
@@ -26,6 +41,15 @@ export interface AIGenerationResponse<T = unknown> {
   };
   /** PROMPT 16B: Runtime mode used */
   runtime?: 'agent' | 'chat_completion';
+  // PROMPT 19: Detailed tracking fields
+  /** Request was started */
+  requestStarted?: boolean;
+  /** Request reached gateway */
+  reachedGateway?: boolean;
+  /** Raw response was received */
+  rawResponseReceived?: boolean;
+  /** Content was usable */
+  contentUsable?: boolean;
 }
 
 // Response structures for each type
@@ -186,27 +210,70 @@ export class AIClient {
       }, 'Hooks not configured, using chat_completion directly');
     }
 
+    // PROMPT 19: Track detailed state for traceability
+    let requestStarted = false;
+    let reachedGateway = false;
+    let rawResponseReceived = false;
+
     // FALLBACK: Use /v1/chat/completions if agent runtime didn't produce content
     if (!content) {
-      const result = await adapter.generate({
-        systemPrompt,
-        userPrompt,
-        maxTokens: 8192,
-      });
+      requestStarted = true;
 
-      if (!result.success || !result.content) {
-        throw new GenerationError(`Generation failed: ${result.error?.message ?? 'No content returned'}`);
+      try {
+        const result = await adapter.generate({
+          systemPrompt,
+          userPrompt,
+          maxTokens: 8192,
+        });
+
+        // PROMPT 19: We reached gateway if we got any response (success or error)
+        reachedGateway = true;
+
+        if (!result.success) {
+          // PROMPT 19: Technical error from gateway/provider
+          const errMsg = result.error?.message ?? 'Unknown gateway error';
+          throw AIGenerationError.technical(
+            'provider_error',
+            `Gateway error: ${errMsg}`,
+            result.error?.code
+          );
+        }
+
+        if (!result.content) {
+          // PROMPT 19: No response content
+          throw AIGenerationError.technical('no_response', 'Gateway returned success but no content');
+        }
+
+        rawResponseReceived = true;
+        content = result.content;
+        runtime = 'chat_completion';
+
+        logger.info({
+          type: request.type,
+          name: request.name,
+          inputTokens: result.usage?.inputTokens,
+          outputTokens: result.usage?.outputTokens,
+        }, 'Generation completed via chat_completion (fallback)');
+      } catch (err) {
+        // Re-throw AIGenerationError as-is
+        if (err instanceof AIGenerationError) {
+          throw err;
+        }
+        // PROMPT 19: Connection/network error
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        if (errMsg.includes('ECONNREFUSED') || errMsg.includes('ENOTFOUND') || errMsg.includes('fetch')) {
+          throw AIGenerationError.technical('gateway_unreachable', `Cannot reach gateway: ${errMsg}`);
+        }
+        if (errMsg.includes('timeout') || errMsg.includes('ETIMEDOUT')) {
+          throw AIGenerationError.technical('timeout', `Request timed out: ${errMsg}`);
+        }
+        throw AIGenerationError.technical('unknown', `Unexpected error: ${errMsg}`);
       }
-
-      content = result.content;
-      runtime = 'chat_completion';
-
-      logger.info({
-        type: request.type,
-        name: request.name,
-        inputTokens: result.usage?.inputTokens,
-        outputTokens: result.usage?.outputTokens,
-      }, 'Generation completed via chat_completion (fallback)');
+    } else {
+      // Agent runtime succeeded - mark all as successful
+      requestStarted = true;
+      reachedGateway = true;
+      rawResponseReceived = true;
     }
 
     // BUDGET: Record cost (estimate for agent runtime, actual for chat_completion)
@@ -228,9 +295,14 @@ export class AIClient {
     try {
       parsed = parseJsonFromLLM<T>(content);
     } catch (err) {
+      // PROMPT 19: Parse failed - unusable response
       const message = err instanceof Error ? err.message : 'JSON parse error';
       logger.error({ content: content.slice(0, 500), runtime }, `Failed to parse LLM response: ${message}`);
-      throw new GenerationError(`Invalid LLM response: ${message}`);
+      throw AIGenerationError.unusableResponse(
+        'parse_failed',
+        `Invalid JSON in LLM response: ${message}`,
+        content.slice(0, 500)
+      );
     }
 
     logger.info({
@@ -244,6 +316,11 @@ export class AIClient {
       content,
       parsed,
       runtime,
+      // PROMPT 19: Detailed tracking
+      requestStarted,
+      reachedGateway,
+      rawResponseReceived,
+      contentUsable: true, // If we got here, content is usable
     };
   }
 

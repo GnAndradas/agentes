@@ -64,6 +64,54 @@ export class GenerationError extends AppError {
   }
 }
 
+/**
+ * PROMPT 19: AI Generation Error with detailed traceability
+ */
+export type AIErrorStage =
+  | 'gateway_unreachable'
+  | 'hooks_not_configured'
+  | 'hooks_dispatch_failed'
+  | 'no_response'
+  | 'timeout'
+  | 'empty_response'
+  | 'invalid_shape'
+  | 'validator_failed'
+  | 'parse_failed'
+  | 'provider_error'
+  | 'unknown';
+
+export type AIErrorType = 'technical' | 'unusable_response' | 'none';
+
+export class AIGenerationError extends AppError {
+  constructor(
+    message: string,
+    public readonly errorType: AIErrorType,
+    public readonly errorStage: AIErrorStage,
+    public readonly errorCode?: string,
+    public readonly rawResponseSnippet?: string,
+    details?: Record<string, unknown>
+  ) {
+    super(message, 500, 'AI_GENERATION_ERROR', {
+      ...details,
+      ai_error_type: errorType,
+      ai_error_stage: errorStage,
+      ai_error_code: errorCode,
+      ai_raw_response_snippet: rawResponseSnippet?.substring(0, 500),
+    });
+    this.name = 'AIGenerationError';
+  }
+
+  /** Create technical error (gateway/network/timeout) */
+  static technical(stage: AIErrorStage, message: string, code?: string): AIGenerationError {
+    return new AIGenerationError(message, 'technical', stage, code);
+  }
+
+  /** Create unusable response error (parse/validation failed) */
+  static unusableResponse(stage: AIErrorStage, message: string, rawSnippet?: string): AIGenerationError {
+    return new AIGenerationError(message, 'unusable_response', stage, undefined, rawSnippet);
+  }
+}
+
 export class BudgetExceededError extends AppError {
   constructor(
     message: string,

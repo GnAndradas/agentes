@@ -855,6 +855,9 @@ export class SmartDecisionEngine {
 
   /**
    * Find best agent by capability match
+   *
+   * PROMPT 18 FIX: If no capability match, return fallback agent
+   * (general > orchestrator > first available) to prevent stuck tasks.
    */
   private findBestAgentByCapabilities(
     requiredCapabilities: string[],
@@ -871,7 +874,26 @@ export class SmartDecisionEngine {
       }
     }
 
-    return bestScore > 0 ? bestAgent : null;
+    // PROMPT 18: If we found a capability match, return it
+    if (bestScore > 0 && bestAgent) {
+      return bestAgent;
+    }
+
+    // PROMPT 18: No capability match - return fallback agent if any exist
+    // This prevents tasks from getting stuck when no perfect match exists
+    if (agents.length > 0) {
+      // Prefer general agent, then orchestrator, then first available
+      const general = agents.find(a => a.type === 'general');
+      if (general) return general;
+
+      const orchestrator = agents.find(a => a.type === 'orchestrator');
+      if (orchestrator) return orchestrator;
+
+      // Return first available agent
+      return agents[0]!;
+    }
+
+    return null;
   }
 
   /**
@@ -981,6 +1003,10 @@ export class SmartDecisionEngine {
 
   /**
    * Create fallback decision when all else fails
+   *
+   * PROMPT 18 FIX: ALWAYS assign to an available agent if any exist.
+   * This prevents tasks from getting stuck in "queued" forever.
+   * The agent may not be perfect, but it can at least attempt the task.
    */
   private createFallbackDecision(
     id: string,
@@ -991,32 +1017,70 @@ export class SmartDecisionEngine {
   ): StructuredDecision {
     const activeAgents = agents.filter(a => a.status === 'active');
 
-    // Try to find any agent that might handle this
+    // PROMPT 18: ALWAYS find an agent if any are active
+    // Priority: general/orchestrator > first available
     let targetAgent: string | undefined;
-    if (activeAgents.length === 1) {
-      targetAgent = activeAgents[0]!.id;
-    } else if (activeAgents.length > 0) {
-      // Find general-purpose agent or first available
-      const general = activeAgents.find(a => a.type === 'orchestrator' || a.type === 'general');
-      targetAgent = general?.id || activeAgents[0]!.id;
+    let assignReason = '';
+
+    if (activeAgents.length > 0) {
+      // Find general-purpose agent first (best for unknown tasks)
+      const general = activeAgents.find(a => a.type === 'general');
+      const orchestrator = activeAgents.find(a => a.type === 'orchestrator');
+
+      if (general) {
+        targetAgent = general.id;
+        assignReason = `Fallback to general agent "${general.name}"`;
+      } else if (orchestrator) {
+        targetAgent = orchestrator.id;
+        assignReason = `Fallback to orchestrator agent "${orchestrator.name}"`;
+      } else {
+        // Use first available agent
+        targetAgent = activeAgents[0]!.id;
+        assignReason = `Fallback to first available agent "${activeAgents[0]!.name}"`;
+      }
     }
 
-    const reason = error
-      ? `Fallback due to error: ${error instanceof Error ? error.message : 'Unknown error'}`
-      : 'No decision method succeeded';
+    const errorReason = error
+      ? `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+      : '';
+
+    const reason = targetAgent
+      ? `${assignReason}. ${errorReason || 'No specific match found, using fallback agent.'}`
+      : `No active agents available. ${errorReason}`;
+
+    // PROMPT 18: Only escalate if NO agents at all. Otherwise force assign.
+    const decisionType = targetAgent ? 'assign' : 'escalate';
+
+    logger.info({
+      taskId: task.id,
+      decisionType,
+      targetAgent,
+      activeAgentsCount: activeAgents.length,
+      reason,
+    }, 'PROMPT 18: Fallback decision created');
 
     return this.buildDecision(
       id,
       task.id,
-      targetAgent ? 'assign' : 'escalate',
+      decisionType,
       targetAgent,
-      0.3, // Low confidence for fallback
+      targetAgent ? 0.4 : 0.1, // Slightly higher confidence if we found an agent
       reason,
       'fallback',
       startTime,
       {
         heuristicsAttempted: true,
         heuristicFailReason: 'all_methods_failed',
+        // PROMPT 18: Include agent scores if we assigned
+        agentScores: targetAgent ? [{
+          agentId: targetAgent,
+          agentName: activeAgents.find(a => a.id === targetAgent)?.name || 'unknown',
+          totalScore: 40, // Low but non-zero score
+          capabilityMatch: 0.2,
+          loadScore: 1,
+          historyScore: 0.5,
+          specialization: false,
+        }] : undefined,
       }
     );
   }

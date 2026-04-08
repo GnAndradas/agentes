@@ -19,7 +19,7 @@
  *   - 'manual': User-created resource
  */
 
-import type { GenerationTraceability } from '../types/contracts.js';
+import type { GenerationTraceability, AIErrorStage, AIErrorType } from '../types/contracts.js';
 
 // ============================================================================
 // GENERATION MODE
@@ -138,6 +138,9 @@ export class GenerationTraceabilityBuilder {
     if (success) {
       this.trace.generation_mode = 'ai';
       this.trace.fallback_used = false;
+      // PROMPT 19: Success means content was usable
+      this.trace.ai_content_usable = true;
+      this.trace.ai_error_type = 'none';
     }
     if (model) {
       this.trace.ai_model = model;
@@ -157,6 +160,71 @@ export class GenerationTraceabilityBuilder {
       };
     }
     return this;
+  }
+
+  // =========================================================================
+  // PROMPT 19: Detailed AI error tracking methods
+  // =========================================================================
+
+  /** PROMPT 19: Mark that AI request was started */
+  aiRequestStarted(): this {
+    this.trace.ai_request_started = true;
+    return this;
+  }
+
+  /** PROMPT 19: Mark that request reached gateway */
+  aiReachedGateway(reached: boolean): this {
+    this.trace.ai_request_reached_gateway = reached;
+    return this;
+  }
+
+  /** PROMPT 19: Mark that raw response was received */
+  aiRawResponseReceived(received: boolean, snippet?: string): this {
+    this.trace.ai_raw_response_received = received;
+    if (snippet) {
+      // Truncate to 500 chars for storage
+      this.trace.ai_raw_response_snippet = snippet.length > 500
+        ? snippet.substring(0, 500) + '...[truncated]'
+        : snippet;
+    }
+    return this;
+  }
+
+  /** PROMPT 19: Mark content usability */
+  aiContentUsable(usable: boolean): this {
+    this.trace.ai_content_usable = usable;
+    return this;
+  }
+
+  /** PROMPT 19: Record AI error with full details */
+  aiError(
+    errorType: AIErrorType,
+    stage: AIErrorStage,
+    message: string,
+    code?: string
+  ): this {
+    this.trace.ai_error_type = errorType;
+    this.trace.ai_error_stage = stage;
+    this.trace.ai_error_message = message.length > 500
+      ? message.substring(0, 500) + '...[truncated]'
+      : message;
+    if (code) {
+      this.trace.ai_error_code = code;
+    }
+    // If there's an error, content is not usable
+    this.trace.ai_content_usable = false;
+    this.trace.ai_generation_succeeded = false;
+    return this;
+  }
+
+  /** PROMPT 19: Record technical error (gateway/network/timeout) */
+  aiTechnicalError(stage: AIErrorStage, message: string, code?: string): this {
+    return this.aiError('technical', stage, message, code);
+  }
+
+  /** PROMPT 19: Record unusable response error (parse/validation failed) */
+  aiUnusableResponse(stage: AIErrorStage, message: string, code?: string): this {
+    return this.aiError('unusable_response', stage, message, code);
   }
 
   /** Marcar uso de fallback */
@@ -254,6 +322,16 @@ export function toStoredTraceability(trace: FullGenerationTraceability): Record<
     materialized: trace.materialized,
     materialization_gap: trace.materialization_gap,
     generated_at: trace.generated_at,
+    // PROMPT 19: Detailed AI error fields
+    ai_request_started: trace.ai_request_started,
+    ai_request_reached_gateway: trace.ai_request_reached_gateway,
+    ai_raw_response_received: trace.ai_raw_response_received,
+    ai_content_usable: trace.ai_content_usable,
+    ai_error_type: trace.ai_error_type,
+    ai_error_stage: trace.ai_error_stage,
+    ai_error_code: trace.ai_error_code,
+    ai_error_message: trace.ai_error_message,
+    ai_raw_response_snippet: trace.ai_raw_response_snippet,
   };
 }
 
@@ -288,6 +366,15 @@ export function toOriginMetadata(trace: FullGenerationTraceability): Record<stri
     // PROMPT 16B: Include runtime mode for frontend display
     runtime: trace.ai_runtime,
     tokens_used: trace.ai_tokens ? (trace.ai_tokens.input + trace.ai_tokens.output) : undefined,
+    // PROMPT 19: Detailed error info for frontend
+    ai_request_started: trace.ai_request_started,
+    ai_reached_gateway: trace.ai_request_reached_gateway,
+    ai_raw_response_received: trace.ai_raw_response_received,
+    ai_content_usable: trace.ai_content_usable,
+    ai_error_type: trace.ai_error_type,
+    ai_error_stage: trace.ai_error_stage,
+    ai_error_code: trace.ai_error_code,
+    ai_error_message: trace.ai_error_message,
   };
 }
 

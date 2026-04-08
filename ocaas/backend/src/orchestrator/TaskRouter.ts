@@ -276,6 +276,35 @@ export class TaskRouter {
     const assignment = decision.assignment;
 
     if (!assignment) {
+      // =======================================================================
+      // PROMPT 18: CLEAR ERROR - No agent assignment possible
+      // After PROMPT 18 fixes, this should only happen when NO agents exist.
+      // =======================================================================
+      logger.error({
+        taskId: task.id,
+        taskTitle: task.title,
+        taskType: task.type,
+        decisionType: decision.analysis?.taskType,
+        usedFallback: decision.usedFallback,
+        fallbackReason: decision.fallbackReason,
+        suggestedActions: decision.suggestedActions?.map(a => a.action),
+      }, 'TASK BLOCKED: No agent assignment possible. Check if any active agents exist.');
+
+      // Emit clear error event for UI/monitoring
+      await eventService.emit({
+        type: EVENT_TYPE.SYSTEM_ERROR,
+        category: 'orchestrator',
+        severity: 'error',
+        message: `Task "${task.title}" cannot be assigned - no active agents available`,
+        resourceType: 'task',
+        resourceId: task.id,
+        data: {
+          reason: 'NO_ACTIVE_AGENTS',
+          taskType: task.type,
+          suggestion: 'Create or activate an agent to handle this task',
+        },
+      });
+
       // No agent found - check if we should execute suggested actions
       const actionExecutor = getActionExecutor();
       const resourceRetryService = getResourceRetryService();

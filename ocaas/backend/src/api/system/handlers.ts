@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { nanoid } from 'nanoid';
 import { getServices } from '../../services/index.js';
 import { toErrorResponse } from '../../utils/errors.js';
 import {
@@ -15,7 +16,9 @@ import { getSystemDiagnosticsService, getTaskTimelineService } from '../../syste
 import { getGateway } from '../../openclaw/gateway.js';
 import { getRuntimeInfo, getRuntimeSummary, checkEnvironment } from '../../utils/runtime.js';
 import { getJobSafetyService } from '../../execution/JobSafetyService.js';
+import { getJobDispatcherService } from '../../execution/JobDispatcherService.js';
 import { queryLogs, getErrorLogs, getRecentLogs } from '../../utils/dbLogger.js';
+import { getAIClient } from '../../generator/AIClient.js';
 
 /**
  * Backend health check - includes runtime metadata for observability
@@ -614,6 +617,339 @@ export async function getLogsRecent(req: FastifyRequest, reply: FastifyReply) {
     return reply.send({
       data: logs,
       count: logs.length,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// =============================================================================
+// FULL DIAGNOSTICS (PROMPT 20 + 20B)
+// =============================================================================
+
+/**
+ * PROMPT 20B: Full system diagnostics with REAL E2E tests
+ * GET /api/system/full-diagnostics
+ *
+ * Runs actual tests, not just state checks:
+ * - gateway: Real REST API call
+ * - hooks: Real hooks/agent ping
+ * - ai_generation: Real AI generation test with trace
+ * - agents: Agent counts and materialization status
+ * - pipeline: Real pipeline test (creates diagnostic task)
+ */
+export async function fullDiagnostics(_req: FastifyRequest, reply: FastifyReply) {
+  try {
+    const adapter = getOpenClawAdapter();
+    const { agentService, taskService } = getServices();
+    const jobDispatcher = getJobDispatcherService();
+    const taskRouter = getTaskRouter();
+    const aiClient = getAIClient();
+
+    const startTime = Date.now();
+
+    // 1. Gateway test (REAL REST API call)
+    let gatewayResult: {
+      ok: boolean;
+      reachable: boolean;
+      authenticated: boolean;
+      latency_ms: number;
+      error?: string;
+    };
+    try {
+      const gwStart = Date.now();
+      const testResult = await adapter.testConnection();
+      gatewayResult = {
+        ok: testResult.success,
+        reachable: testResult.success,
+        authenticated: testResult.success,
+        latency_ms: Date.now() - gwStart,
+        error: testResult.error?.message,
+      };
+    } catch (err) {
+      gatewayResult = {
+        ok: false,
+        reachable: false,
+        authenticated: false,
+        latency_ms: 0,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+
+    // 2. Hooks test (REAL hooks/agent ping)
+    let hooksResult: {
+      ok: boolean;
+      configured: boolean;
+      reached_gateway: boolean;
+      accepted: boolean;
+      latency_ms: number;
+      error?: string;
+    };
+    try {
+      const hooksStart = Date.now();
+      const hooksConfigured = adapter.isHooksConfigured();
+
+      if (!hooksConfigured) {
+        hooksResult = {
+          ok: false,
+          configured: false,
+          reached_gateway: false,
+          accepted: false,
+          latency_ms: Date.now() - hooksStart,
+          error: 'Hooks not configured',
+        };
+      } else {
+        // REAL hooks test: send ping via hooks
+        const pingResult = await adapter.executeViaHooks({
+          agentId: 'diagnostic-ping',
+          prompt: 'DIAGNOSTIC PING - respond with "pong"',
+          name: `OCAAS Diagnostic Ping ${Date.now()}`,
+        });
+
+        hooksResult = {
+          ok: pingResult.success,
+          configured: true,
+          reached_gateway: true, // If we got a response, we reached gateway
+          accepted: pingResult.accepted ?? false,
+          latency_ms: Date.now() - hooksStart,
+          error: pingResult.error?.message,
+        };
+      }
+    } catch (err) {
+      hooksResult = {
+        ok: false,
+        configured: adapter.isHooksConfigured(),
+        reached_gateway: false,
+        accepted: false,
+        latency_ms: 0,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+
+    // 3. AI Generation test (REAL generation with trace)
+    let aiGenerationResult: {
+      ok: boolean;
+      runtime: 'agent' | 'chat_completion' | 'unavailable';
+      reached_gateway: boolean;
+      response_received: boolean;
+      content_usable: boolean;
+      latency_ms: number;
+      error_stage?: string;
+      error_message?: string;
+    };
+    try {
+      const aiStart = Date.now();
+
+      if (!aiClient.isConfigured()) {
+        aiGenerationResult = {
+          ok: false,
+          runtime: 'unavailable',
+          reached_gateway: false,
+          response_received: false,
+          content_usable: false,
+          latency_ms: Date.now() - aiStart,
+          error_stage: 'not_configured',
+          error_message: 'AI client not configured',
+        };
+      } else {
+        // REAL AI test: minimal generation
+        try {
+          const response = await aiClient.generate<{ test: string }>({
+            type: 'tool',
+            name: 'diagnostic-test',
+            description: 'Diagnostic test',
+            prompt: 'Generate a minimal JSON: {"test": "ok"}',
+          });
+
+          aiGenerationResult = {
+            ok: true,
+            runtime: response.runtime ?? 'chat_completion',
+            reached_gateway: response.reachedGateway ?? true,
+            response_received: response.rawResponseReceived ?? true,
+            content_usable: response.contentUsable ?? true,
+            latency_ms: Date.now() - aiStart,
+          };
+        } catch (aiErr: unknown) {
+          // Extract trace from error
+          const err = aiErr as {
+            errorStage?: string;
+            message?: string;
+          };
+          aiGenerationResult = {
+            ok: false,
+            runtime: 'unavailable',
+            reached_gateway: err.errorStage !== 'gateway_unreachable',
+            response_received: err.errorStage === 'parse_failed' || err.errorStage === 'invalid_shape',
+            content_usable: false,
+            latency_ms: Date.now() - aiStart,
+            error_stage: err.errorStage ?? 'unknown',
+            error_message: err.message ?? 'Unknown AI error',
+          };
+        }
+      }
+    } catch (err) {
+      aiGenerationResult = {
+        ok: false,
+        runtime: 'unavailable',
+        reached_gateway: false,
+        response_received: false,
+        content_usable: false,
+        latency_ms: 0,
+        error_stage: 'exception',
+        error_message: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+
+    // 4. Agents status
+    let agentsResult: {
+      ok: boolean;
+      total: number;
+      active: number;
+      materialized: number;
+      runtime_ready: number;
+      error?: string;
+    };
+    try {
+      const agents = await agentService.list();
+      const activeAgents = agents.filter(a => a.status === 'active');
+
+      // Check materialization status in config
+      let materialized = 0;
+      let runtimeReady = 0;
+      for (const agent of agents) {
+        const mat = (agent.config as Record<string, unknown>)?._materialization as Record<string, unknown> | undefined;
+        if (mat) {
+          if (mat.db_record && mat.workspace_exists) materialized++;
+          if (mat.runtime_possible || mat.openclaw_session) runtimeReady++;
+        }
+      }
+
+      agentsResult = {
+        ok: activeAgents.length > 0,
+        total: agents.length,
+        active: activeAgents.length,
+        materialized,
+        runtime_ready: runtimeReady,
+      };
+    } catch (err) {
+      agentsResult = {
+        ok: false,
+        total: 0,
+        active: 0,
+        materialized: 0,
+        runtime_ready: 0,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+
+    // 5. Pipeline test (REAL - create diagnostic task, check job creation)
+    let pipelineResult: {
+      ok: boolean;
+      orchestrator_running: boolean;
+      task_created: boolean;
+      job_created: boolean;
+      queue_size: number;
+      stuck_tasks: number;
+      error?: string;
+    };
+    try {
+      const routerStatus = taskRouter.getStatus();
+      const tasks = await taskService.list({ limit: 100 });
+
+      // Find stuck tasks (running > 15 min without update)
+      const now = Date.now();
+      const stuckTasks = tasks.filter(t =>
+        t.status === 'running' &&
+        (now - t.updatedAt * 1000) > 15 * 60 * 1000
+      );
+
+      // REAL pipeline test: create a diagnostic task
+      let taskCreated = false;
+      let jobCreated = false;
+      let diagnosticTaskId: string | null = null;
+
+      if (routerStatus.running && agentsResult.active > 0) {
+        try {
+          // Create diagnostic task
+          const diagnosticTask = await taskService.create({
+            title: `[DIAGNOSTIC] Pipeline test ${nanoid(6)}`,
+            description: 'Automated diagnostic task - can be deleted',
+            type: 'diagnostic',
+            priority: 1,
+            metadata: {
+              _diagnostic: true,
+              _diagnostic_created_at: Date.now(),
+            },
+          });
+          diagnosticTaskId = diagnosticTask.id;
+          taskCreated = true;
+
+          // Queue and process briefly
+          await taskRouter.submit(diagnosticTask);
+
+          // Wait a short time for job creation (max 500ms)
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Check if job was created
+          const jobs = jobDispatcher.getJobsByTask(diagnosticTask.id);
+          jobCreated = jobs.length > 0;
+
+          // Clean up: cancel the diagnostic task
+          try {
+            await taskService.cancel(diagnosticTask.id);
+          } catch {
+            // Ignore cleanup errors
+          }
+        } catch (pipelineErr) {
+          // Pipeline test failed, but we still report what we found
+          pipelineResult = {
+            ok: false,
+            orchestrator_running: routerStatus.running,
+            task_created: taskCreated,
+            job_created: jobCreated,
+            queue_size: routerStatus.queueSize,
+            stuck_tasks: stuckTasks.length,
+            error: pipelineErr instanceof Error ? pipelineErr.message : 'Pipeline test failed',
+          };
+        }
+      }
+
+      pipelineResult = {
+        ok: routerStatus.running && stuckTasks.length === 0 && (agentsResult.active === 0 || jobCreated),
+        orchestrator_running: routerStatus.running,
+        task_created: taskCreated,
+        job_created: jobCreated,
+        queue_size: routerStatus.queueSize,
+        stuck_tasks: stuckTasks.length,
+      };
+    } catch (err) {
+      pipelineResult = {
+        ok: false,
+        orchestrator_running: false,
+        task_created: false,
+        job_created: false,
+        queue_size: 0,
+        stuck_tasks: 0,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+
+    // Calculate overall status
+    const allOk = gatewayResult.ok && hooksResult.ok && aiGenerationResult.ok && agentsResult.ok && pipelineResult.ok;
+    const partialOk = gatewayResult.ok || aiGenerationResult.ok; // At least gateway or AI works
+
+    return reply.send({
+      data: {
+        status: allOk ? 'healthy' : (partialOk ? 'degraded' : 'critical'),
+        gateway: gatewayResult,
+        hooks: hooksResult,
+        ai_generation: aiGenerationResult,
+        agents: agentsResult,
+        pipeline: pipelineResult,
+        duration_ms: Date.now() - startTime,
+        timestamp: Date.now(),
+      },
     });
   } catch (err) {
     const { statusCode, body } = toErrorResponse(err);

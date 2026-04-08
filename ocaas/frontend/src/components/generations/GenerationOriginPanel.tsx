@@ -21,6 +21,22 @@ interface GenerationOriginPanelProps {
 
 type GeneratedBy = 'ai' | 'manual' | 'fallback' | 'heuristic' | 'unknown';
 
+// PROMPT 19: AI error stages
+type AIErrorStage =
+  | 'gateway_unreachable'
+  | 'hooks_not_configured'
+  | 'hooks_dispatch_failed'
+  | 'no_response'
+  | 'timeout'
+  | 'empty_response'
+  | 'invalid_shape'
+  | 'validator_failed'
+  | 'parse_failed'
+  | 'provider_error'
+  | 'unknown';
+
+type AIErrorType = 'technical' | 'unusable_response' | 'none';
+
 interface OriginMetadata {
   generated_by?: GeneratedBy;
   ai_attempted?: boolean;
@@ -30,9 +46,20 @@ interface OriginMetadata {
   model?: string;
   /** PROMPT 16: Provider/gateway used for generation */
   provider?: string;
+  /** PROMPT 16B: Runtime mode */
+  runtime?: 'agent' | 'chat_completion';
   temperature?: number;
   tokens_used?: number;
   generation_time_ms?: number;
+  // PROMPT 19: Detailed AI error fields
+  ai_request_started?: boolean;
+  ai_reached_gateway?: boolean;
+  ai_raw_response_received?: boolean;
+  ai_content_usable?: boolean;
+  ai_error_type?: AIErrorType;
+  ai_error_stage?: AIErrorStage;
+  ai_error_code?: string;
+  ai_error_message?: string;
 }
 
 // =============================================================================
@@ -104,10 +131,50 @@ function extractOriginMetadata(generation: Generation): OriginMetadata {
     fallback_reason: meta.fallback_reason as string | undefined,
     model: meta.model as string | undefined,
     provider: meta.provider as string | undefined,
+    runtime: meta.runtime as 'agent' | 'chat_completion' | undefined,
     temperature: meta.temperature as number | undefined,
     tokens_used: meta.tokens_used as number | undefined,
     generation_time_ms: meta.generation_time_ms as number | undefined,
+    // PROMPT 19: Extract detailed error fields
+    ai_request_started: meta.ai_request_started as boolean | undefined,
+    ai_reached_gateway: meta.ai_reached_gateway as boolean | undefined,
+    ai_raw_response_received: meta.ai_raw_response_received as boolean | undefined,
+    ai_content_usable: meta.ai_content_usable as boolean | undefined,
+    ai_error_type: meta.ai_error_type as AIErrorType | undefined,
+    ai_error_stage: meta.ai_error_stage as AIErrorStage | undefined,
+    ai_error_code: meta.ai_error_code as string | undefined,
+    ai_error_message: meta.ai_error_message as string | undefined,
   };
+}
+
+// PROMPT 19: Human-readable error stage descriptions
+function getErrorStageLabel(stage: AIErrorStage): string {
+  const labels: Record<AIErrorStage, string> = {
+    gateway_unreachable: 'Gateway Unreachable',
+    hooks_not_configured: 'Hooks Not Configured',
+    hooks_dispatch_failed: 'Hooks Dispatch Failed',
+    no_response: 'No Response',
+    timeout: 'Request Timeout',
+    empty_response: 'Empty Response',
+    invalid_shape: 'Invalid Response Format',
+    validator_failed: 'Validation Failed',
+    parse_failed: 'Parse Failed',
+    provider_error: 'Provider Error',
+    unknown: 'Unknown Error',
+  };
+  return labels[stage] || stage;
+}
+
+// PROMPT 19: Categorize error type for display
+function getErrorTypeLabel(type: AIErrorType): { label: string; color: string } {
+  switch (type) {
+    case 'technical':
+      return { label: 'Technical Error', color: 'text-red-400' };
+    case 'unusable_response':
+      return { label: 'Unusable Response', color: 'text-orange-400' };
+    default:
+      return { label: 'None', color: 'text-green-400' };
+  }
 }
 
 function determineOrigin(meta: OriginMetadata): GeneratedBy {
@@ -201,11 +268,41 @@ export function GenerationOriginPanel({ generation }: GenerationOriginPanelProps
             <div className="p-2 bg-red-500/10 border border-red-500/30 rounded">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0 mt-0.5" />
-                <div>
+                <div className="flex-1">
                   <span className="text-xs text-red-400 font-medium">AI generation failed</span>
-                  <p className="text-xs text-dark-400 mt-0.5">
-                    {meta.fallback_used ? 'Fallback template was used instead' : 'Generation may have failed'}
-                  </p>
+                  {/* PROMPT 19: Show detailed error info */}
+                  {meta.ai_error_stage && (
+                    <div className="mt-1 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-dark-500">Stage:</span>
+                        <span className="text-xs text-red-300 font-mono">
+                          {getErrorStageLabel(meta.ai_error_stage)}
+                        </span>
+                      </div>
+                      {meta.ai_error_type && meta.ai_error_type !== 'none' && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-dark-500">Type:</span>
+                          <span className={`text-xs font-mono ${getErrorTypeLabel(meta.ai_error_type).color}`}>
+                            {getErrorTypeLabel(meta.ai_error_type).label}
+                          </span>
+                        </div>
+                      )}
+                      {meta.ai_error_message && (
+                        <div className="mt-1 p-1.5 bg-dark-900 rounded">
+                          <span className="text-xs text-dark-300 break-words">
+                            {meta.ai_error_message.length > 150
+                              ? meta.ai_error_message.substring(0, 150) + '...'
+                              : meta.ai_error_message}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!meta.ai_error_stage && (
+                    <p className="text-xs text-dark-400 mt-0.5">
+                      {meta.fallback_used ? 'Fallback template was used instead' : 'Generation may have failed'}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -263,14 +360,56 @@ export function GenerationOriginPanel({ generation }: GenerationOriginPanelProps
       )}
 
       {/* Model/Provider Info */}
-      {(meta.model || meta.provider) && (
+      {(meta.model || meta.provider || meta.runtime) && (
         <div className="space-y-1">
           <MetadataRow label="Model" value={meta.model} />
           <MetadataRow label="Provider" value={meta.provider} />
+          <MetadataRow label="Runtime" value={meta.runtime} />
           <MetadataRow label="Temperature" value={meta.temperature} />
           <MetadataRow label="Tokens Used" value={meta.tokens_used} />
           {meta.generation_time_ms && (
             <MetadataRow label="Generation Time" value={`${meta.generation_time_ms}ms`} />
+          )}
+        </div>
+      )}
+
+      {/* PROMPT 19: Detailed AI Request Tracking */}
+      {meta.ai_attempted && (meta.ai_request_started !== undefined ||
+        meta.ai_reached_gateway !== undefined ||
+        meta.ai_raw_response_received !== undefined) && (
+        <div className="space-y-1">
+          <div className="text-xs text-dark-500 font-medium mb-1">Request Pipeline</div>
+          {meta.ai_request_started !== undefined && (
+            <div className="flex items-center justify-between py-1 px-2 bg-dark-900 rounded">
+              <span className="text-dark-500 text-xs">Request Started</span>
+              <span className={meta.ai_request_started ? 'text-green-400 text-xs' : 'text-red-400 text-xs'}>
+                {meta.ai_request_started ? 'Yes' : 'No'}
+              </span>
+            </div>
+          )}
+          {meta.ai_reached_gateway !== undefined && (
+            <div className="flex items-center justify-between py-1 px-2 bg-dark-900 rounded">
+              <span className="text-dark-500 text-xs">Reached Gateway</span>
+              <span className={meta.ai_reached_gateway ? 'text-green-400 text-xs' : 'text-red-400 text-xs'}>
+                {meta.ai_reached_gateway ? 'Yes' : 'No'}
+              </span>
+            </div>
+          )}
+          {meta.ai_raw_response_received !== undefined && (
+            <div className="flex items-center justify-between py-1 px-2 bg-dark-900 rounded">
+              <span className="text-dark-500 text-xs">Response Received</span>
+              <span className={meta.ai_raw_response_received ? 'text-green-400 text-xs' : 'text-red-400 text-xs'}>
+                {meta.ai_raw_response_received ? 'Yes' : 'No'}
+              </span>
+            </div>
+          )}
+          {meta.ai_content_usable !== undefined && (
+            <div className="flex items-center justify-between py-1 px-2 bg-dark-900 rounded">
+              <span className="text-dark-500 text-xs">Content Usable</span>
+              <span className={meta.ai_content_usable ? 'text-green-400 text-xs' : 'text-red-400 text-xs'}>
+                {meta.ai_content_usable ? 'Yes' : 'No'}
+              </span>
+            </div>
           )}
         </div>
       )}

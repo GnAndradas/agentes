@@ -41,7 +41,9 @@
       "Bash(npm run typecheck:*)",
       "Bash(npx tsx:*)",
       "Bash(echo:*)",
-      "Bash(npx drizzle-kit:*)"
+      "Bash(npx drizzle-kit:*)",
+      "Bash(tasklist:*)",
+      "Bash(wmic process get:*)"
     ],
     "deny": [],
     "ask": []

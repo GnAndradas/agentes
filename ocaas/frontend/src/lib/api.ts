@@ -441,6 +441,12 @@ export const systemApi = {
     const res = await api.get<DataResponse<import('../types').OrchestratorStatus>>('/system/orchestrator');
     return res.data;
   },
+
+  // PROMPT 20: Full diagnostics for Settings panel
+  fullDiagnostics: async () => {
+    const res = await api.get<DataResponse<import('../types').FullDiagnosticsResult>>('/system/full-diagnostics');
+    return res.data;
+  },
 };
 
 // Approval API

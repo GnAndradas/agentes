@@ -312,6 +312,55 @@ export interface OrchestratorStatus {
   autonomyLevel: AutonomyLevel;
 }
 
+// PROMPT 20 + 20B: Full diagnostics types with real E2E test results
+export interface FullDiagnosticsResult {
+  status: 'healthy' | 'degraded' | 'critical';
+  gateway: {
+    ok: boolean;
+    reachable: boolean;
+    authenticated: boolean;
+    latency_ms: number;
+    error?: string;
+  };
+  hooks: {
+    ok: boolean;
+    configured: boolean;
+    reached_gateway: boolean;
+    accepted: boolean;
+    latency_ms: number;
+    error?: string;
+  };
+  ai_generation: {
+    ok: boolean;
+    runtime: 'agent' | 'chat_completion' | 'unavailable';
+    reached_gateway: boolean;
+    response_received: boolean;
+    content_usable: boolean;
+    latency_ms: number;
+    error_stage?: string;
+    error_message?: string;
+  };
+  agents: {
+    ok: boolean;
+    total: number;
+    active: number;
+    materialized: number;
+    runtime_ready: number;
+    error?: string;
+  };
+  pipeline: {
+    ok: boolean;
+    orchestrator_running: boolean;
+    task_created: boolean;
+    job_created: boolean;
+    queue_size: number;
+    stuck_tasks: number;
+    error?: string;
+  };
+  duration_ms: number;
+  timestamp: number;
+}
+
 // Feedback types
 export type FeedbackType = 'missing_tool' | 'missing_skill' | 'missing_capability' | 'blocked' | 'cannot_continue';
 

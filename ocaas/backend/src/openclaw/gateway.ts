@@ -172,6 +172,7 @@ export class OpenClawGateway {
   // WebSocket configuration
   private wsUrl: string;
   private wsMode: 'required' | 'optional' | 'disabled';
+  private backendModel?: string;
 
   // Connection state
   private restConnected = false;
@@ -200,6 +201,7 @@ export class OpenClawGateway {
     this.enableGenerationProbe = config.openclaw.enableGenerationProbe;
     this.wsUrl = config.openclaw.wsUrl;
     this.wsMode = config.openclaw.wsMode;
+    this.backendModel = config.openclaw.backendModel;
   }
 
   /**
@@ -212,6 +214,11 @@ export class OpenClawGateway {
 
     if (this.apiKey) {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
+    // PROMPT 21: Optional backend model override via header
+    if (this.backendModel) {
+      headers['x-openclaw-model'] = this.backendModel;
     }
 
     return headers;
@@ -1075,7 +1082,8 @@ export class OpenClawGateway {
       messages.push({ role: 'user', content: options.userPrompt });
 
       // Build request body
-      const requestBody: Record<string, unknown> = { messages };
+      // PROMPT 21: Use openclaw/default as agent-first target model
+      const requestBody: Record<string, unknown> = { model: 'openclaw/default', messages };
       if (options.maxTokens) {
         requestBody.max_tokens = options.maxTokens;
       }
@@ -1319,6 +1327,7 @@ export class OpenClawGateway {
         'POST',
         '/v1/chat/completions',
         {
+          model: 'openclaw/default',
           messages: [{ role: 'user', content: options.message }],
         },
         GENERATION_TIMEOUT
@@ -1362,6 +1371,7 @@ export class OpenClawGateway {
         'POST',
         '/v1/chat/completions',
         {
+          model: 'openclaw/default',
           messages: [{ role: 'user', content: execPrompt }],
         },
         GENERATION_TIMEOUT

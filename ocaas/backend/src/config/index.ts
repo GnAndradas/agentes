@@ -44,6 +44,8 @@ export const config = {
     wsUrl: env.OPENCLAW_WS_URL || env.OPENCLAW_GATEWAY_URL.replace(/^http/, 'ws'),
     // WebSocket mode: 'required' | 'optional' | 'disabled'
     wsMode: env.OPENCLAW_WS_MODE,
+    // PROMPT 21: Optional backend model override (e.g., openai/gpt-4o-mini)
+    backendModel: env.OPENCLAW_BACKEND_MODEL,
   },
   security: {
     apiSecretKey: env.API_SECRET_KEY,

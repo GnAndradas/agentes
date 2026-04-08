@@ -25,6 +25,10 @@ const envSchema = z.object({
   // - optional: degrade gracefully if WS fails (default)
   // - disabled: never attempt WS connection
   OPENCLAW_WS_MODE: z.enum(['required', 'optional', 'disabled']).default('optional'),
+  // PROMPT 21: Optional backend model override (sent via x-openclaw-model header)
+  // Format: provider/model (e.g., openai/gpt-4o-mini, anthropic/claude-3-sonnet)
+  // If not set, OpenClaw uses its internal default
+  OPENCLAW_BACKEND_MODEL: z.string().optional(),
 
   API_SECRET_KEY: z.string().min(16).default('dev-secret-key-min-16'),
 

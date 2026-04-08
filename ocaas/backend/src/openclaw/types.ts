@@ -75,6 +75,13 @@ export interface GenerateResult {
     inputTokens: number;
     outputTokens: number;
   };
+  // PROMPT 21: Traceability fields
+  trace?: {
+    provider: 'openclaw';
+    runtime: 'chat_completion';
+    targetModel: string; // e.g., 'openclaw/default'
+    backendModelOverride?: string; // Value from x-openclaw-model header if used
+  };
 }
 
 // ============================================================================

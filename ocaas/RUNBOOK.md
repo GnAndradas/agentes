@@ -890,6 +890,65 @@ Only after step 5 is the resource usable.
 For bundles: bundleStatus must be 'complete'.
 ```
 
+## DEPLOYMENT COMPLETION
+
+After applying OpenClaw configuration, TUI must complete deployment by starting all services and validating them.
+
+TUI must not stop after editing config files.
+
+### Required start sequence
+
+```bash
+# 1. Start OpenClaw gateway
+openclaw gateway start
+```
+
+```bash
+# 2. Start backend
+cd ocaas/backend
+npm run dev
+```
+
+```bash
+# 3. Start frontend
+cd ocaas/frontend
+npm run dev
+```
+
+### Required validation
+
+```bash
+# Gateway must be running
+curl http://localhost:18789/health
+```
+- Must respond OK
+
+```bash
+# Backend must be running
+curl http://localhost:3001/health
+```
+- Must return {"status":"ok"}
+
+```bash
+# Models must exist
+curl localhost:18789/v1/models -H "Authorization: Bearer $OPENCLAW_API_KEY"
+```
+- Must return non-empty list
+
+```bash
+# Chat completions must work
+curl -X POST localhost:18789/v1/chat/completions   -H "Content-Type: application/json"   -H "Authorization: Bearer $OPENCLAW_API_KEY"   -d '{"model":"openclaw/default","messages":[{"role":"user","content":"test"}]}'
+```
+- Must return response
+- Must not return 404
+
+```bash
+# OCAAS must process tasks
+curl -X POST localhost:3001/api/tasks   -H "Content-Type: application/json"   -d '{"title":"test","type":"general","priority":2}'
+```
+- Task created
+- Job dispatched
+
 ---
 
 *Updated: 2026-04-07*

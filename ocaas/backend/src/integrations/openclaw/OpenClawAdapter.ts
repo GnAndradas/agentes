@@ -249,6 +249,8 @@ export class OpenClawAdapter {
         success: true,
         sessionId: spawnResult.sessionId,
         response: sendResult.response,
+        usage: sendResult.usage,
+        trace: sendResult.trace,
       };
     } catch (err) {
       logger.error({ err, agentId: input.agentId }, 'Agent execution failed');
@@ -351,6 +353,11 @@ export class OpenClawAdapter {
       hooksConfigured: this.isHooksConfigured(),
     }, 'executeViaHooks called');
 
+    // Extract resources from context (if provided)
+    const context = input.context as { tools?: string[]; skills?: string[] } | undefined;
+    const tools = context?.tools || [];
+    const skills = context?.skills || [];
+
     // Try hooks_session first (PRIMARY)
     if (this.isHooksConfigured()) {
       try {
@@ -361,6 +368,7 @@ export class OpenClawAdapter {
           name: input.name || `OCAAS Agent ${input.agentId}`,
           wakeMode: 'now',
           deliver: false, // We want sync-ish response handling
+          context: { tools, skills }, // RESOURCE INJECTION
         });
 
         if (result.success) {
@@ -368,6 +376,7 @@ export class OpenClawAdapter {
             agentId: input.agentId,
             sessionKey,
             executionMode: 'hooks_session',
+            resourcesInjected: result.resourcesInjected,
           }, 'Execution succeeded via hooks_session');
 
           return {
@@ -376,6 +385,9 @@ export class OpenClawAdapter {
             executionMode: 'hooks_session',
             accepted: result.accepted,
             response: result.response,
+            usage: result.usage,
+            trace: result.trace,
+            resourcesInjected: result.resourcesInjected,
           };
         }
 
@@ -438,6 +450,8 @@ export class OpenClawAdapter {
         fallbackUsed: true,
         fallbackReason,
         response: result.response,
+        usage: result.usage,
+        trace: result.trace,
         error: result.error,
       };
     } catch (err) {

@@ -1195,6 +1195,11 @@ export class OpenClawGateway {
       }, 'Running agent via /hooks/agent (PRIMARY MODE)');
 
       // PROMPT 7: Include agentId in payload
+      // RESOURCE INJECTION: Include tools/skills in request
+      const tools = options.context?.tools || [];
+      const skills = options.context?.skills || [];
+      const hasResources = tools.length > 0 || skills.length > 0;
+
       const body: Record<string, unknown> = {
         message: options.message,
         sessionKey: options.sessionKey,
@@ -1208,19 +1213,49 @@ export class OpenClawGateway {
         body.channel = options.channel;
       }
 
-      await this.webhookRequest('/agent', body);
+      // RESOURCE INJECTION: Pass tools/skills to OpenClaw runtime
+      // OpenClaw may or may not use these natively - we inject in prompt as fallback
+      if (hasResources) {
+        body.tools = tools;
+        body.skills = skills;
+
+        logger.info({
+          agentId: options.agentId,
+          sessionKey: options.sessionKey,
+          toolCount: tools.length,
+          skillCount: skills.length,
+        }, 'Injecting resources into hooks request');
+      }
+
+      const response = await this.apiRequest<ChatCompletionResponse>('POST', '/hooks/agent', body);
+      const content = response.choices?.[0]?.message?.content || '';
 
       logger.info({
         sessionKey: options.sessionKey,
         agentId: options.agentId,
+        resourcesInjected: hasResources,
+        toolCount: tools.length,
+        skillCount: skills.length,
       }, 'Agent execution accepted via /hooks/agent');
 
       return {
         success: true,
         sessionKey: options.sessionKey,
         accepted: true,
-        // Note: /hooks/agent is fire-and-forget, response comes via channel
-        // For sync response, would need different endpoint or polling
+        response: content,
+        usage: response.usage ? {
+          inputTokens: response.usage.prompt_tokens,
+          outputTokens: response.usage.completion_tokens,
+        } : undefined,
+        trace: {
+          model: response.model,
+        },
+        // RESOURCE TRACEABILITY: What we injected
+        resourcesInjected: hasResources ? {
+          tools,
+          skills,
+          injectionMode: 'native', // Sent in body - OpenClaw decides how to use
+        } : undefined,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -1338,6 +1373,13 @@ export class OpenClawGateway {
       return {
         success: true,
         response: content,
+        usage: response.usage ? {
+          inputTokens: response.usage.prompt_tokens,
+          outputTokens: response.usage.completion_tokens,
+        } : undefined,
+        trace: {
+          model: response.model,
+        },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

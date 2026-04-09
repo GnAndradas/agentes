@@ -39,4 +39,19 @@ export async function taskRoutes(fastify: FastifyInstance) {
   // P0-02: Generation traceability endpoints
   fastify.get('/:id/generation-trace', h.getGenerationTrace);
   fastify.get('/:id/generation-trace/history', h.getGenerationTraceHistory);
+
+  // OCAAS INTERNAL PROGRESS: Orchestrator state tracking (NOT OpenClaw runtime)
+  fastify.get('/:id/internal-progress', h.getInternalProgress);
+
+  // OPENCLAW RUNTIME PROGRESS: Session status (LIMITED - no event stream API)
+  fastify.get('/:id/runtime-progress', h.getRuntimeProgress);
+
+  // OPENCLAW RUNTIME EVENTS: Real events from progress-tracker hook
+  fastify.get('/:id/runtime-events', h.getRuntimeEvents);
+
+  // EXECUTION TIMELINE: Unified view of all 3 observability layers
+  fastify.get('/:id/execution-timeline', h.getExecutionTimeline);
+
+  // DEBUG SUMMARY: Operational debugging for troubleshooting
+  fastify.get('/:id/debug-summary', h.getDebugSummary);
 }

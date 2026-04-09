@@ -177,6 +177,132 @@ export const taskApi = {
     );
     return res.data;
   },
+
+  /**
+   * Get OCAAS internal progress for a task
+   * Returns OCAAS orchestrator state from TaskStateManager.
+   * This is INTERNAL OCAAS tracking only - NOT OpenClaw runtime events.
+   */
+  getInternalProgress: async (taskId: string): Promise<import('../types').TaskProgressResponse> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').TaskProgressResponse }>(
+        `/tasks/${taskId}/internal-progress`
+      );
+      return res.data;
+    } catch {
+      return {
+        taskId,
+        hasProgress: false,
+        events: [],
+        currentPhase: 'pending',
+        progressPct: 0,
+        message: 'Could not fetch OCAAS internal progress',
+      };
+    }
+  },
+
+  /**
+   * Get OpenClaw runtime progress for a task
+   * LIMITATION: OpenClaw does not expose runtime events via API.
+   * Only session status is available.
+   */
+  getRuntimeProgress: async (taskId: string): Promise<import('../types').RuntimeProgressResponse> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').RuntimeProgressResponse }>(
+        `/tasks/${taskId}/runtime-progress`
+      );
+      return res.data;
+    } catch {
+      return {
+        taskId,
+        hasRuntimeProgress: false,
+        events: [],
+        sessionKey: null,
+        sessionStatus: 'unknown',
+        sessionId: null,
+        limitation: 'Could not fetch runtime progress',
+        availableApis: [],
+        missingApis: [],
+        source: 'openclaw_runtime',
+      };
+    }
+  },
+
+  /**
+   * Get OpenClaw runtime events from progress-tracker hook
+   * REAL runtime events captured by the hook installed in OpenClaw.
+   * Reads from: $OPENCLAW_WORKSPACE_PATH/runs/<sessionKey>.jsonl
+   */
+  getRuntimeEvents: async (taskId: string): Promise<import('../types').RuntimeEventsResponse> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').RuntimeEventsResponse }>(
+        `/tasks/${taskId}/runtime-events`
+      );
+      return res.data;
+    } catch {
+      return {
+        taskId,
+        sessionKey: null,
+        hasEvents: false,
+        events: [],
+        logPath: null,
+        logExists: false,
+        source: 'openclaw-hook',
+        limitation: 'Could not fetch runtime events',
+      };
+    }
+  },
+
+  /**
+   * Get unified execution timeline for a task
+   * Aggregates events from all 3 observability layers:
+   * 1. OCAAS Internal Progress
+   * 2. OpenClaw Session Status
+   * 3. OpenClaw Runtime Events
+   */
+  getExecutionTimeline: async (taskId: string): Promise<import('../types').ExecutionTimelineResponse> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').ExecutionTimelineResponse }>(
+        `/tasks/${taskId}/execution-timeline`
+      );
+      return res.data;
+    } catch {
+      return {
+        taskId,
+        sessionKey: null,
+        jobId: null,
+        events: [],
+        layers: {
+          ocaas_internal: { available: false, eventCount: 0 },
+          openclaw_status: { available: false, eventCount: 0 },
+          openclaw_runtime: { available: false, eventCount: 0 },
+        },
+        totalEvents: 0,
+      };
+    }
+  },
+
+  /**
+   * Get debug summary for a task
+   * Provides operational debugging across all layers.
+   */
+  getDebugSummary: async (taskId: string): Promise<import('../types').TaskDebugSummary> => {
+    try {
+      const res = await api.get<{ success: boolean; data: import('../types').TaskDebugSummary }>(
+        `/tasks/${taskId}/debug-summary`
+      );
+      return res.data;
+    } catch {
+      return {
+        taskId,
+        taskStatus: 'unknown',
+        overall_status: 'unknown',
+        issues: [],
+        last_useful_event: null,
+        layers_checked: [],
+      };
+    }
+  },
 };
 
 // Skill API

@@ -44,6 +44,13 @@ export interface SendResult {
   success: boolean;
   response?: string;
   error?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+  trace?: {
+    model: string;
+  };
 }
 
 export interface CronJob {
@@ -112,6 +119,21 @@ export interface HooksAgentOptions {
 
   /** Target channel (telegram, etc.) */
   channel?: string;
+
+  /**
+   * RESOURCE INJECTION: Tools and skills available for this execution
+   * These are passed to OpenClaw runtime for resource-aware execution.
+   */
+  context?: {
+    /** Tool IDs available for this execution */
+    tools?: string[];
+    /** Skill IDs available for this execution */
+    skills?: string[];
+    /** Max tokens for response */
+    maxTokens?: number;
+    /** Temperature for generation */
+    temperature?: number;
+  };
 }
 
 /**
@@ -131,6 +153,26 @@ export interface HooksAgentResult {
 
   /** Whether this was accepted (fire-and-forget may not have response) */
   accepted?: boolean;
+
+  /** AI usage evidence */
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+
+  /** AI trace evidence */
+  trace?: {
+    model: string;
+  };
+
+  /**
+   * RESOURCE TRACEABILITY: What resources were injected/applied
+   */
+  resourcesInjected?: {
+    tools: string[];
+    skills: string[];
+    injectionMode: 'native' | 'prompt' | 'none';
+  };
 }
 
 /**

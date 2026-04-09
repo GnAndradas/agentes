@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, ListTodo, XCircle, RotateCcw, Filter, FolderTree, GitBranch } from 'lucide-react';
+import { Plus, ListTodo, XCircle, RotateCcw, Filter, FolderTree, GitBranch, CheckCircle, AlertCircle, Sparkles } from 'lucide-react';
 import { taskApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import {
@@ -24,6 +24,27 @@ import {
 
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
+
+function TruthBadge({ truth }: { truth?: { level: string; reason: string } }) {
+  if (!truth) return null;
+
+  const config: Record<string, { color: string; label: string; icon?: React.ElementType }> = {
+    real: { color: 'text-green-400', label: 'Verified', icon: CheckCircle },
+    fallback: { color: 'text-yellow-400', label: 'Fallback', icon: AlertCircle },
+    stub: { color: 'text-blue-400', label: 'Stub', icon: Sparkles },
+    uncertain: { color: 'text-dark-500', label: 'Uncertain' },
+  };
+
+  const item = config[truth.level] || config.uncertain;
+  const Icon = item.icon;
+
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-dark-900 ${item.color} ml-2`} title={truth.reason}>
+      {Icon && <Icon className="w-2.5 h-2.5" />}
+      {item.label}
+    </span>
+  );
+}
 
 const statusVariant = {
   pending: 'pending',
@@ -83,7 +104,7 @@ export function Tasks() {
 
   const createMutation = useMutation({
     mutationFn: taskApi.create,
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       setShowCreate(false);
       setForm({
@@ -97,6 +118,11 @@ export function Tasks() {
         expectedOutput: '',
       });
       addNotification({ type: 'success', title: 'Task created' });
+      
+      // Redirect to task detail for immediate visibility
+      if (result?.id) {
+        navigate(`/tasks/${result.id}`);
+      }
     },
     onError: (err: Error) => {
       addNotification({ type: 'error', title: 'Failed to create task', message: err.message });
@@ -228,9 +254,14 @@ export function Tasks() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant[task.status]}>
-                      {task.status}
-                    </Badge>
+                    <div className="flex items-center">
+                      <Badge variant={statusVariant[task.status]}>
+                        {task.status}
+                      </Badge>
+                      {task.status === 'completed' && (
+                        <TruthBadge truth={task.metadata?._truth as any} />
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <Badge

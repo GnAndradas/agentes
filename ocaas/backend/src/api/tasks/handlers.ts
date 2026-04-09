@@ -389,3 +389,383 @@ export async function getGenerationTraceHistory(req: FastifyRequest<IdParam>, re
     return reply.status(statusCode).send(body);
   }
 }
+
+// ============================================================================
+// PROGRESS TRACKING (PROMPT: HOOKS ALTERNATIVE)
+// ============================================================================
+
+/**
+ * Internal progress event from TaskStateManager (OCAAS orchestrator state)
+ * NOT OpenClaw runtime events - only OCAAS internal state tracking.
+ */
+export interface InternalProgressEvent {
+  timestamp: number;
+  event: string;
+  stage: string;
+  summary: string;
+  source: 'ocaas_orchestrator';
+  stepId?: string;
+  stepName?: string;
+  jobId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Get OCAAS internal progress for a task
+ *
+ * Returns OCAAS orchestrator state from TaskStateManager.
+ * This is INTERNAL OCAAS tracking only - NOT OpenClaw runtime events.
+ *
+ * Events tracked:
+ * - state_initialized
+ * - step_started, step_completed, step_failed
+ * - phase_changed
+ * - checkpoint_created
+ * - task_paused, task_resumed, task_completed, task_failed
+ */
+export async function getInternalProgress(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getTaskStateManager } = await import('../../execution/TaskStateManager/index.js');
+    const taskStateManager = getTaskStateManager();
+    const taskId = req.params.id;
+
+    // Get current state
+    const state = await taskStateManager.getState(taskId);
+
+    if (!state) {
+      return reply.send({
+        success: true,
+        data: {
+          taskId,
+          hasProgress: false,
+          events: [],
+          currentPhase: 'pending',
+          progressPct: 0,
+          message: 'No OCAAS internal state yet. Task may be pending or queued.',
+          source: 'ocaas_orchestrator',
+        },
+      });
+    }
+
+    // Build internal progress events from OCAAS state
+    const events: InternalProgressEvent[] = [];
+
+    events.push({
+      timestamp: state.createdAt,
+      event: 'state_initialized',
+      stage: 'initializing',
+      summary: 'OCAAS state initialized',
+      source: 'ocaas_orchestrator',
+    });
+
+    for (const step of state.steps) {
+      if (step.startedAt) {
+        events.push({
+          timestamp: step.startedAt,
+          event: 'step_started',
+          stage: 'executing',
+          summary: `OCAAS step started: ${step.name}`,
+          source: 'ocaas_orchestrator',
+          stepId: step.id,
+          stepName: step.name,
+          jobId: step.jobId,
+        });
+      }
+
+      if (step.completedAt && step.status === 'completed') {
+        events.push({
+          timestamp: step.completedAt,
+          event: 'step_completed',
+          stage: 'executing',
+          summary: `OCAAS step completed: ${step.name}`,
+          source: 'ocaas_orchestrator',
+          stepId: step.id,
+          stepName: step.name,
+          jobId: step.jobId,
+        });
+      }
+
+      if (step.status === 'failed' && step.error) {
+        events.push({
+          timestamp: step.completedAt || state.updatedAt,
+          event: 'step_failed',
+          stage: 'failed',
+          summary: `OCAAS step failed: ${step.name} - ${step.error}`,
+          source: 'ocaas_orchestrator',
+          stepId: step.id,
+          stepName: step.name,
+          jobId: step.jobId,
+          metadata: { error: step.error },
+        });
+      }
+    }
+
+    for (const cp of state.checkpoints) {
+      events.push({
+        timestamp: cp.createdAt,
+        event: 'checkpoint_created',
+        stage: 'executing',
+        summary: `OCAAS checkpoint: ${cp.label}${cp.reason ? ` (${cp.reason})` : ''}`,
+        source: 'ocaas_orchestrator',
+        metadata: { auto: cp.auto, checkpointId: cp.id },
+      });
+    }
+
+    if (state.phase === 'completed') {
+      events.push({
+        timestamp: state.updatedAt,
+        event: 'task_completed',
+        stage: 'completed',
+        summary: 'OCAAS task completed',
+        source: 'ocaas_orchestrator',
+      });
+    } else if (state.phase === 'failed') {
+      events.push({
+        timestamp: state.updatedAt,
+        event: 'task_failed',
+        stage: 'failed',
+        summary: 'OCAAS task failed',
+        source: 'ocaas_orchestrator',
+      });
+    } else if (state.phase === 'paused') {
+      events.push({
+        timestamp: state.updatedAt,
+        event: 'task_paused',
+        stage: 'paused',
+        summary: `OCAAS task paused: ${state.pausedReason || 'No reason provided'}`,
+        source: 'ocaas_orchestrator',
+      });
+    }
+
+    events.sort((a, b) => a.timestamp - b.timestamp);
+
+    const currentStep = state.steps.find(s => s.id === state.currentStepId);
+
+    return reply.send({
+      success: true,
+      data: {
+        taskId,
+        hasProgress: true,
+        events,
+        currentPhase: state.phase,
+        currentStep: currentStep ? {
+          id: currentStep.id,
+          name: currentStep.name,
+          status: currentStep.status,
+        } : undefined,
+        progressPct: state.progressPct,
+        completedSteps: state.steps.filter(s => s.status === 'completed').length,
+        totalSteps: state.steps.length,
+        sessionKey: state.sessionKey,
+        lastUpdate: state.lastMeaningfulUpdateAt,
+        toolCallsCount: state.toolCallsCount,
+        warnings: state.warnings,
+        source: 'ocaas_orchestrator',
+      },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// ============================================================================
+// RUNTIME PROGRESS - OpenClaw Runtime Events (HONEST LIMITATIONS)
+// ============================================================================
+
+/**
+ * Runtime progress event from OpenClaw
+ * IMPORTANT: OpenClaw does NOT expose runtime events via API.
+ * This endpoint provides session status only, NOT execution details.
+ */
+export interface RuntimeProgressEvent {
+  timestamp: number;
+  event: string;
+  stage: string;
+  summary: string;
+  source: 'openclaw_runtime';
+  sessionId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Get OpenClaw runtime progress for a task
+ *
+ * LIMITATION: OpenClaw's WebSocket RPC only supports:
+ * - sessions.list (list active sessions)
+ * - chat.abort (cancel session)
+ * - sessions.patch (update session)
+ * - cron.list/patch
+ *
+ * There is NO API for runtime events (tool_use, message_delta, etc.)
+ * This endpoint provides session status only.
+ */
+export async function getRuntimeProgress(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getGateway } = await import('../../openclaw/gateway.js');
+    const { getTaskStateManager } = await import('../../execution/TaskStateManager/index.js');
+    const gateway = getGateway();
+    const taskStateManager = getTaskStateManager();
+    const taskId = req.params.id;
+
+    // Get task state to find sessionKey
+    const state = await taskStateManager.getState(taskId);
+    const sessionKey = state?.sessionKey;
+
+    // Check if WebSocket is connected
+    const wsConnected = gateway.isWsConnected();
+
+    if (!wsConnected) {
+      return reply.send({
+        success: true,
+        data: {
+          taskId,
+          hasRuntimeProgress: false,
+          events: [],
+          sessionKey: sessionKey || null,
+          sessionStatus: 'unknown',
+          limitation: 'WebSocket RPC not connected to OpenClaw',
+          source: 'openclaw_runtime',
+        },
+      });
+    }
+
+    // Try to find session in OpenClaw
+    const sessions = await gateway.listSessions();
+    const matchingSession = sessionKey
+      ? sessions.find(s => s.id === sessionKey || s.id.includes(taskId))
+      : sessions.find(s => s.id.includes(taskId));
+
+    // Build minimal runtime events (only what we can verify)
+    const events: RuntimeProgressEvent[] = [];
+
+    if (matchingSession) {
+      events.push({
+        timestamp: matchingSession.createdAt,
+        event: 'session_found',
+        stage: matchingSession.status === 'active' ? 'executing' : matchingSession.status,
+        summary: `OpenClaw session: ${matchingSession.status}`,
+        source: 'openclaw_runtime',
+        sessionId: matchingSession.id,
+      });
+    }
+
+    return reply.send({
+      success: true,
+      data: {
+        taskId,
+        hasRuntimeProgress: events.length > 0,
+        events,
+        sessionKey: sessionKey || null,
+        sessionStatus: matchingSession?.status || 'not_found',
+        sessionId: matchingSession?.id || null,
+        limitation: 'OpenClaw does not expose runtime events (tool_use, message_delta) via API. Only session status is available.',
+        availableApis: ['sessions.list', 'chat.abort', 'sessions.patch'],
+        missingApis: ['sessions.events', 'tool_use.stream', 'message.stream'],
+        source: 'openclaw_runtime',
+      },
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// ============================================================================
+// RUNTIME EVENTS - Real OpenClaw Hook Events (from progress-tracker hook)
+// ============================================================================
+
+/**
+ * Get runtime events from OpenClaw progress-tracker hook
+ *
+ * Reads events from: $OPENCLAW_WORKSPACE_PATH/runs/<sessionKey>.jsonl
+ *
+ * These are REAL runtime events captured by the progress-tracker hook
+ * installed in OpenClaw. Not inferred, not heuristic.
+ */
+export async function getRuntimeEvents(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getRuntimeEvents: fetchEvents } = await import('../../services/RuntimeEventsService.js');
+    const { getTaskStateManager } = await import('../../execution/TaskStateManager/index.js');
+    const taskStateManager = getTaskStateManager();
+    const taskId = req.params.id;
+
+    // Get task state to find sessionKey (if available)
+    const state = await taskStateManager.getState(taskId);
+    const sessionKey = state?.sessionKey;
+
+    // Fetch runtime events from hook log
+    const result = await fetchEvents(taskId, sessionKey);
+
+    return reply.send({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// ============================================================================
+// EXECUTION TIMELINE - Unified view of all 3 observability layers
+// ============================================================================
+
+/**
+ * Get unified execution timeline for a task
+ *
+ * Aggregates events from:
+ * 1. OCAAS Internal Progress (orchestrator state)
+ * 2. OpenClaw Session Status (limited API)
+ * 3. OpenClaw Runtime Events (progress-tracker hook)
+ *
+ * Does NOT synthesize or infer - only aggregates existing events.
+ */
+export async function getExecutionTimeline(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getExecutionTimeline: fetchTimeline } = await import('../../services/ExecutionTimelineService.js');
+    const taskId = req.params.id;
+    const result = await fetchTimeline(taskId);
+
+    return reply.send({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}
+
+// ============================================================================
+// DEBUG SUMMARY - Operational debugging for failed/blocked/anomalous tasks
+// ============================================================================
+
+/**
+ * Get debug summary for a task
+ *
+ * Provides structured debugging information across all layers:
+ * - ocaas_internal: TaskStateManager state
+ * - openclaw_runtime: Session status
+ * - openclaw_hook: Runtime events
+ * - ai_generation: GenerationTrace
+ * - resource_contract: Resource injection/usage
+ * - gateway: Transport/connectivity
+ *
+ * Does NOT invent causes - only reports evidenced issues.
+ */
+export async function getDebugSummary(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { getTaskDebugSummary } = await import('../../services/TaskDebugSummaryService.js');
+    const taskId = req.params.id;
+    const result = await getTaskDebugSummary(taskId);
+
+    return reply.send({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

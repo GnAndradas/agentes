@@ -472,7 +472,7 @@ export function AgentDetail() {
               >
                 <div
                   className="flex-1 cursor-pointer"
-                  onClick={() => navigate(`/skills`)}
+                  onClick={() => navigate(`/skills/${skill.id}`)}
                 >
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-primary-400" />

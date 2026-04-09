@@ -6,7 +6,9 @@ import { AgentDetail } from './pages/AgentDetail';
 import { Tasks } from './pages/Tasks';
 import { TaskDetail } from './pages/TaskDetail';
 import { Skills } from './pages/Skills';
+import { SkillDetail } from './pages/SkillDetail';
 import { Tools } from './pages/Tools';
+import { ToolDetail } from './pages/ToolDetail';
 import { Generator } from './pages/Generator';
 import { Generations } from './pages/Generations';
 import { GenerationDetail } from './pages/GenerationDetail';
@@ -25,7 +27,9 @@ export default function App() {
           <Route path="tasks" element={<Tasks />} />
           <Route path="tasks/:id" element={<TaskDetail />} />
           <Route path="skills" element={<Skills />} />
+          <Route path="skills/:id" element={<SkillDetail />} />
           <Route path="tools" element={<Tools />} />
+          <Route path="tools/:id" element={<ToolDetail />} />
           <Route path="generator" element={<Generator />} />
           <Route path="generations" element={<Generations />} />
           <Route path="generations/:id" element={<GenerationDetail />} />

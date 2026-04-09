@@ -35,6 +35,15 @@ export type ExecutionMode =
   | 'real_agent';      // Would use actual OpenClaw agent (legacy, NOT IMPLEMENTED)
 
 /**
+ * Execution Truth Level
+ */
+export type TruthLevel =
+  | 'real'      // Confirmed real execution (hooks or chat_completion with response)
+  | 'fallback'  // Fallback used (async timeout or similar)
+  | 'stub'      // No real execution (gateway down or stub mode)
+  | 'uncertain'; // Evidence is missing or contradictory
+
+/**
  * Execution transport used
  */
 export type ExecutionTransport =
@@ -106,6 +115,10 @@ export interface ExecutionTraceability {
 
   /** Response info */
   response_received: boolean;
+
+  /** AI Generated info (Confirmed by provider) */
+  ai_generated: boolean;
+  ai_provider?: string;
   response_tokens?: {
     input: number;
     output: number;
@@ -113,6 +126,63 @@ export interface ExecutionTraceability {
 
   /** Gap explanation */
   gap?: string;
+
+  // ==========================================================================
+  // RESOURCE TRACEABILITY (skills/tools)
+  // ==========================================================================
+
+  /** Resources assigned to the agent for this execution */
+  resources_assigned?: {
+    tools: string[];
+    skills: string[];
+  };
+
+  /** Resources actually injected into the request */
+  resources_injected?: {
+    tools: string[];
+    skills: string[];
+    /** How resources were injected */
+    injection_mode: 'native' | 'prompt' | 'none';
+  };
+
+  /**
+   * Resource usage verification status
+   *
+   * IMPORTANT: This field follows strict contractual verification.
+   * - verified = true ONLY if OpenClaw returns explicit structured confirmation
+   * - verified = false if no structured confirmation exists (current state)
+   *
+   * DO NOT use heuristics, text parsing, or inference to set verified = true.
+   * DO NOT assume injected = used.
+   */
+  resources_usage?: {
+    /** Is resource usage verified by structured runtime confirmation? */
+    verified: boolean;
+
+    /**
+     * Source of verification
+     * - 'runtime_receipt': OpenClaw returned resources_used field (NOT SUPPORTED YET)
+     * - 'unverified': No structured confirmation available
+     */
+    verification_source: 'runtime_receipt' | 'unverified';
+
+    /**
+     * Tools confirmed as used by runtime (ONLY if verified = true)
+     * Empty if verified = false - never infer from text
+     */
+    tools_used: string[];
+
+    /**
+     * Skills confirmed as used by runtime (ONLY if verified = true)
+     * Empty if verified = false - never infer from text
+     */
+    skills_used: string[];
+
+    /**
+     * Explanation when verified = false
+     */
+    unverified_reason?: string;
+  };
 }
 
 /**
@@ -131,6 +201,8 @@ export const DEFAULT_EXECUTION_TRACEABILITY: ExecutionTraceability = {
   execution_fallback_used: false,
   execution_started_at: 0,
   response_received: false,
+  ai_generated: false,
+  resources_assigned: { tools: [], skills: [] },
 };
 
 // ============================================================================
@@ -212,6 +284,74 @@ export function detectExecutionMode(
  */
 export function isRealExecution(mode: ExecutionMode): boolean {
   return mode === 'hooks_session' || mode === 'chat_completion' || mode === 'real_agent';
+}
+
+/**
+ * Verify execution truth based on traceability evidence
+ */
+export function verifyExecutionTruth(trace: ExecutionTraceability): {
+  level: TruthLevel;
+  reason: string;
+  isReal: boolean;
+} {
+  // 1. Stub is never real
+  if (trace.execution_mode === 'stub') {
+    return {
+      level: 'stub',
+      reason: trace.execution_fallback_reason || 'Execution mode is stub',
+      isReal: false,
+    };
+  }
+
+  // 2. Check for real AI activity signs
+  const hasResponse = trace.response_received;
+  const hasTransportSuccess = trace.transport_success;
+  const fallbackUsed = trace.execution_fallback_used;
+
+  // Real execution requirements:
+  // - Transport succeeded
+  // - Response received
+  // - AI generation confirmed (LAST GAP CLOSED)
+  // - Fallback NOT used (or fallback was to another real mode)
+  if (hasTransportSuccess && hasResponse && trace.ai_generated) {
+    if (fallbackUsed) {
+      return {
+        level: 'fallback',
+        reason: `Fallback used (${trace.execution_mode}), but AI generation confirmed`,
+        isReal: true,
+      };
+    }
+
+    return {
+      level: 'real',
+      reason: `Verified AI execution via ${trace.execution_mode} (${trace.ai_provider || 'default'})`,
+      isReal: true,
+    };
+  }
+
+  // Fallback case: Response received but AI generation NOT confirmed or uncertain
+  if (hasResponse && !trace.ai_generated) {
+    return {
+      level: 'fallback',
+      reason: 'Response received but AI generation could not be verified (possible stub/hardcoded)',
+      isReal: false,
+    };
+  }
+
+  // 3. Accepted async is real-intent but incomplete
+  if (trace.accepted_async && !hasResponse) {
+    return {
+      level: 'uncertain',
+      reason: 'Job accepted async but no response received yet',
+      isReal: true, // Intent is real
+    };
+  }
+
+  return {
+    level: 'uncertain',
+    reason: 'Incomplete execution evidence',
+    isReal: false,
+  };
 }
 
 /**
@@ -420,9 +560,11 @@ export class ExecutionTraceabilityBuilder {
     return this;
   }
 
-  /** Mark response received */
-  responseReceived(tokens?: { input: number; output: number }): this {
+  /** Mark response received and AI confirmed */
+  responseReceived(tokens?: { input: number; output: number }, provider?: string): this {
     this.trace.response_received = true;
+    this.trace.ai_generated = true;
+    this.trace.ai_provider = provider;
     this.trace.response_tokens = tokens;
     return this;
   }
@@ -436,6 +578,48 @@ export class ExecutionTraceabilityBuilder {
   /** Set gap explanation */
   gap(explanation: string): this {
     this.trace.gap = explanation;
+    return this;
+  }
+
+  // ==========================================================================
+  // RESOURCE TRACEABILITY
+  // ==========================================================================
+
+  /** Set assigned resources (from agent config) */
+  resourcesAssigned(tools: string[], skills: string[]): this {
+    this.trace.resources_assigned = { tools, skills };
+    return this;
+  }
+
+  /** Mark resources as injected into request */
+  resourcesInjected(tools: string[], skills: string[], mode: 'native' | 'prompt' | 'none'): this {
+    this.trace.resources_injected = { tools, skills, injection_mode: mode };
+    return this;
+  }
+
+  /**
+   * Mark resource usage verification status
+   *
+   * @param verified - true ONLY if OpenClaw returned structured confirmation
+   * @param source - 'runtime_receipt' if verified, 'unverified' otherwise
+   * @param toolsUsed - ONLY populated if verified=true
+   * @param skillsUsed - ONLY populated if verified=true
+   * @param unverifiedReason - Explanation when verified=false
+   */
+  resourcesUsage(
+    verified: boolean,
+    source: 'runtime_receipt' | 'unverified',
+    toolsUsed: string[],
+    skillsUsed: string[],
+    unverifiedReason?: string
+  ): this {
+    this.trace.resources_usage = {
+      verified,
+      verification_source: source,
+      tools_used: verified ? toolsUsed : [], // NEVER populate if not verified
+      skills_used: verified ? skillsUsed : [], // NEVER populate if not verified
+      unverified_reason: unverifiedReason,
+    };
     return this;
   }
 

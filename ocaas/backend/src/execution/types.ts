@@ -6,7 +6,7 @@
  */
 
 import type { RoleType } from '../organization/types.js';
-import type { ExecutionTraceability } from './ExecutionTraceability.js';
+import type { ExecutionTraceability, TruthLevel } from './ExecutionTraceability.js';
 
 // ============================================================================
 // JOB PAYLOAD (OCAAS → OpenClaw)
@@ -174,7 +174,9 @@ export type JobStatus =
   | 'pending'      // Queued but not started
   | 'running'      // Currently executing
   | 'accepted'     // Accepted by async handler (hooks_session), awaiting result via channel
-  | 'completed'    // Finished successfully
+  | 'completed'    // Finished successfully (REAL execution)
+  | 'completed_with_fallback' // Finished with fallback evidence
+  | 'completed_stub' // Finished with stub evidence (simulated)
   | 'failed'       // Failed with error
   | 'blocked'      // Blocked on missing resource/capability
   | 'cancelled'    // Cancelled by user/system
@@ -210,6 +212,12 @@ export interface JobResponse {
 
   /** Execution traceability (BLOQUE 10) */
   traceability?: ExecutionTraceability;
+
+  /** Execution truth verification result */
+  truth?: {
+    level: TruthLevel;
+    reason: string;
+  };
 }
 
 /**

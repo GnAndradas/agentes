@@ -505,16 +505,24 @@ export class TaskRouter {
       if (dispatchResult.dispatched && dispatchResult.response) {
         const jobResponse = dispatchResult.response;
 
-        if (jobResponse.status === 'completed') {
+        if (
+          jobResponse.status === 'completed' || 
+          jobResponse.status === 'completed_with_fallback' || 
+          jobResponse.status === 'completed_stub'
+        ) {
           // =========================================================================
           // STAGE: Completing task
           // =========================================================================
           checkpointStore.updateStage(task.id, 'completing', 'saving_result', 90);
-          await taskService.complete(task.id, {
-            jobId: jobResponse.jobId,
-            response: jobResponse.result?.output,
-            data: jobResponse.result?.data,
-          });
+          await taskService.complete(
+            task.id, 
+            {
+              jobId: jobResponse.jobId,
+              response: jobResponse.result?.output,
+              data: jobResponse.result?.data,
+            },
+            jobResponse.truth
+          );
 
           // Mark checkpoint as completed
           checkpointStore.markCompleted(task.id);

@@ -12,3 +12,8 @@ export { GenerationTracePanel } from './GenerationTracePanel';
 export { ToolUsagePanel } from './ToolUsagePanel';
 export { TaskManualAgentAssignPanel } from './TaskManualAgentAssignPanel';
 export { TaskGenerateAgentFlowPanel } from './TaskGenerateAgentFlowPanel';
+export { InternalProgressPanel } from './InternalProgressPanel';
+export { RuntimeProgressPanel } from './RuntimeProgressPanel';
+export { RuntimeEventsPanel } from './RuntimeEventsPanel';
+export { ExecutionTimelinePanel } from './ExecutionTimelinePanel';
+export { TaskDebugSummaryPanel } from './TaskDebugSummaryPanel';

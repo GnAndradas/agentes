@@ -45,6 +45,7 @@ import {
   createExecutionTraceability,
   detectExecutionMode,
   checkRuntimeReady,
+  verifyExecutionTruth,
   type ExecutionTraceability,
 } from './ExecutionTraceability.js';
 import {
@@ -678,8 +679,13 @@ export class JobDispatcherService {
       }]);
       await taskStateManager.startStep(payload.taskId, stepId, jobId);
 
-      // Build prompt from payload
+      // Build prompt from payload (includes resources in prompt as fallback)
       const prompt = this.buildPrompt(payload);
+
+      // RESOURCE TRACEABILITY: Track assigned resources
+      const assignedTools = payload.allowedResources.tools;
+      const assignedSkills = payload.allowedResources.skills;
+      traceBuilder.resourcesAssigned(assignedTools, assignedSkills);
 
       // PROMPT 11: Agent warmup before hooks_session
       // Non-blocking: if warmup fails, we continue (fallback will cover)
@@ -757,9 +763,40 @@ export class JobDispatcherService {
         traceBuilder.acceptedAsync();
       }
 
-      // BLOQUE 10: Track response
+      // RESOURCE TRACEABILITY: Track injected resources
+      if (hooksResult.resourcesInjected) {
+        traceBuilder.resourcesInjected(
+          hooksResult.resourcesInjected.tools,
+          hooksResult.resourcesInjected.skills,
+          hooksResult.resourcesInjected.injectionMode
+        );
+      } else if (assignedTools.length > 0 || assignedSkills.length > 0) {
+        // Resources were injected via prompt (fallback mode)
+        traceBuilder.resourcesInjected(assignedTools, assignedSkills, 'prompt');
+      }
+
+      // RESOURCE USAGE VERIFICATION: OpenClaw does NOT provide structured confirmation
+      // Mark as unverified - NEVER infer usage from text or assume injected = used
+      if (assignedTools.length > 0 || assignedSkills.length > 0) {
+        traceBuilder.resourcesUsage(
+          false, // verified = false (OpenClaw doesn't return resources_used)
+          'unverified',
+          [], // tools_used empty - no confirmation
+          [], // skills_used empty - no confirmation
+          'OpenClaw does not provide structured resource usage confirmation'
+        );
+      }
+
+      // BLOQUE 10: Track response (with AI origin verification)
       if (hooksResult.response) {
-        traceBuilder.responseReceived();
+        if (hooksResult.usage) {
+          traceBuilder.responseReceived(
+            { input: hooksResult.usage.inputTokens, output: hooksResult.usage.outputTokens },
+            hooksResult.trace?.model
+          );
+        } else {
+          traceBuilder.responseReceived();
+        }
       }
 
       // =========================================================================
@@ -832,7 +869,14 @@ export class JobDispatcherService {
             finalError = undefined;
             usedAsyncFallback = true;
             traceBuilder.fallbackUsed('async_timeout_fallback_to_chat_completion');
-            traceBuilder.responseReceived();
+            if (fallbackResult.usage) {
+              traceBuilder.responseReceived(
+                { input: fallbackResult.usage.inputTokens, output: fallbackResult.usage.outputTokens },
+                fallbackResult.trace?.model
+              );
+            } else {
+              traceBuilder.responseReceived();
+            }
             // PROMPT 17: Mark transport success now that fallback worked
             traceBuilder.transportSuccess(true);
             traceBuilder.mode('chat_completion', 'rest_api');
@@ -961,9 +1005,17 @@ export class JobDispatcherService {
             // Use the follow-up response as final
             finalResponse = followUpResult.response;
 
-            // Record additional cost for follow-up call
-            const followUpInputTokens = Math.ceil(followUpPrompt.length / 4);
-            const followUpOutputTokens = Math.ceil(followUpResult.response.length / 4);
+            // VERIFICATION: Update trace with follow-up AI info
+            if (followUpResult.usage) {
+              traceBuilder.responseReceived(
+                { input: followUpResult.usage.inputTokens, output: followUpResult.usage.outputTokens },
+                followUpResult.trace?.model
+              );
+            }
+
+            // Record additional cost for follow-up call (use real tokens if available)
+            const followUpInputTokens = followUpResult.usage?.inputTokens || Math.ceil(followUpPrompt.length / 4);
+            const followUpOutputTokens = followUpResult.usage?.outputTokens || Math.ceil(followUpResult.response.length / 4);
             budgetManager.recordCost({
               task_id: payload.taskId,
               agent_id: agentId,
@@ -1009,7 +1061,7 @@ export class JobDispatcherService {
         executionMode: finalExecutionMode,
       };
 
-      const response = this.processExecutionResult(jobId, adaptedResult, payload);
+      const response = this.processExecutionResult(jobId, adaptedResult, payload, trace);
 
       // Attach tool execution info to response if tool was used
       if (toolExecutionResult) {
@@ -1028,17 +1080,18 @@ export class JobDispatcherService {
         }
       }
 
-      // BUDGET: Record execution cost (estimate since hooks don't return tokens)
+      // BUDGET: Record execution cost (use real tokens if available)
       // PROMPT 5: Use finalResponse for token estimation, not initial hooksResult.response
-      const estimatedInputTokens = Math.ceil(prompt.length / 4); // ~4 chars per token
-      const estimatedOutputTokens = finalResponse ? Math.ceil(finalResponse.length / 4) : 250;
+      const finalInputTokens = hooksResult.usage?.inputTokens || Math.ceil(prompt.length / 4); // ~4 chars per token
+      const finalOutputTokens = hooksResult.usage?.outputTokens || (finalResponse ? Math.ceil(finalResponse.length / 4) : 250);
+
       budgetManager.recordCost({
         task_id: payload.taskId,
         agent_id: agentId,
         operation: 'execution',
         tier: 'medium',
-        input_tokens: estimatedInputTokens,
-        output_tokens: estimatedOutputTokens,
+        input_tokens: finalInputTokens,
+        output_tokens: finalOutputTokens,
         estimated_cost_usd: budgetCheck.estimated_cost_usd,
         budget_decision: budgetCheck.decision,
       });
@@ -1062,8 +1115,8 @@ export class JobDispatcherService {
         rawOutput: usedAsyncFallback ? undefined : hooksResult.response, // Only if hooks gave immediate response
         finalOutput: finalResponse, // May include tool loop result
         tokenUsage: {
-          input: estimatedInputTokens,
-          output: estimatedOutputTokens,
+          input: finalInputTokens,
+          output: finalOutputTokens,
         },
         model: finalExecutionMode === 'chat_completion' ? 'gpt-4' : undefined,
         durationMs,
@@ -1368,6 +1421,27 @@ export class JobDispatcherService {
       parts.push(`## User Context\n${payload.context.userContext}`);
     }
 
+    // RESOURCE INJECTION: Include available tools/skills in prompt
+    // This serves as fallback when OpenClaw doesn't natively use the resources from body
+    const tools = payload.allowedResources.tools;
+    const skills = payload.allowedResources.skills;
+
+    if (tools.length > 0 || skills.length > 0) {
+      parts.push(`## Available Resources`);
+
+      if (tools.length > 0) {
+        parts.push(`### Tools (${tools.length})`);
+        parts.push(`You have access to the following tools:\n${tools.map(t => `- ${t}`).join('\n')}`);
+        parts.push('Use these tools when needed to complete the task.');
+      }
+
+      if (skills.length > 0) {
+        parts.push(`### Skills (${skills.length})`);
+        parts.push(`You have the following skills available:\n${skills.map(s => `- ${s}`).join('\n')}`);
+        parts.push('Leverage these skills as appropriate for the task.');
+      }
+    }
+
     // System Constraints reminder
     parts.push(`## System Constraints`);
     parts.push(`- Autonomy: ${payload.constraints.autonomyLevel}`);
@@ -1415,8 +1489,12 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
       accepted?: boolean;
       executionMode?: 'hooks_session' | 'chat_completion' | 'stub';
     },
-    payload: JobPayload
+    payload: JobPayload,
+    trace: ExecutionTraceability
   ): JobResponse {
+    // BLOQUE Truth: Verify the real soul of this execution
+    const truth = verifyExecutionTruth(trace);
+
     // CASE 1: Success with response (completed_sync)
     if (result.success && result.response) {
       // Parse response for blocking indicators
@@ -1428,9 +1506,16 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
           status: 'blocked',
           sessionId: result.sessionId,
           blocked: blocking,
+          truth,
+          traceability: trace,
           completedAt: nowTimestamp(),
         };
       }
+
+      // Determine honest status based on truth level
+      let status: JobStatus = 'completed';
+      if (truth.level === 'fallback') status = 'completed_with_fallback';
+      if (truth.level === 'stub') status = 'completed_stub';
 
       // Success - completed synchronously
       const jobResult: JobResult = {
@@ -1441,9 +1526,11 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
 
       return {
         jobId,
-        status: 'completed',
+        status,
         sessionId: result.sessionId,
         result: jobResult,
+        truth,
+        traceability: trace,
         completedAt: nowTimestamp(),
       };
     }
@@ -1812,21 +1899,18 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
     // Generate stub response
     const stubOutput = `[STUB] Task "${payload.goal}" acknowledged.\n\nThis is a stub execution because OpenClaw is not configured.\n\nInput received:\n${JSON.stringify(payload.input, null, 2)}\n\nTo enable full execution, configure OPENCLAW_API_KEY environment variable.`;
 
-    // Build successful result
     const result: JobResult = {
       output: stubOutput,
       actionsSummary: 'Stub execution completed - OpenClaw not configured',
       toolsUsed: [],
     };
 
-    const response: JobResponse = {
-      jobId,
-      status: 'completed',
-      sessionId: 'stub',
-      result,
-      traceability: trace,
-      completedAt: nowTimestamp(),
-    };
+    const response = this.processExecutionResult(
+      jobId, 
+      { success: true, response: stubOutput, executionMode: 'stub' }, 
+      payload, 
+      trace
+    );
 
     // BUDGET: Record minimal cost for stub execution
     const budgetManager = getGlobalBudgetManager();
@@ -1882,6 +1966,7 @@ Your role is to complete tasks efficiently and accurately. Follow these guidelin
       response,
     };
   }
+
 
   /**
    * Update configuration

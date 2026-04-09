@@ -42,6 +42,13 @@ export interface ExecuteAgentResult {
   sessionId?: string;
   response?: string;
   error?: OpenClawError;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+  trace?: {
+    model: string;
+  };
 }
 
 // ============================================================================
@@ -204,6 +211,26 @@ export interface ExecuteViaHooksResult {
   fallbackUsed?: boolean;
   fallbackReason?: string;
 
+  /** AI usage evidence */
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+
+  /** AI trace evidence */
+  trace?: {
+    model: string;
+  };
+
   /** Error if failed */
   error?: OpenClawError;
+
+  /**
+   * RESOURCE TRACEABILITY: What resources were injected/applied
+   */
+  resourcesInjected?: {
+    tools: string[];
+    skills: string[];
+    injectionMode: 'native' | 'prompt' | 'none';
+  };
 }

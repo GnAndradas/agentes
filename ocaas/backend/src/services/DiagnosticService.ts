@@ -167,6 +167,35 @@ export interface ExecutionSummary {
    * - 'failed': Job failed
    */
   outcome?: 'completed_sync' | 'accepted_async' | 'failed';
+
+  /**
+   * Resource traceability for skills/tools
+   *
+   * IMPORTANT: usage_verified follows strict contractual verification.
+   * Never assume injected = used. Never infer from text.
+   */
+  resources?: {
+    /** Tools assigned to agent */
+    assigned_tools: string[];
+    /** Skills assigned to agent */
+    assigned_skills: string[];
+    /** How resources were injected: native (body), prompt (fallback), none */
+    injection_mode?: 'native' | 'prompt' | 'none';
+    /**
+     * Is resource usage verified by structured runtime confirmation?
+     * true ONLY if OpenClaw returned explicit resources_used field
+     * false if no structured confirmation (current state)
+     */
+    usage_verified: boolean;
+    /** Source of verification: 'runtime_receipt' | 'unverified' */
+    verification_source: 'runtime_receipt' | 'unverified';
+    /** Tools confirmed as used - ONLY populated if usage_verified = true */
+    tools_used: string[];
+    /** Skills confirmed as used - ONLY populated if usage_verified = true */
+    skills_used: string[];
+    /** Explanation when usage_verified = false */
+    unverified_reason?: string;
+  };
 }
 
 // ============================================================================
@@ -567,6 +596,7 @@ export class DiagnosticService {
         execution_started_at: jobRow.createdAt,
         execution_completed_at: jobRow.updatedAt,
         response_received: jobRow.status === 'completed',
+        ai_generated: jobRow.status === 'completed',
       };
     }
 
@@ -651,6 +681,23 @@ export class DiagnosticService {
       outcome = 'failed';
     }
 
+    // RESOURCE TRACEABILITY: Build resources object for UI
+    // Uses strict contractual verification - never infer usage
+    const resources = execution.resources_assigned || execution.resources_injected || execution.resources_usage
+      ? {
+          assigned_tools: execution.resources_assigned?.tools || [],
+          assigned_skills: execution.resources_assigned?.skills || [],
+          injection_mode: execution.resources_injected?.injection_mode,
+          // STRICT VERIFICATION: Only true if OpenClaw confirms structurally
+          usage_verified: execution.resources_usage?.verified ?? false,
+          verification_source: execution.resources_usage?.verification_source || 'unverified',
+          // Only populated if verified = true (enforced by builder)
+          tools_used: execution.resources_usage?.tools_used || [],
+          skills_used: execution.resources_usage?.skills_used || [],
+          unverified_reason: execution.resources_usage?.unverified_reason,
+        }
+      : undefined;
+
     return {
       execution_mode: execution.execution_mode,
       runtime_ready: execution.runtime_ready_at_execution,
@@ -662,6 +709,7 @@ export class DiagnosticService {
       session_key: execution.session_key,
       response_received: execution.response_received,
       outcome,
+      resources,
     };
   }
 

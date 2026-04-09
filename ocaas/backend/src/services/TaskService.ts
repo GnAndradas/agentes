@@ -257,7 +257,11 @@ export class TaskService {
     return this.getById(id);
   }
 
-  async complete(id: string, output?: Record<string, unknown>): Promise<TaskDTO> {
+  async complete(
+    id: string, 
+    output?: Record<string, unknown>, 
+    truth?: { level: string; reason: string }
+  ): Promise<TaskDTO> {
     const task = await this.getById(id);
     const now = nowTimestamp();
 
@@ -271,9 +275,15 @@ export class TaskService {
       throw new Error(`Invalid state transition: ${task.status} → ${TASK_STATUS.COMPLETED}`);
     }
 
+    const metadata = {
+      ...(task.metadata || {}),
+      _truth: truth,
+    };
+
     await db.update(schema.tasks).set({
       status: TASK_STATUS.COMPLETED,
       output: output ? JSON.stringify(output) : null,
+      metadata: JSON.stringify(metadata),
       completedAt: now,
       updatedAt: now,
     }).where(eq(schema.tasks.id, id));

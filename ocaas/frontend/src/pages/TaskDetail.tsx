@@ -21,6 +21,7 @@ import {
   Play,
   Wrench,
   Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 import { DelegationHistory } from '../components/DelegationHistory';
 import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi, generationApi } from '../lib/api';
@@ -39,6 +40,11 @@ import {
   ToolUsagePanel,
   TaskManualAgentAssignPanel,
   TaskGenerateAgentFlowPanel,
+  InternalProgressPanel,
+  RuntimeProgressPanel,
+  RuntimeEventsPanel,
+  ExecutionTimelinePanel,
+  TaskDebugSummaryPanel,
 } from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
@@ -297,6 +303,15 @@ export function TaskDetail() {
 
   // Check if this is a decomposed parent task
   const isDecomposed = Boolean(task.metadata?._decomposed);
+
+  // P0-05: Execution evidence verification
+  const executionEvidence = {
+    mode: generationTrace?.executionMode || 'unknown',
+    hasRealResponse: generationTrace?.aiSucceeded || false,
+    usedFallback: generationTrace?.fallbackUsed || false,
+    hasTrace: !!generationTrace,
+    truth: task.metadata?._truth as { level: string; reason: string } | undefined,
+  };
   const subtaskCount = (task.metadata?._subtaskCount as number) || 0;
 
   // Check if this is a subtask
@@ -310,6 +325,28 @@ export function TaskDetail() {
   const hasCheckpoints = Array.isArray(checkpoints) && checkpoints.length > 0;
   const hasTimeline = timelineResponse?.timeline && Array.isArray(timelineResponse.timeline) && timelineResponse.timeline.length > 0;
   const hasAdvancedData = diagnostics || taskState || hasTimeline || hasCheckpoints || taskCost;
+
+  function TruthBadge({ truth }: { truth?: { level: string; reason: string } }) {
+    if (!truth) return null;
+
+    const config: Record<string, { color: string; label: string; icon?: React.ElementType }> = {
+      real: { color: 'text-green-400', label: 'Verified AI', icon: ShieldCheck },
+      fallback: { color: 'text-yellow-400', label: 'Fallback Used', icon: AlertCircle },
+      stub: { color: 'text-blue-400', label: 'Stub/Simulated', icon: Sparkles },
+      uncertain: { color: 'text-dark-500', label: 'Uncertain' },
+    };
+
+    const item = config[truth.level] || config.uncertain;
+    const Icon = item.icon;
+
+    return (
+      <span className={`inline-flex items-center gap-1.5 text-xs uppercase font-bold px-2 py-1 rounded bg-dark-900 ${item.color} mt-2`} title={truth.reason}>
+        {Icon && <Icon className="w-3.5 h-3.5" />}
+        {item.label}
+        {truth.reason && <span className="opacity-50 font-normal normal-case ml-1">— {truth.reason}</span>}
+      </span>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -402,9 +439,12 @@ export function TaskDetail() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <p className="text-sm text-dark-400">Status</p>
-              <div className="flex items-center gap-2 mt-1">
-                <StatusIcon className="w-4 h-4" />
-                <Badge variant={statusVariant[task.status]}>{task.status}</Badge>
+              <div className="flex flex-col gap-2 mt-1">
+                <div className="flex items-center gap-2">
+                  <StatusIcon className="w-4 h-4" />
+                  <Badge variant={statusVariant[task.status]}>{task.status}</Badge>
+                </div>
+                {task.status === 'completed' && <TruthBadge truth={executionEvidence.truth} />}
               </div>
             </div>
             <div>
@@ -599,6 +639,48 @@ export function TaskDetail() {
         </Card>
       )}
 
+      {/* P0-06: Execution Evidence Panel */}
+      {generationTrace && (
+        <Card>
+          <CardHeader
+            title={
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-cyan-400" />
+                Execution Evidence
+              </div>
+            }
+          />
+          <div className="p-3 bg-dark-800 rounded-lg">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-dark-400">Execution Mode</p>
+                <Badge variant={executionEvidence.mode === 'hooks_session' || executionEvidence.mode === 'chat_completion' ? 'success' : 'default'}>
+                  {executionEvidence.mode}
+                </Badge>
+              </div>
+              <div>
+                <p className="text-dark-400">Real Response</p>
+                <Badge variant={executionEvidence.hasRealResponse ? 'success' : 'error'}>
+                  {executionEvidence.hasRealResponse ? 'Yes' : 'No'}
+                </Badge>
+              </div>
+              <div>
+                <p className="text-dark-400">Used Fallback</p>
+                <Badge variant={executionEvidence.usedFallback ? 'pending' : 'success'}>
+                  {executionEvidence.usedFallback ? 'Yes' : 'No'}
+                </Badge>
+              </div>
+              <div>
+                <p className="text-dark-400">Has Trace</p>
+                <Badge variant={executionEvidence.hasTrace ? 'success' : 'error'}>
+                  {executionEvidence.hasTrace ? 'Yes' : 'No'}
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Jobs Section */}
       {jobs && jobs.length > 0 && (
         <Card>
@@ -723,6 +805,57 @@ export function TaskDetail() {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* Debug Summary - For troubleshooting (shown for failed/blocked tasks, or all running+completed) */}
+      {(task.status === 'running' || task.status === 'completed' || task.status === 'failed') && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Unified Execution Timeline - Aggregated view of all 3 layers */}
+          <Card>
+            <ExecutionTimelinePanel
+              taskId={task.id}
+              refreshInterval={task.status === 'running' ? 5000 : 0}
+            />
+          </Card>
+
+          {/* Debug Summary - Operational debugging */}
+          <Card>
+            <TaskDebugSummaryPanel
+              taskId={task.id}
+              refreshInterval={task.status === 'running' ? 10000 : 0}
+            />
+          </Card>
+        </div>
+      )}
+
+      {/* Progress Panels - 3 Layers of Observability (individual views) */}
+      {(task.status === 'running' || task.status === 'completed' || task.status === 'failed') && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Layer 1: OCAAS Internal Progress - Orchestrator state tracking */}
+          <Card>
+            <InternalProgressPanel
+              taskId={task.id}
+              refreshInterval={task.status === 'running' ? 3000 : 0}
+              defaultCollapsed={task.status !== 'running'}
+            />
+          </Card>
+
+          {/* Layer 2: OpenClaw Runtime Progress - Session status (LIMITED API) */}
+          <Card>
+            <RuntimeProgressPanel
+              taskId={task.id}
+              refreshInterval={task.status === 'running' ? 10000 : 0}
+            />
+          </Card>
+
+          {/* Layer 3: OpenClaw Runtime Events - Real events from progress-tracker hook */}
+          <Card>
+            <RuntimeEventsPanel
+              taskId={task.id}
+              refreshInterval={task.status === 'running' ? 5000 : 0}
+            />
+          </Card>
+        </div>
       )}
 
       {/* ============ ADVANCED EXECUTION PANELS ============ */}

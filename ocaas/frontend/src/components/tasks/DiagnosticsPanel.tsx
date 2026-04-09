@@ -135,6 +135,15 @@ export function DiagnosticsPanel({ diagnostics, state, isLoading }: DiagnosticsP
     );
   }
 
+  if (!diagnostics && !state) {
+    return (
+      <div className="flex items-center gap-2 p-3 bg-dark-800 rounded-lg">
+        <Info className="w-4 h-4 text-dark-400" />
+        <span className="text-sm text-dark-400">No diagnostics data available</span>
+      </div>
+    );
+  }
+
   const issues = extractIssues(diagnostics, state);
 
   // Technical metrics

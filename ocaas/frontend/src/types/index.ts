@@ -763,6 +763,40 @@ export interface ExecutionSummary {
   hooks_session?: string;
   executionTimeMs?: number;
   toolCalls?: number;
+  ai_generated?: boolean;
+  ai_provider?: string;
+  truth?: {
+    level: string;
+    reason: string;
+  };
+  /**
+   * Resource traceability for skills/tools
+   *
+   * IMPORTANT: usage_verified follows strict contractual verification.
+   * Never assume injected = used. Never infer from text.
+   */
+  resources?: {
+    /** Tools assigned to agent */
+    assigned_tools?: string[];
+    /** Skills assigned to agent */
+    assigned_skills?: string[];
+    /** How resources were injected: native (body), prompt (fallback), none */
+    injection_mode?: 'native' | 'prompt' | 'none';
+    /**
+     * Is resource usage verified by structured runtime confirmation?
+     * true ONLY if OpenClaw returned explicit confirmation
+     * false if no structured confirmation (current state)
+     */
+    usage_verified?: boolean;
+    /** Source of verification: 'runtime_receipt' | 'unverified' */
+    verification_source?: 'runtime_receipt' | 'unverified';
+    /** Tools confirmed as used - ONLY populated if usage_verified = true */
+    tools_used?: string[];
+    /** Skills confirmed as used - ONLY populated if usage_verified = true */
+    skills_used?: string[];
+    /** Explanation when usage_verified = false */
+    unverified_reason?: string;
+  };
 }
 
 /** Full task diagnostics */
@@ -1051,6 +1085,196 @@ export type AIExecutionMode = 'hooks_session' | 'chat_completion' | 'stub' | 're
  * Generation trace - REAL traceability of what happened during execution
  * Eliminates the "black box" problem
  */
+// =============================================================================
+// PROGRESS TRACKING TYPES
+// =============================================================================
+
+/** Progress event from TaskStateManager */
+export interface ProgressEvent {
+  timestamp: number;
+  event: string;
+  stage: string;
+  summary: string;
+  source: 'task_state_manager' | 'execution_traceability';
+  stepId?: string;
+  stepName?: string;
+  jobId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Current step info */
+export interface CurrentStepInfo {
+  id: string;
+  name: string;
+  status: TaskStepStatus;
+}
+
+/** OCAAS internal progress response from /api/tasks/:id/internal-progress */
+export interface TaskProgressResponse {
+  taskId: string;
+  hasProgress: boolean;
+  events: ProgressEvent[];
+  currentPhase: ExecutionPhase | 'pending';
+  currentStep?: CurrentStepInfo;
+  progressPct: number;
+  completedSteps?: number;
+  totalSteps?: number;
+  sessionKey?: string;
+  lastUpdate?: number;
+  toolCallsCount?: number;
+  warnings?: string[];
+  message?: string;
+  source?: 'ocaas_orchestrator';
+}
+
+/** Runtime progress event from OpenClaw */
+export interface RuntimeProgressEvent {
+  timestamp: number;
+  event: string;
+  stage: string;
+  summary: string;
+  source: 'openclaw_runtime';
+  sessionId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * OpenClaw runtime progress response from /api/tasks/:id/runtime-progress
+ * LIMITATION: OpenClaw does not expose runtime events via API.
+ * Only session status is available.
+ */
+export interface RuntimeProgressResponse {
+  taskId: string;
+  hasRuntimeProgress: boolean;
+  events: RuntimeProgressEvent[];
+  sessionKey: string | null;
+  sessionStatus: 'active' | 'inactive' | 'error' | 'not_found' | 'unknown';
+  sessionId: string | null;
+  limitation: string;
+  availableApis: string[];
+  missingApis: string[];
+  source: 'openclaw_runtime';
+}
+
+// =============================================================================
+// RUNTIME EVENTS TYPES (from OpenClaw progress-tracker hook)
+// =============================================================================
+
+/**
+ * Runtime event from OpenClaw progress-tracker hook
+ * These are REAL runtime events captured by the hook, not inferred.
+ */
+export interface RuntimeEvent {
+  timestamp: number;
+  sessionKey: string;
+  event: string;
+  stage: string;
+  summary: string;
+  source: 'openclaw-hook';
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Response from GET /api/tasks/:id/runtime-events
+ * Contains real OpenClaw hook events from progress-tracker
+ */
+export interface RuntimeEventsResponse {
+  taskId: string;
+  sessionKey: string | null;
+  hasEvents: boolean;
+  events: RuntimeEvent[];
+  logPath: string | null;
+  logExists: boolean;
+  source: 'openclaw-hook';
+  limitation?: string;
+}
+
+// =============================================================================
+// EXECUTION TIMELINE TYPES (Unified view of all 3 layers)
+// =============================================================================
+
+export type TimelineLayer = 'ocaas_internal' | 'openclaw_status' | 'openclaw_runtime';
+
+/**
+ * Unified timeline event - preserves source layer
+ */
+export interface TimelineEvent {
+  timestamp: number;
+  layer: TimelineLayer;
+  event: string;
+  stage: string;
+  summary: string;
+  source: string;
+  taskId: string;
+  jobId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Response from GET /api/tasks/:id/execution-timeline
+ */
+export interface ExecutionTimelineResponse {
+  taskId: string;
+  sessionKey: string | null;
+  jobId: string | null;
+  events: TimelineEvent[];
+  layers: {
+    ocaas_internal: { available: boolean; eventCount: number };
+    openclaw_status: { available: boolean; eventCount: number };
+    openclaw_runtime: { available: boolean; eventCount: number };
+  };
+  totalEvents: number;
+}
+
+// =============================================================================
+// DEBUG SUMMARY TYPES (Operational debugging)
+// =============================================================================
+
+export type DebugLayer =
+  | 'ocaas_internal'
+  | 'openclaw_runtime'
+  | 'openclaw_hook'
+  | 'ai_generation'
+  | 'resource_contract'
+  | 'gateway';
+
+export type DebugSeverity = 'info' | 'warning' | 'error';
+export type DebugStatus = 'pass' | 'degraded' | 'fail' | 'unknown';
+
+export interface DebugIssue {
+  layer: DebugLayer;
+  severity: DebugSeverity;
+  status: DebugStatus;
+  summary: string;
+  evidence: string;
+  suggested_next_check?: string;
+}
+
+export interface LastUsefulEvent {
+  timestamp: number;
+  layer: string;
+  event: string;
+  summary: string;
+}
+
+/**
+ * Response from GET /api/tasks/:id/debug-summary
+ */
+export interface TaskDebugSummary {
+  taskId: string;
+  taskStatus: string;
+  overall_status: DebugStatus;
+  issues: DebugIssue[];
+  last_useful_event: LastUsefulEvent | null;
+  layers_checked: DebugLayer[];
+}
+
+// =============================================================================
+// EXECUTION GENERATION TRACE (P0-02: End-to-end traceability)
+// =============================================================================
+
 export interface ExecutionGenerationTrace {
   id: string;
   taskId: string;

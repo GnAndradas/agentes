@@ -17,3 +17,5 @@ export { RuntimeProgressPanel } from './RuntimeProgressPanel';
 export { RuntimeEventsPanel } from './RuntimeEventsPanel';
 export { ExecutionTimelinePanel } from './ExecutionTimelinePanel';
 export { TaskDebugSummaryPanel } from './TaskDebugSummaryPanel';
+export { ExecutionRealityPanel } from './ExecutionRealityPanel';
+export { QuickStatusBar } from './QuickStatusBar';

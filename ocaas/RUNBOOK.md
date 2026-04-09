@@ -255,42 +255,41 @@ Edit `~/.openclaw/openclaw.json` to enable Chat Completions:
 **Critical:** If `chatCompletions.enabled` is false, `/v1/chat/completions` returns 404.
 - El campo "model" debe ser un target de OpenClaw (ej: "openclaw/default"), no un modelo directo de proveedor.
 
-### Token Synchronization
+### Token Synchronization [CRITICAL]
 
-**Step 1: Obtain token from OpenClaw**
+**Tokens son 2, separados, no intercambiables:**
+
+| Token | Config OpenClaw | Env OCAAS | Header | Usado para |
+|-------|-----------------|-----------|--------|------------|
+| REST (gateway) | `gateway.auth.token` | `OPENCLAW_API_KEY` | `Authorization: Bearer` | `/v1/chat/completions`, `/v1/models` |
+| Hooks | `hooks.token` | `OPENCLAW_HOOKS_TOKEN` | `x-openclaw-token` | `/hooks/agent`, `/hooks/wake` |
+
+**Step 1: Obtener tokens de OpenClaw**
 ```bash
+# REST token
 openclaw config get gateway.token
+
+# Hooks token (leer de archivo)
+cat ~/.openclaw/openclaw.json | jq '.hooks.token'
+# O buscar manualmente en ~/.openclaw/openclaw.json -> "hooks": { "token": "..." }
 ```
 
-**Step 2: Copy token to OCAAS environment**
-File: `backend/.env` (ruta relativa al proyecto)
-```bash
-OPENCLAW_API_KEY=<token_from_step_1>
+**Step 2: Configurar en backend/.env**
+```env
+OPENCLAW_API_KEY=<gateway_token_from_step_1>
+OPENCLAW_HOOKS_TOKEN=<hooks_token_from_step_1>
 ```
-- OpenClaw es la fuente de verdad del token (gateway.token). OCAAS solo replica ese valor.
+
+**REGLAS:**
+- OpenClaw es la fuente de verdad - OCAAS replica los tokens
+- Los tokens DEBEN coincidir exactamente
+- Si regeneras un token en OpenClaw, actualiza INMEDIATAMENTE en OCAAS
+- NO hay fallback automatico de uno al otro
 
 **Token usage locations in OCAAS:**
 - `src/config/env.ts` - Environment variable definition
 - `src/openclaw/gateway.ts` - Bearer token for REST API calls
 - `src/integrations/openclaw/OpenClawAdapter.ts` - HTTP client authentication
-
-**Important:** When token is regenerated in OpenClaw, it must be updated in both OpenClaw and OCAAS.
-
-### Token Separation
-
-```bash
-# REST API (fallback mode)
-OPENCLAW_API_KEY=<token_from_openclaw>
-# Used for: /v1/chat/completions, /v1/models
-# Header: Authorization: Bearer <token>
-
-# Hooks/Webhooks (primary mode)
-OPENCLAW_HOOKS_TOKEN=<separate_token>
-# Used for: /hooks/agent, /hooks/wake
-# Header: x-openclaw-token: <token>
-```
-
-**IMPORTANTE:** Los tokens son SEPARADOS. No hay fallback automatico de uno al otro.
 
 ### Payload for /hooks/agent
 
@@ -745,6 +744,102 @@ Input -> Decision -> Warmup FAIL -> Execution (all fail) -> Stub Response
 
 ---
 
+## [CRITICAL] Pre-Arranque Backend
+
+### Regla de Arranque
+
+**CORRECTO:**
+```bash
+cd ocaas/backend
+npm run dev
+```
+
+**INCORRECTO (NO USAR):**
+```bash
+cd ocaas
+tsx src/index.ts
+# o
+node dist/index.js
+```
+
+**Por qué:** Arrancar desde raíz no carga `.env` correcto. Provoca "Hooks not configured" y fallback a stub.
+
+### Pre-check Puerto 3001
+
+**OBLIGATORIO antes de levantar backend:**
+
+Linux/Mac:
+```bash
+lsof -i :3001 || ss -ltnp | grep :3001 || echo "PORT_3001_FREE"
+```
+
+Windows:
+```bash
+netstat -ano | findstr :3001
+```
+
+**Si ocupado, matar proceso:**
+```bash
+# Linux/Mac
+kill <PID>
+
+# Windows
+taskkill /PID <PID> /F
+```
+
+**Regla:** NO arrancar backend hasta que puerto 3001 esté libre.
+
+---
+
+## [CRITICAL] Instalaciones Previas
+
+Si ya tenías OCAAS instalado, verificar antes de arrancar:
+
+### Checklist
+
+1. **Tokens desalineados**
+   ```bash
+   # Verificar token actual de OpenClaw
+   openclaw config get gateway.token
+   cat ~/.openclaw/openclaw.json | jq '.hooks.token'
+
+   # Comparar con backend/.env
+   grep OPENCLAW backend/.env
+   ```
+
+2. **Procesos huérfanos**
+   ```bash
+   # Buscar node/tsx colgados
+   ps aux | grep -E "node|tsx" | grep -v grep
+
+   # Windows
+   tasklist | findstr node
+   ```
+
+3. **Puerto ocupado**
+   ```bash
+   lsof -i :3001
+   ```
+
+### Fix rápido
+
+```bash
+# 1. Matar procesos en 3001
+pkill -f "node.*3001" || true
+
+# 2. Re-sincronizar tokens
+openclaw config get gateway.token
+# Copiar a backend/.env -> OPENCLAW_API_KEY
+
+cat ~/.openclaw/openclaw.json | jq -r '.hooks.token'
+# Copiar a backend/.env -> OPENCLAW_HOOKS_TOKEN
+
+# 3. Reiniciar
+cd ocaas/backend && npm run dev
+```
+
+---
+
 ## Troubleshooting
 
 ### Task no se ejecuta
@@ -896,6 +991,37 @@ curl http://localhost:3001/api/tasks
 curl http://localhost:3001/api/jobs/active
 ```
 
+### Diagnóstico de Gateway [EXPLICADO]
+
+```bash
+curl localhost:3001/api/system/diagnostics | jq '.openclaw'
+```
+
+**Interpretación de respuesta:**
+
+| Campo | Valor esperado | Significado |
+|-------|----------------|-------------|
+| `rest.reachable` | `true` | Gateway HTTP accesible |
+| `rest.authenticated` | `true` | `OPENCLAW_API_KEY` válido |
+| `hooks.configured` | `true` | `OPENCLAW_HOOKS_TOKEN` cargado |
+| `hooks.probed` | `false` | Normal - no testea por defecto |
+| `websocket.connected` | `false` | Opcional - no afecta operación |
+
+**Si `hooks.configured = false`:**
+- Verificar `OPENCLAW_HOOKS_TOKEN` en `backend/.env`
+- Verificar que arrancaste desde `backend/` (no raíz)
+
+**Si `rest.authenticated = false`:**
+- Token no coincide con OpenClaw
+- Ejecutar: `openclaw config get gateway.token`
+- Actualizar `OPENCLAW_API_KEY` en `backend/.env`
+
+### Verificar Conexión Gateway
+
+```bash
+curl localhost:3001/api/system/gateway | jq
+```
+
 ### Diagnostico de Task
 
 ```bash
@@ -910,6 +1036,12 @@ curl http://localhost:3001/api/tasks/{id}/timeline | jq
 
 # Estado con tools
 curl http://localhost:3001/api/tasks/{id}/state | jq
+
+# Debug summary (nuevo)
+curl http://localhost:3001/api/tasks/{id}/debug-summary | jq
+
+# Execution timeline unificado (nuevo)
+curl http://localhost:3001/api/tasks/{id}/execution-timeline | jq
 ```
 
 ### [NEW] Crear Task Enriquecida
@@ -932,21 +1064,36 @@ curl -X POST http://localhost:3001/api/tasks \
 
 ## Variables de Entorno
 
-```bash
-# Requeridas
+### Ejemplo completo de backend/.env
+
+```env
+# === REQUERIDAS ===
 PORT=3001
+HOST=0.0.0.0
+DATABASE_URL=./data/ocaas.db
+API_SECRET_KEY=<MIN_16_CARACTERES>
+
+# === OPENCLAW CONNECTION ===
 OPENCLAW_GATEWAY_URL=http://localhost:18789
-API_SECRET_KEY=<min-16-chars>
 
-# Para hooks_session (PRIMARY) - REQUIRED for primary mode
-OPENCLAW_HOOKS_TOKEN=<token>
+# REST token (de: openclaw config get gateway.token)
+OPENCLAW_API_KEY=<GATEWAY_TOKEN>
 
-# Para chat_completion (FALLBACK) - REQUIRED for fallback
-OPENCLAW_API_KEY=<key>
+# Hooks token (de: ~/.openclaw/openclaw.json -> hooks.token)
+OPENCLAW_HOOKS_TOKEN=<HOOKS_TOKEN>
 
-# Opcionales
+# === OPCIONALES ===
 AUTONOMY_LEVEL=supervised
 LOG_LEVEL=info
+
+# Habilitar probe de generacion en diagnostics (default: false)
+# OPENCLAW_ENABLE_GENERATION_PROBE=true
+```
+
+**IMPORTANTE:** Arrancar backend DESDE `backend/`:
+```bash
+cd ocaas/backend
+npm run dev
 ```
 
 ---
@@ -1059,5 +1206,6 @@ Validates env vars, backend, gateway, task FSM.
 
 ---
 
-*Actualizado: 2026-04-07*
+*Actualizado: 2026-04-09*
 *Sections marked [NEW] or [UPDATED] reflect PROMPT 7-13 changes*
+*Sections marked [CRITICAL] address operational gaps for clean/existing installs*

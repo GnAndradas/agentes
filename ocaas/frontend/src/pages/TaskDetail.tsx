@@ -24,7 +24,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { DelegationHistory } from '../components/DelegationHistory';
-import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi, generationApi } from '../lib/api';
+import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi, generationApi, agentMaterializationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
 import { Button, Badge, Card, CardHeader } from '../components/ui';
 import { SubtasksPanel } from '../components/SubtasksPanel';
@@ -45,6 +45,8 @@ import {
   RuntimeEventsPanel,
   ExecutionTimelinePanel,
   TaskDebugSummaryPanel,
+  ExecutionRealityPanel,
+  QuickStatusBar,
 } from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
@@ -109,6 +111,20 @@ export function TaskDetail() {
   const { data: agentOrgProfile } = useQuery({
     queryKey: ['org', 'profile', task?.agentId],
     queryFn: () => orgApi.getAgentProfile(task!.agentId!),
+    enabled: !!task?.agentId,
+    retry: false,
+  });
+
+  // Fetch agent materialization status (for QuickStatusBar)
+  const { data: agentMaterialization } = useQuery({
+    queryKey: ['agents', task?.agentId, 'materialization'],
+    queryFn: async () => {
+      try {
+        return await agentMaterializationApi.getMaterialization(task!.agentId!);
+      } catch {
+        return null;
+      }
+    },
     enabled: !!task?.agentId,
     retry: false,
   });
@@ -433,6 +449,15 @@ export function TaskDetail() {
         </div>
       </div>
 
+      {/* Quick Status Bar - At-a-glance situational awareness */}
+      <QuickStatusBar
+        taskStatus={task.status}
+        agent={agent}
+        generationTrace={generationTrace}
+        agentMaterialized={agentMaterialization?.state === 'runtime_ready'}
+        lastActivity={taskState?.updatedAt || task.startedAt}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">
           <CardHeader title="Details" />
@@ -636,6 +661,17 @@ export function TaskDetail() {
           <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
             <p className="text-red-400 font-mono text-sm">{task.error}</p>
           </div>
+        </Card>
+      )}
+
+      {/* EXECUTION REALITY - Quick status showing real vs internal execution */}
+      {(task.status === 'running' || task.status === 'assigned' || task.status === 'completed' || task.status === 'failed') && (
+        <Card>
+          <ExecutionRealityPanel
+            taskId={task.id}
+            taskStatus={task.status}
+            refreshInterval={task.status === 'running' || task.status === 'assigned' ? 5000 : 0}
+          />
         </Card>
       )}
 

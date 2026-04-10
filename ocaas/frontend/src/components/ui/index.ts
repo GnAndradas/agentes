@@ -7,3 +7,4 @@ export { Modal } from './Modal';
 export { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from './Table';
 export { Card, CardHeader } from './Card';
 export { EmptyState } from './EmptyState';
+export { PanelErrorBoundary } from './PanelErrorBoundary';

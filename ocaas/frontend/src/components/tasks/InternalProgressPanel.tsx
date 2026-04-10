@@ -231,7 +231,7 @@ export function InternalProgressPanel({ taskId, refreshInterval = 5000, defaultC
           </div>
 
           {/* Events timeline */}
-          {progress.events.length > 0 ? (
+          {Array.isArray(progress.events) && progress.events.length > 0 ? (
             <div className="space-y-0 max-h-48 overflow-y-auto">
               {progress.events.map((event, idx) => (
                 <EventItem key={`${event.timestamp}-${idx}`} event={event} />
@@ -244,7 +244,7 @@ export function InternalProgressPanel({ taskId, refreshInterval = 5000, defaultC
           )}
 
           {/* Warnings */}
-          {progress.warnings && progress.warnings.length > 0 && (
+          {Array.isArray(progress.warnings) && progress.warnings.length > 0 && (
             <div className="space-y-1">
               {progress.warnings.map((warning, idx) => (
                 <div key={idx} className="flex items-start gap-2 p-2 bg-yellow-900/10 border border-yellow-800/30 rounded text-[10px] text-yellow-400/80">

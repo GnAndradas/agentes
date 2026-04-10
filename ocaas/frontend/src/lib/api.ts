@@ -303,6 +303,50 @@ export const taskApi = {
       };
     }
   },
+
+  /**
+   * Verify tool usage for a task using 7-phase verification protocol.
+   *
+   * Determines with certainty whether tools were actually executed
+   * using ONLY verifiable system evidence:
+   * 1. Runtime events (.jsonl) - tool:call/tool:result
+   * 2. Execution traceability - resources_usage.verified
+   *
+   * Returns:
+   * - true: Explicit evidence of tool execution
+   * - false: Explicit evidence of NO tool execution
+   * - 'unknown': No contractual confirmation available
+   */
+  getToolUsageVerification: async (
+    taskId: string,
+    options?: { sessionKey?: string; agentId?: string }
+  ): Promise<import('../types').ToolUsageVerificationResult> => {
+    try {
+      const params = new URLSearchParams();
+      if (options?.sessionKey) params.set('sessionKey', options.sessionKey);
+      if (options?.agentId) params.set('agentId', options.agentId);
+      const query = params.toString() ? `?${params.toString()}` : '';
+
+      const res = await api.get<{ success: boolean; data: import('../types').ToolUsageVerificationResult }>(
+        `/tasks/${taskId}/tool-usage-verification${query}`
+      );
+      return res.data;
+    } catch {
+      return {
+        taskId,
+        sessionKey: null,
+        agentId: null,
+        tool_policy: 'standard',
+        tools_available: false,
+        tool_attempted: 'unknown',
+        tools_used: 'unknown',
+        evidence_source: 'none',
+        evidence: 'Failed to fetch verification data',
+        notes: 'API request failed',
+        phases: [],
+      };
+    }
+  },
 };
 
 // Skill API

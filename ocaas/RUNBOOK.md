@@ -840,6 +840,69 @@ cd ocaas/backend && npm run dev
 
 ---
 
+## [CRITICAL] Startup Sequence (STRICT)
+
+### Orden obligatorio
+
+1. **Verificar puerto 3001 libre**
+   ```bash
+   lsof -i :3001 || echo "PORT_3001_FREE"
+   ```
+
+2. **Arrancar backend**
+   ```bash
+   cd ocaas/backend
+   npm run dev
+   ```
+
+3. **Verificar backend**
+   ```bash
+   curl localhost:3001/health
+   curl -s localhost:3001/api/system/gateway | jq
+   ```
+
+   Esperado:
+   - `/health` → OK
+   - `rest.reachable` = true
+   - `rest.authenticated` = true
+   - `hooks.configured` = true
+
+4. **Arrancar frontend**
+   ```bash
+   cd ocaas/frontend
+   npm run dev
+   ```
+
+   Abrir: http://localhost:5173/
+
+### Diagnostics Interpretation (Gateway)
+
+| Campo | Valor esperado | Significado |
+|-------|----------------|-------------|
+| `rest.reachable` | `true` | Gateway HTTP accesible |
+| `rest.authenticated` | `true` | Token REST válido |
+| `hooks.configured` | `true` | Token hooks cargado |
+| `hooks.probed` | `false` | Normal - no testea por defecto |
+| `websocket.connected` | `false` | Opcional - no bloquea |
+
+**Interpretación frontend:**
+- "Hooks not configured" = **REAL** solo si `hooks.configured=false`
+- "Accepted: No/timeout" = **NO crítico** si REST funciona
+
+---
+
+## [CRITICAL] Final Rule
+
+Si ocurre CUALQUIERA de estas condiciones:
+- Backend arrancado desde carpeta incorrecta
+- Puerto 3001 ocupado
+- Tokens desalineados
+
+**Entonces:**
+El sistema puede aparentar funcionar pero hooks y ejecución **NO funcionarán** correctamente.
+
+---
+
 ## Troubleshooting
 
 ### Task no se ejecuta

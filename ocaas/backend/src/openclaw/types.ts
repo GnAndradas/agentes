@@ -1,5 +1,52 @@
 // OpenClaw Gateway types
 
+// ============================================================================
+// EXECUTABLE TOOL/SKILL DEFINITIONS (for runtime injection)
+// ============================================================================
+
+/**
+ * Compact tool definition for OpenClaw runtime injection
+ * Contains all information needed for the runtime to execute the tool
+ */
+export interface ExecutableToolDefinitionCompact {
+  /** Tool ID (for traceability) */
+  id: string;
+  /** Tool name (unique identifier for invocation) */
+  name: string;
+  /** Human-readable description */
+  description?: string;
+  /** Tool type: determines execution method */
+  type: 'script' | 'binary' | 'api';
+  /** Path to executable/script or API endpoint */
+  path: string;
+  /** Input schema (JSON Schema format) */
+  inputSchema?: Record<string, unknown>;
+  /** Output schema (JSON Schema format) */
+  outputSchema?: Record<string, unknown>;
+  /** Additional configuration */
+  config?: Record<string, unknown>;
+}
+
+/**
+ * Compact skill definition for OpenClaw runtime injection
+ */
+export interface ExecutableSkillDefinitionCompact {
+  /** Skill ID (for traceability) */
+  id: string;
+  /** Skill name */
+  name: string;
+  /** Human-readable description */
+  description?: string;
+  /** Capabilities provided by this skill */
+  capabilities?: string[];
+  /** Tools included in this skill */
+  tools?: ExecutableToolDefinitionCompact[];
+}
+
+// ============================================================================
+// SESSION TYPES
+// ============================================================================
+
 export interface OpenClawSession {
   id: string;
   agentId: string;
@@ -125,10 +172,19 @@ export interface HooksAgentOptions {
    * These are passed to OpenClaw runtime for resource-aware execution.
    */
   context?: {
-    /** Tool IDs available for this execution */
+    /** Tool IDs available for this execution (backwards compatibility) */
     tools?: string[];
-    /** Skill IDs available for this execution */
+    /** Skill IDs available for this execution (backwards compatibility) */
     skills?: string[];
+    /**
+     * FULL tool definitions for runtime execution
+     * Contains all information needed to execute tools (name, path, schema, etc.)
+     */
+    toolDefinitions?: ExecutableToolDefinitionCompact[];
+    /**
+     * FULL skill definitions for runtime execution
+     */
+    skillDefinitions?: ExecutableSkillDefinitionCompact[];
     /** Max tokens for response */
     maxTokens?: number;
     /** Temperature for generation */

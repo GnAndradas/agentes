@@ -143,6 +143,19 @@ export interface ExecutionTraceability {
     skills: string[];
     /** How resources were injected */
     injection_mode: 'native' | 'prompt' | 'none';
+    /**
+     * Definition mode: describes what was actually sent
+     * - 'full_definitions': Complete tool/skill definitions (executable)
+     * - 'ids_only': Only IDs sent (informational, not executable)
+     * - 'none': No resources injected
+     */
+    definition_mode?: 'full_definitions' | 'ids_only' | 'none';
+    /** Number of executable tool definitions sent */
+    executable_tools_count?: number;
+    /** Number of executable skill definitions sent */
+    executable_skills_count?: number;
+    /** Names of executable tools (for debugging) */
+    executable_tool_names?: string[];
   };
 
   /**
@@ -183,7 +196,251 @@ export interface ExecutionTraceability {
      */
     unverified_reason?: string;
   };
+
+  // ==========================================================================
+  // TOOL-FIRST POLICY (Increase tool usage when appropriate)
+  // ==========================================================================
+
+  /**
+   * Tool execution policy applied to this execution.
+   * - 'standard': Normal execution, tools available but not prioritized
+   * - 'tool_first': Explicit instruction to attempt tools before direct response
+   */
+  tool_policy?: 'standard' | 'tool_first';
+
+  /**
+   * Whether the agent attempted to use tools during execution.
+   * This is SEPARATE from verified usage - it tracks intent/attempt.
+   *
+   * Values:
+   * - true: Evidence of tool attempt (runtime events show tool:call or similar)
+   * - false: No evidence of tool attempt (no tool events in runtime)
+   * - undefined: Unknown (no runtime events available to check)
+   *
+   * IMPORTANT: tool_attempted=true does NOT mean tool_used_verified=true
+   * An attempt may fail, be rejected, or not complete.
+   */
+  tool_attempted?: boolean;
+
+  /**
+   * Reason if tools were not attempted when tool_first policy was active.
+   * Only populated when tool_policy='tool_first' AND tool_attempted=false.
+   */
+  tool_not_attempted_reason?: string;
+
+  // ==========================================================================
+  // TOOL ENFORCEMENT (Force tool execution when tools_available)
+  // ==========================================================================
+
+  /**
+   * Whether tool enforcement was active for this execution.
+   * true = system blocked direct responses and required tool attempt
+   */
+  tool_enforced?: boolean;
+
+  /**
+   * Whether enforcement was triggered (model tried to respond without tool).
+   * true = initial response was rejected, retry was issued
+   */
+  tool_enforcement_triggered?: boolean;
+
+  /**
+   * Number of enforcement retry attempts made.
+   * 0 = no retries needed (model used tool on first try)
+   * 1+ = retries needed due to model bypassing tools
+   */
+  enforcement_attempts?: number;
+
+  /**
+   * Final enforcement result after all retries.
+   * - 'success': Tool was eventually attempted
+   * - 'failed': Max retries reached, model refused tools
+   * - 'not_applicable': Enforcement not active (no tools available)
+   */
+  enforcement_result?: 'success' | 'failed' | 'not_applicable';
+
+  // ==========================================================================
+  // AUTONOMOUS TASK RESOLUTION (ATR Loop)
+  // ==========================================================================
+
+  /**
+   * Number of resolution attempts made (0 = first attempt only, no retries)
+   */
+  resolution_attempts?: number;
+
+  /**
+   * Path of resolution attempts with classification
+   */
+  resolution_path?: Array<{
+    attempt: number;
+    reason: ResolutionReason;
+    action: 'retry' | 'escalate' | 'accept';
+    tool_used_after?: boolean;
+  }>;
+
+  /**
+   * Final resolution status after all attempts
+   * - 'success': Task completed with tool execution verified
+   * - 'partial': Task completed but tool usage unverified
+   * - 'failed': Max retries exhausted, no useful progress
+   */
+  final_resolution_status?: 'success' | 'partial' | 'failed';
+
+  /**
+   * Whether human intervention is required
+   */
+  requires_human_intervention?: boolean;
+
+  /**
+   * Reason for human escalation (only if requires_human_intervention = true)
+   */
+  human_escalation_reason?: ResolutionReason;
+
+  // ==========================================================================
+  // REAL TOOL EXECUTION (Backend-controlled execution)
+  // ==========================================================================
+
+  /**
+   * Whether a tool was executed by OCAAS backend (not LLM-side)
+   * This tracks REAL execution via ToolExecutionService
+   */
+  tool_execution_real?: boolean;
+
+  /**
+   * Details of real tool execution
+   */
+  tool_execution_details?: {
+    /** Execution ID from ToolExecutionService */
+    execution_id: string;
+    /** Tool name executed */
+    tool_name: string;
+    /** Tool type: api, script, binary, builtin */
+    tool_type: 'api' | 'script' | 'binary' | 'builtin';
+    /** Execution success */
+    success: boolean;
+    /** Duration in milliseconds */
+    duration_ms: number;
+    /** Had tool definition (dynamic execution) vs builtin */
+    had_definition: boolean;
+    /** Error code if failed */
+    error_code?: string;
+    /** Error message if failed */
+    error_message?: string;
+  };
+
+  /**
+   * Follow-up AI call after tool execution
+   */
+  tool_followup_call?: {
+    /** Was a follow-up call made to interpret tool result? */
+    made: boolean;
+    /** Follow-up call succeeded */
+    success: boolean;
+    /** Follow-up tokens used */
+    tokens?: {
+      input: number;
+      output: number;
+    };
+  };
+
+  // ==========================================================================
+  // TOOL SECURITY (Security validation for real tool execution)
+  // ==========================================================================
+
+  /**
+   * Was security check performed before tool execution?
+   */
+  tool_security_checked?: boolean;
+
+  /**
+   * Did security check pass?
+   */
+  tool_security_passed?: boolean;
+
+  /**
+   * Security failure reason (if blocked)
+   */
+  security_failure_reason?: string;
+
+  /**
+   * Security failure code (structured)
+   */
+  security_failure_code?: 'policy_missing' | 'policy_disabled' | 'path_not_allowed' | 'path_traversal' |
+    'path_not_found' | 'host_not_allowed' | 'method_not_allowed' | 'network_not_allowed' |
+    'filesystem_not_allowed' | 'binary_not_allowed' | 'timeout_exceeded' | 'input_validation_failed';
+
+  /**
+   * Was a security policy applied?
+   */
+  security_policy_applied?: boolean;
+
+  // =========================================================================
+  // INPUT VALIDATION (BLOQUE 10.2)
+  // =========================================================================
+
+  /**
+   * Was input validation performed?
+   */
+  input_validation_checked?: boolean;
+
+  /**
+   * Did input validation pass?
+   */
+  input_validation_passed?: boolean;
+
+  /**
+   * Was a schema used for validation?
+   */
+  input_schema_used?: boolean;
+
+  /**
+   * Validation errors (if any)
+   */
+  input_validation_errors?: string[];
+
+  // =========================================================================
+  // EXECUTION LIMITS (BLOQUE 10.3)
+  // =========================================================================
+
+  /**
+   * Was execution blocked by limits?
+   */
+  execution_limit_blocked?: boolean;
+
+  /**
+   * Which limit was exceeded?
+   */
+  limit_exceeded?: 'max_executions' | 'max_time' | 'max_concurrent' | 'max_retries';
+
+  /**
+   * Current execution count for this task
+   */
+  task_execution_count?: number;
+
+  /**
+   * Total execution time for this task (ms)
+   */
+  task_total_execution_ms?: number;
+
+  // =========================================================================
+  // AUDIT (BLOQUE 10.4)
+  // =========================================================================
+
+  /**
+   * Audit entry ID (for cross-referencing)
+   */
+  audit_entry_id?: string;
 }
+
+/**
+ * Resolution reason classification (no heuristics, based on structured data)
+ */
+export type ResolutionReason =
+  | 'tool_not_attempted'    // tools_available but no tool:call in runtime
+  | 'tool_failed'           // tool:call exists but tool:result indicates failure
+  | 'tool_not_applicable'   // model explicitly stated tools don't apply
+  | 'external_block'        // blocked by external dependency
+  | 'unknown';
 
 /**
  * Default execution traceability (not yet executed)
@@ -598,6 +855,27 @@ export class ExecutionTraceabilityBuilder {
   }
 
   /**
+   * Mark resources with full definition mode (executable vs ids-only)
+   * Call this AFTER resourcesInjected() to add definition mode info.
+   */
+  resourcesDefinitionMode(
+    definitionMode: 'full_definitions' | 'ids_only' | 'none',
+    executableToolsCount: number,
+    executableSkillsCount: number,
+    executableToolNames?: string[]
+  ): this {
+    if (this.trace.resources_injected) {
+      this.trace.resources_injected.definition_mode = definitionMode;
+      this.trace.resources_injected.executable_tools_count = executableToolsCount;
+      this.trace.resources_injected.executable_skills_count = executableSkillsCount;
+      if (executableToolNames && executableToolNames.length > 0) {
+        this.trace.resources_injected.executable_tool_names = executableToolNames;
+      }
+    }
+    return this;
+  }
+
+  /**
    * Mark resource usage verification status
    *
    * @param verified - true ONLY if OpenClaw returned structured confirmation
@@ -620,6 +898,233 @@ export class ExecutionTraceabilityBuilder {
       skills_used: verified ? skillsUsed : [], // NEVER populate if not verified
       unverified_reason: unverifiedReason,
     };
+    return this;
+  }
+
+  // ==========================================================================
+  // TOOL-FIRST POLICY
+  // ==========================================================================
+
+  /**
+   * Set tool execution policy.
+   * - 'standard': Normal execution
+   * - 'tool_first': Explicit instruction to attempt tools before direct response
+   */
+  toolPolicy(policy: 'standard' | 'tool_first'): this {
+    this.trace.tool_policy = policy;
+    return this;
+  }
+
+  /**
+   * Mark whether tools were attempted during execution.
+   *
+   * @param attempted - true if runtime events show tool attempt
+   * @param notAttemptedReason - Reason if not attempted when tool_first was active
+   */
+  toolAttempted(attempted: boolean, notAttemptedReason?: string): this {
+    this.trace.tool_attempted = attempted;
+    if (!attempted && notAttemptedReason) {
+      this.trace.tool_not_attempted_reason = notAttemptedReason;
+    }
+    return this;
+  }
+
+  // ==========================================================================
+  // TOOL ENFORCEMENT
+  // ==========================================================================
+
+  /**
+   * Mark tool enforcement status.
+   * Called when enforcement gate is active.
+   */
+  toolEnforcement(enforced: boolean): this {
+    this.trace.tool_enforced = enforced;
+    if (!enforced) {
+      this.trace.enforcement_result = 'not_applicable';
+    }
+    return this;
+  }
+
+  /**
+   * Mark enforcement was triggered (model tried to bypass tools).
+   */
+  enforcementTriggered(): this {
+    this.trace.tool_enforcement_triggered = true;
+    return this;
+  }
+
+  /**
+   * Record enforcement attempt count and result.
+   */
+  enforcementResult(
+    attempts: number,
+    result: 'success' | 'failed' | 'not_applicable'
+  ): this {
+    this.trace.enforcement_attempts = attempts;
+    this.trace.enforcement_result = result;
+    return this;
+  }
+
+  // ==========================================================================
+  // ATR LOOP (Autonomous Task Resolution)
+  // ==========================================================================
+
+  /**
+   * Record a resolution attempt in the ATR loop.
+   */
+  resolutionAttempt(
+    attempt: number,
+    reason: ResolutionReason,
+    action: 'retry' | 'escalate' | 'accept',
+    toolUsedAfter?: boolean
+  ): this {
+    if (!this.trace.resolution_path) {
+      this.trace.resolution_path = [];
+    }
+    this.trace.resolution_path.push({
+      attempt,
+      reason,
+      action,
+      tool_used_after: toolUsedAfter,
+    });
+    this.trace.resolution_attempts = attempt;
+    return this;
+  }
+
+  /**
+   * Set final resolution status after ATR loop completes.
+   */
+  finalResolution(status: 'success' | 'partial' | 'failed'): this {
+    this.trace.final_resolution_status = status;
+    return this;
+  }
+
+  /**
+   * Mark task as requiring human intervention.
+   */
+  humanEscalation(reason: ResolutionReason): this {
+    this.trace.requires_human_intervention = true;
+    this.trace.human_escalation_reason = reason;
+    return this;
+  }
+
+  // ==========================================================================
+  // REAL TOOL EXECUTION
+  // ==========================================================================
+
+  /**
+   * Record real tool execution by OCAAS backend.
+   */
+  toolExecutionReal(
+    executionId: string,
+    toolName: string,
+    toolType: 'api' | 'script' | 'binary' | 'builtin',
+    success: boolean,
+    durationMs: number,
+    hadDefinition: boolean,
+    error?: { code: string; message: string }
+  ): this {
+    this.trace.tool_execution_real = true;
+    this.trace.tool_execution_details = {
+      execution_id: executionId,
+      tool_name: toolName,
+      tool_type: toolType,
+      success,
+      duration_ms: durationMs,
+      had_definition: hadDefinition,
+      error_code: error?.code,
+      error_message: error?.message,
+    };
+    return this;
+  }
+
+  /**
+   * Record follow-up AI call after tool execution.
+   */
+  toolFollowupCall(
+    made: boolean,
+    success: boolean,
+    tokens?: { input: number; output: number }
+  ): this {
+    this.trace.tool_followup_call = {
+      made,
+      success,
+      tokens,
+    };
+    return this;
+  }
+
+  // ==========================================================================
+  // TOOL SECURITY
+  // ==========================================================================
+
+  /**
+   * Record tool security check result.
+   */
+  toolSecurityCheck(
+    checked: boolean,
+    passed: boolean,
+    failureCode?: ExecutionTraceability['security_failure_code'],
+    failureReason?: string,
+    policyApplied?: boolean
+  ): this {
+    this.trace.tool_security_checked = checked;
+    this.trace.tool_security_passed = passed;
+    if (failureCode) {
+      this.trace.security_failure_code = failureCode;
+    }
+    if (failureReason) {
+      this.trace.security_failure_reason = failureReason;
+    }
+    this.trace.security_policy_applied = policyApplied;
+    return this;
+  }
+
+  /**
+   * Record input validation result.
+   */
+  inputValidation(
+    checked: boolean,
+    passed: boolean,
+    schemaUsed: boolean,
+    errors?: string[]
+  ): this {
+    this.trace.input_validation_checked = checked;
+    this.trace.input_validation_passed = passed;
+    this.trace.input_schema_used = schemaUsed;
+    if (errors && errors.length > 0) {
+      this.trace.input_validation_errors = errors;
+    }
+    return this;
+  }
+
+  /**
+   * Record execution limits check.
+   */
+  executionLimits(
+    blocked: boolean,
+    limitExceeded?: ExecutionTraceability['limit_exceeded'],
+    executionCount?: number,
+    totalExecutionMs?: number
+  ): this {
+    this.trace.execution_limit_blocked = blocked;
+    if (limitExceeded) {
+      this.trace.limit_exceeded = limitExceeded;
+    }
+    if (executionCount !== undefined) {
+      this.trace.task_execution_count = executionCount;
+    }
+    if (totalExecutionMs !== undefined) {
+      this.trace.task_total_execution_ms = totalExecutionMs;
+    }
+    return this;
+  }
+
+  /**
+   * Record audit entry ID.
+   */
+  auditEntry(auditEntryId: string): this {
+    this.trace.audit_entry_id = auditEntryId;
     return this;
   }
 

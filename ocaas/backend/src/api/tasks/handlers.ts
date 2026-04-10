@@ -769,3 +769,49 @@ export async function getDebugSummary(req: FastifyRequest<IdParam>, reply: Fasti
     return reply.status(statusCode).send(body);
   }
 }
+
+// ============================================================================
+// TOOL USAGE VERIFICATION - Determine if tools were actually executed
+// ============================================================================
+
+/**
+ * Verify tool usage for a task using only verifiable system evidence.
+ *
+ * 7-Phase Protocol:
+ * 1. IDENTIFY_TASK - taskId, sessionKey, agentId
+ * 2. RUNTIME_EVENTS - Check .jsonl for tool:call/tool:result
+ * 3. CONTRACTUAL_RESOURCE_CHECK - Check resources_usage.verified
+ * 4. DEBUG_SUMMARY - Contextual only
+ * 5. EXECUTION_TIMELINE - Correlation only
+ * 6. FINAL_RESULT - Determine tools_used
+ * 7. VALIDATION - Check for false positives
+ *
+ * RULES:
+ * - NO inferring tool usage from text
+ * - NO heuristics
+ * - NO assuming "complex response" = tool usage
+ * - Result: tools_used = true | false | unknown
+ */
+export async function getToolUsageVerification(req: FastifyRequest<IdParam>, reply: FastifyReply) {
+  try {
+    const { toolUsageVerificationService } = await import('../../services/ToolUsageVerificationService.js');
+    const taskId = req.params.id;
+
+    // Optional query params for sessionKey and agentId
+    const query = req.query as { sessionKey?: string; agentId?: string };
+
+    const result = await toolUsageVerificationService.verifyToolUsage(
+      taskId,
+      query.sessionKey,
+      query.agentId
+    );
+
+    return reply.send({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    const { statusCode, body } = toErrorResponse(err);
+    return reply.status(statusCode).send(body);
+  }
+}

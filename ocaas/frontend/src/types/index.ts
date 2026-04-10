@@ -1014,6 +1014,14 @@ export type DecisionOutcome =
   | 'waiting'           // Waiting for resource/approval
   | 'error';            // Error during decision
 
+/** Resolution reason classification for ATR Loop */
+export type ResolutionReason =
+  | 'tool_not_attempted'    // tools_available but no tool:call in runtime
+  | 'tool_failed'           // tool:call exists but tool:result indicates failure
+  | 'tool_not_applicable'   // model explicitly stated tools don't apply
+  | 'external_block'        // blocked by external dependency
+  | 'unknown';
+
 /** Failure reason for queued tasks */
 export type DecisionFailureReason =
   | 'NO_AGENTS_REGISTERED'
@@ -1269,6 +1277,221 @@ export interface TaskDebugSummary {
   issues: DebugIssue[];
   last_useful_event: LastUsefulEvent | null;
   layers_checked: DebugLayer[];
+}
+
+// =============================================================================
+// TOOL USAGE VERIFICATION TYPES (7-phase protocol)
+// =============================================================================
+
+/**
+ * Individual verification phase result
+ */
+export interface ToolUsageVerificationPhase {
+  phase: number;
+  name: string;
+  status: 'pass' | 'fail' | 'skip' | 'inconclusive';
+  evidence?: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Response from GET /api/tasks/:id/tool-usage-verification
+ *
+ * Determines with certainty whether a task executed real tools
+ * using ONLY verifiable system evidence.
+ *
+ * Rules:
+ * - NO inferring tool usage from text
+ * - NO heuristics
+ * - true = explicit evidence exists
+ * - false = explicit evidence confirms NO usage
+ * - unknown = no contractual confirmation
+ */
+export interface ToolUsageVerificationResult {
+  taskId: string;
+  sessionKey: string | null;
+  agentId: string | null;
+
+  // ==========================================================================
+  // TOOL POLICY (NEW - for tool-first execution mode)
+  // ==========================================================================
+
+  /**
+   * Tool execution policy that was active.
+   * - 'standard': No specific tool preference
+   * - 'tool_first': Tools were available and agent was instructed to prefer them
+   */
+  tool_policy: 'standard' | 'tool_first';
+
+  /** Were tools available for this execution? */
+  tools_available: boolean;
+
+  /**
+   * Was a tool attempt detected in runtime events?
+   * - true: Runtime events show tool:call or similar
+   * - false: No tool events found
+   * - 'unknown': No runtime events available to check
+   */
+  tool_attempted: boolean | 'unknown';
+
+  /** Reason if tools were not attempted when tool_first policy was active */
+  tool_not_attempted_reason?: string;
+
+  // ==========================================================================
+  // TOOL ENFORCEMENT (Force tool execution)
+  // ==========================================================================
+
+  /** Whether tool enforcement was active for this execution */
+  tool_enforced?: boolean;
+
+  /** Whether enforcement was triggered (model tried to respond without tool) */
+  tool_enforcement_triggered?: boolean;
+
+  /** Number of enforcement retry attempts made */
+  enforcement_attempts?: number;
+
+  /** Final enforcement result */
+  enforcement_result?: 'success' | 'failed' | 'not_applicable';
+
+  // ==========================================================================
+  // AUTONOMOUS TASK RESOLUTION (ATR Loop)
+  // ==========================================================================
+
+  /** Number of resolution attempts made (0 = initial only) */
+  resolution_attempts?: number;
+
+  /** Path of resolution attempts */
+  resolution_path?: Array<{
+    attempt: number;
+    reason: ResolutionReason;
+    action: 'retry' | 'escalate' | 'accept';
+    tool_used_after?: boolean;
+  }>;
+
+  /** Final resolution status */
+  final_resolution_status?: 'success' | 'partial' | 'failed';
+
+  /** Whether human intervention is required */
+  requires_human_intervention?: boolean;
+
+  /** Reason for human escalation */
+  human_escalation_reason?: ResolutionReason;
+
+  // ==========================================================================
+  // REAL TOOL EXECUTION (Backend-controlled)
+  // ==========================================================================
+
+  /** Whether a tool was executed by OCAAS backend (not LLM-side) */
+  tool_execution_real?: boolean;
+
+  /** Details of real tool execution */
+  tool_execution_details?: {
+    execution_id: string;
+    tool_name: string;
+    tool_type: 'api' | 'script' | 'binary' | 'builtin';
+    success: boolean;
+    duration_ms: number;
+    had_definition: boolean;
+    error_code?: string;
+    error_message?: string;
+  };
+
+  /** Follow-up AI call after tool execution */
+  tool_followup_call?: {
+    made: boolean;
+    success: boolean;
+    tokens?: {
+      input: number;
+      output: number;
+    };
+  };
+
+  // ==========================================================================
+  // TOOL SECURITY
+  // ==========================================================================
+
+  /** Was security check performed? */
+  tool_security_checked?: boolean;
+
+  /** Did security check pass? */
+  tool_security_passed?: boolean;
+
+  /** Security failure reason */
+  security_failure_reason?: string;
+
+  /** Security failure code */
+  security_failure_code?: 'policy_missing' | 'policy_disabled' | 'path_not_allowed' | 'path_traversal' |
+    'path_not_found' | 'host_not_allowed' | 'method_not_allowed' | 'network_not_allowed' |
+    'filesystem_not_allowed' | 'binary_not_allowed' | 'timeout_exceeded' | 'input_validation_failed';
+
+  /** Was a security policy applied? */
+  security_policy_applied?: boolean;
+
+  // ==========================================================================
+  // INPUT VALIDATION (BLOQUE 10.2)
+  // ==========================================================================
+
+  /** Was input validation performed? */
+  input_validation_checked?: boolean;
+
+  /** Did input validation pass? */
+  input_validation_passed?: boolean;
+
+  /** Was a schema used for validation? */
+  input_schema_used?: boolean;
+
+  /** Validation errors (if any) */
+  input_validation_errors?: string[];
+
+  // ==========================================================================
+  // EXECUTION LIMITS (BLOQUE 10.3)
+  // ==========================================================================
+
+  /** Was execution blocked by limits? */
+  execution_limit_blocked?: boolean;
+
+  /** Which limit was exceeded? */
+  limit_exceeded?: 'max_executions' | 'max_time' | 'max_concurrent' | 'max_retries';
+
+  /** Current execution count for this task */
+  task_execution_count?: number;
+
+  /** Total execution time for this task (ms) */
+  task_total_execution_ms?: number;
+
+  // ==========================================================================
+  // AUDIT (BLOQUE 10.4)
+  // ==========================================================================
+
+  /** Audit entry ID (for cross-referencing) */
+  audit_entry_id?: string;
+
+  // ==========================================================================
+  // TOOL USAGE VERIFICATION (EXISTING)
+  // ==========================================================================
+
+  /**
+   * Final determination:
+   * - true: Explicit evidence of tool execution exists
+   * - false: Explicit evidence confirms NO tool execution
+   * - 'unknown': No contractual confirmation available
+   */
+  tools_used: boolean | 'unknown';
+
+  /** Source of evidence that determined the result */
+  evidence_source: 'runtime_events' | 'execution_receipt' | 'none';
+
+  /** Specific evidence found */
+  evidence: string;
+
+  /** Additional notes about limitations */
+  notes: string;
+
+  /** Detailed breakdown by verification phase */
+  phases: ToolUsageVerificationPhase[];
+
+  /** Tools explicitly confirmed (only if tools_used = true) */
+  confirmed_tools?: string[];
 }
 
 // =============================================================================

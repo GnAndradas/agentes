@@ -117,32 +117,38 @@ export function RuntimeProgressPanel({ taskId, refreshInterval = 10000 }: Runtim
       </div>
 
       {/* API Limitation Warning */}
-      <div className="flex items-start gap-2 p-3 bg-yellow-900/10 border border-yellow-800/30 rounded-lg">
-        <Info className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
-        <div className="space-y-1">
-          <p className="text-xs text-yellow-400 font-medium">API Limitation</p>
-          <p className="text-[10px] text-yellow-400/70">{progress.limitation}</p>
-          <div className="flex flex-wrap gap-1 mt-2">
-            <span className="text-[9px] text-dark-500">Available:</span>
-            {progress.availableApis.map(api => (
-              <Badge key={api} variant="default" className="text-[8px] py-0 px-1">
-                {api}
-              </Badge>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-1">
-            <span className="text-[9px] text-dark-500">Missing:</span>
-            {progress.missingApis.map(api => (
-              <Badge key={api} variant="error" className="text-[8px] py-0 px-1 opacity-50">
-                {api}
-              </Badge>
-            ))}
+      {progress.limitation && (
+        <div className="flex items-start gap-2 p-3 bg-yellow-900/10 border border-yellow-800/30 rounded-lg">
+          <Info className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
+          <div className="space-y-1">
+            <p className="text-xs text-yellow-400 font-medium">API Limitation</p>
+            <p className="text-[10px] text-yellow-400/70">{progress.limitation}</p>
+            {Array.isArray(progress.availableApis) && progress.availableApis.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                <span className="text-[9px] text-dark-500">Available:</span>
+                {progress.availableApis.map(api => (
+                  <Badge key={api} variant="default" className="text-[8px] py-0 px-1">
+                    {api}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            {Array.isArray(progress.missingApis) && progress.missingApis.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                <span className="text-[9px] text-dark-500">Missing:</span>
+                {progress.missingApis.map(api => (
+                  <Badge key={api} variant="error" className="text-[8px] py-0 px-1 opacity-50">
+                    {api}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
       {/* Events (if any) */}
-      {progress.events.length > 0 && (
+      {Array.isArray(progress.events) && progress.events.length > 0 && (
         <div className="space-y-1">
           <p className="text-[10px] text-dark-500 uppercase tracking-wider">Events</p>
           {progress.events.map((event, idx) => (
@@ -158,7 +164,7 @@ export function RuntimeProgressPanel({ taskId, refreshInterval = 10000 }: Runtim
       )}
 
       {/* No Events State */}
-      {progress.events.length === 0 && (
+      {(!Array.isArray(progress.events) || progress.events.length === 0) && (
         <p className="text-[10px] text-dark-500 text-center py-2">
           No runtime events available. OpenClaw does not expose event streams via API.
         </p>

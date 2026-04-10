@@ -1195,10 +1195,16 @@ export class OpenClawGateway {
       }, 'Running agent via /hooks/agent (PRIMARY MODE)');
 
       // PROMPT 7: Include agentId in payload
-      // RESOURCE INJECTION: Include tools/skills in request
-      const tools = options.context?.tools || [];
-      const skills = options.context?.skills || [];
-      const hasResources = tools.length > 0 || skills.length > 0;
+      // RESOURCE INJECTION: Full definitions preferred over IDs
+      const toolIds = options.context?.tools || [];
+      const skillIds = options.context?.skills || [];
+      const toolDefinitions = options.context?.toolDefinitions || [];
+      const skillDefinitions = options.context?.skillDefinitions || [];
+
+      // Use full definitions if available, otherwise fall back to IDs
+      const hasToolDefinitions = toolDefinitions.length > 0;
+      const hasSkillDefinitions = skillDefinitions.length > 0;
+      const hasResources = toolIds.length > 0 || skillIds.length > 0 || hasToolDefinitions || hasSkillDefinitions;
 
       const body: Record<string, unknown> = {
         message: options.message,
@@ -1214,28 +1220,68 @@ export class OpenClawGateway {
       }
 
       // RESOURCE INJECTION: Pass tools/skills to OpenClaw runtime
-      // OpenClaw may or may not use these natively - we inject in prompt as fallback
+      // PRIORITY: Full definitions > IDs only
+      // OpenClaw needs full definitions to actually execute tools
       if (hasResources) {
-        body.tools = tools;
-        body.skills = skills;
+        // FULL DEFINITIONS: Includes name, path, schema, etc.
+        // This is what OpenClaw actually needs to execute tools
+        if (hasToolDefinitions) {
+          body.tools = toolDefinitions;
+          logger.info({
+            agentId: options.agentId,
+            sessionKey: options.sessionKey,
+            toolCount: toolDefinitions.length,
+            toolNames: toolDefinitions.map(t => t.name),
+            injectionMode: 'full_definitions',
+          }, 'Injecting FULL tool definitions into hooks request');
+        } else if (toolIds.length > 0) {
+          // Fallback: IDs only (legacy, won't execute but for compatibility)
+          body.tools = toolIds;
+          logger.warn({
+            agentId: options.agentId,
+            sessionKey: options.sessionKey,
+            toolCount: toolIds.length,
+          }, 'Injecting tool IDs only (no definitions) - tools may not execute');
+        }
 
-        logger.info({
-          agentId: options.agentId,
-          sessionKey: options.sessionKey,
-          toolCount: tools.length,
-          skillCount: skills.length,
-        }, 'Injecting resources into hooks request');
+        if (hasSkillDefinitions) {
+          body.skills = skillDefinitions;
+          logger.info({
+            agentId: options.agentId,
+            sessionKey: options.sessionKey,
+            skillCount: skillDefinitions.length,
+            skillNames: skillDefinitions.map(s => s.name),
+            injectionMode: 'full_definitions',
+          }, 'Injecting FULL skill definitions into hooks request');
+        } else if (skillIds.length > 0) {
+          body.skills = skillIds;
+          logger.warn({
+            agentId: options.agentId,
+            sessionKey: options.sessionKey,
+            skillCount: skillIds.length,
+          }, 'Injecting skill IDs only (no definitions)');
+        }
       }
 
       const response = await this.apiRequest<ChatCompletionResponse>('POST', '/hooks/agent', body);
       const content = response.choices?.[0]?.message?.content || '';
 
+      // Determine injection mode for traceability
+      const injectionMode = hasToolDefinitions || hasSkillDefinitions
+        ? 'native_full' // Full definitions sent - OpenClaw can execute
+        : (toolIds.length > 0 || skillIds.length > 0)
+          ? 'native_ids_only' // Only IDs sent - won't execute
+          : 'none';
+
       logger.info({
         sessionKey: options.sessionKey,
         agentId: options.agentId,
         resourcesInjected: hasResources,
-        toolCount: tools.length,
-        skillCount: skills.length,
+        toolDefinitionCount: toolDefinitions.length,
+        skillDefinitionCount: skillDefinitions.length,
+        toolIdCount: toolIds.length,
+        skillIdCount: skillIds.length,
+        injectionMode,
       }, 'Agent execution accepted via /hooks/agent');
 
       return {
@@ -1252,9 +1298,9 @@ export class OpenClawGateway {
         },
         // RESOURCE TRACEABILITY: What we injected
         resourcesInjected: hasResources ? {
-          tools,
-          skills,
-          injectionMode: 'native', // Sent in body - OpenClaw decides how to use
+          tools: toolIds, // IDs for backwards compatibility
+          skills: skillIds,
+          injectionMode: injectionMode === 'native_full' ? 'native' : 'prompt', // native = full defs, prompt = fallback
         } : undefined,
       };
     } catch (err) {

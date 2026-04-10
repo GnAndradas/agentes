@@ -119,8 +119,9 @@ export function ExecutionRealityPanel({
   items.push(sessionItem);
 
   // 3. Runtime Events
-  const hasEvents = runtimeEvents?.hasEvents && runtimeEvents.events.length > 0;
-  const eventCount = runtimeEvents?.events?.length || 0;
+  const eventsArray = Array.isArray(runtimeEvents?.events) ? runtimeEvents.events : [];
+  const hasEvents = runtimeEvents?.hasEvents && eventsArray.length > 0;
+  const eventCount = eventsArray.length;
   items.push({
     label: 'Runtime Events',
     status: hasEvents ? 'yes' : runtimeEvents?.logExists ? 'partial' : 'no',

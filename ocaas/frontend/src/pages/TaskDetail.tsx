@@ -26,7 +26,7 @@ import {
 import { DelegationHistory } from '../components/DelegationHistory';
 import { taskApi, jobApi, agentApi, orgApi, taskStateApi, budgetApi, generationApi, agentMaterializationApi } from '../lib/api';
 import { useAppStore } from '../stores/app';
-import { Button, Badge, Card, CardHeader } from '../components/ui';
+import { Button, Badge, Card, CardHeader, PanelErrorBoundary } from '../components/ui';
 import { SubtasksPanel } from '../components/SubtasksPanel';
 import { JobStatusPanel, BlockedJobView } from '../components/jobs';
 import {
@@ -47,6 +47,7 @@ import {
   TaskDebugSummaryPanel,
   ExecutionRealityPanel,
   QuickStatusBar,
+  ToolUsageVerificationPanel,
 } from '../components/tasks';
 import { TASK_PRIORITY } from '../types';
 import { fromTimestamp } from '../lib/date';
@@ -667,11 +668,25 @@ export function TaskDetail() {
       {/* EXECUTION REALITY - Quick status showing real vs internal execution */}
       {(task.status === 'running' || task.status === 'assigned' || task.status === 'completed' || task.status === 'failed') && (
         <Card>
-          <ExecutionRealityPanel
-            taskId={task.id}
-            taskStatus={task.status}
-            refreshInterval={task.status === 'running' || task.status === 'assigned' ? 5000 : 0}
-          />
+          <PanelErrorBoundary panelName="Execution Reality">
+            <ExecutionRealityPanel
+              taskId={task.id}
+              taskStatus={task.status}
+              refreshInterval={task.status === 'running' || task.status === 'assigned' ? 5000 : 0}
+            />
+          </PanelErrorBoundary>
+        </Card>
+      )}
+
+      {/* TOOL USAGE VERIFICATION - 7-phase protocol to verify real tool execution */}
+      {(task.status === 'completed' || task.status === 'failed') && (
+        <Card>
+          <PanelErrorBoundary panelName="Tool Usage Verification">
+            <ToolUsageVerificationPanel
+              taskId={task.id}
+              refreshInterval={0}
+            />
+          </PanelErrorBoundary>
         </Card>
       )}
 
@@ -848,18 +863,22 @@ export function TaskDetail() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Unified Execution Timeline - Aggregated view of all 3 layers */}
           <Card>
-            <ExecutionTimelinePanel
-              taskId={task.id}
-              refreshInterval={task.status === 'running' ? 5000 : 0}
-            />
+            <PanelErrorBoundary panelName="Execution Timeline">
+              <ExecutionTimelinePanel
+                taskId={task.id}
+                refreshInterval={task.status === 'running' ? 5000 : 0}
+              />
+            </PanelErrorBoundary>
           </Card>
 
           {/* Debug Summary - Operational debugging */}
           <Card>
-            <TaskDebugSummaryPanel
-              taskId={task.id}
-              refreshInterval={task.status === 'running' ? 10000 : 0}
-            />
+            <PanelErrorBoundary panelName="Debug Summary">
+              <TaskDebugSummaryPanel
+                taskId={task.id}
+                refreshInterval={task.status === 'running' ? 10000 : 0}
+              />
+            </PanelErrorBoundary>
           </Card>
         </div>
       )}
@@ -869,27 +888,33 @@ export function TaskDetail() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Layer 1: OCAAS Internal Progress - Orchestrator state tracking */}
           <Card>
-            <InternalProgressPanel
-              taskId={task.id}
-              refreshInterval={task.status === 'running' ? 3000 : 0}
-              defaultCollapsed={task.status !== 'running'}
-            />
+            <PanelErrorBoundary panelName="Internal Progress">
+              <InternalProgressPanel
+                taskId={task.id}
+                refreshInterval={task.status === 'running' ? 3000 : 0}
+                defaultCollapsed={task.status !== 'running'}
+              />
+            </PanelErrorBoundary>
           </Card>
 
           {/* Layer 2: OpenClaw Runtime Progress - Session status (LIMITED API) */}
           <Card>
-            <RuntimeProgressPanel
-              taskId={task.id}
-              refreshInterval={task.status === 'running' ? 10000 : 0}
-            />
+            <PanelErrorBoundary panelName="Runtime Progress">
+              <RuntimeProgressPanel
+                taskId={task.id}
+                refreshInterval={task.status === 'running' ? 10000 : 0}
+              />
+            </PanelErrorBoundary>
           </Card>
 
           {/* Layer 3: OpenClaw Runtime Events - Real events from progress-tracker hook */}
           <Card>
-            <RuntimeEventsPanel
-              taskId={task.id}
-              refreshInterval={task.status === 'running' ? 5000 : 0}
-            />
+            <PanelErrorBoundary panelName="Runtime Events">
+              <RuntimeEventsPanel
+                taskId={task.id}
+                refreshInterval={task.status === 'running' ? 5000 : 0}
+              />
+            </PanelErrorBoundary>
           </Card>
         </div>
       )}

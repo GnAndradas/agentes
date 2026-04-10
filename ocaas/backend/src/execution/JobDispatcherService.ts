@@ -55,6 +55,15 @@ import {
 import { getTaskStateManager } from './TaskStateManager/index.js';
 import { getToolExecutionService, type ToolExecutionResult } from './ToolExecutionService.js';
 import { getGenerationTraceService } from './GenerationTraceService.js';
+import {
+  createATRState,
+  evaluateATR,
+  processATRIteration,
+  buildATRRetryPrompt,
+  ATR_MAX_RETRIES,
+  type ATRLoopState,
+} from './ATRLoop.js';
+import { getRuntimeEvents } from '../services/RuntimeEventsService.js';
 
 const logger = createLogger('JobDispatcherService');
 
@@ -68,6 +77,38 @@ const logger = createLogger('JobDispatcherService');
  * If hooks can't return sync response, fallback immediately.
  */
 const HOOKS_ASYNC_TIMEOUT_MS = 3000; // 3 seconds
+
+// =============================================================================
+// TOOL ENFORCEMENT CONFIG
+// =============================================================================
+
+/**
+ * Maximum number of enforcement retries before accepting response without tool.
+ * Keep low to avoid infinite loops and excessive cost.
+ */
+const MAX_ENFORCEMENT_RETRIES = 2;
+
+/**
+ * Enforcement prompt addition when model fails to use available tools.
+ * This is appended to the prompt on retry to make the requirement explicit.
+ */
+const ENFORCEMENT_PROMPT_SUFFIX = `
+
+## CRITICAL: Tool Execution Required
+
+Your previous response was REJECTED because you did not attempt to use any tools.
+
+**MANDATORY REQUIREMENT:**
+- You MUST invoke at least one tool before providing a text response
+- If you cannot use tools, explain specifically WHY (tool not applicable, error, etc.)
+- Direct text responses WITHOUT tool attempt are NOT allowed for this task
+
+Available tool format:
+\`\`\`
+run_command: <your command here>
+\`\`\`
+
+Respond now with a tool invocation.`;
 
 // =============================================================================
 // TOOL CALL DETECTION
@@ -112,6 +153,46 @@ function detectToolCall(response: string): DetectedToolCall | null {
     }
   }
   return null;
+}
+
+/**
+ * Check if response indicates tool cannot be used (valid bypass).
+ * Returns true if the model explicitly explains why tools are not applicable.
+ */
+function detectValidToolBypass(response: string): { valid: boolean; reason?: string } {
+  const lowerResponse = response.toLowerCase();
+
+  // Patterns that indicate valid reasons to not use tools
+  const validBypassPatterns = [
+    { pattern: /(?:cannot|can't|unable to).*(?:use|invoke|call|execute).*tool/i, reason: 'tool_not_applicable' },
+    { pattern: /no.*tool.*(?:available|applicable|suitable)/i, reason: 'no_suitable_tool' },
+    { pattern: /tool.*(?:not|doesn't|does not).*(?:apply|applicable|work|help)/i, reason: 'tool_not_applicable' },
+    { pattern: /this.*(?:task|request).*(?:doesn't|does not).*require.*tool/i, reason: 'tool_not_required' },
+    { pattern: /(?:error|failed|failure).*(?:executing|running|invoking).*tool/i, reason: 'tool_execution_error' },
+    { pattern: /tool.*(?:error|failed|exception)/i, reason: 'tool_execution_error' },
+  ];
+
+  for (const { pattern, reason } of validBypassPatterns) {
+    if (pattern.test(response)) {
+      return { valid: true, reason };
+    }
+  }
+
+  return { valid: false };
+}
+
+/**
+ * Enforcement gate result
+ */
+interface EnforcementResult {
+  /** Whether response should be accepted */
+  accept: boolean;
+  /** Whether enforcement was triggered (rejected initial response) */
+  triggered: boolean;
+  /** Reason for decision */
+  reason: string;
+  /** If rejected, the prompt to use for retry */
+  retryPrompt?: string;
 }
 
 /** Generate a unique ID with prefix */
@@ -703,6 +784,9 @@ export class JobDispatcherService {
       // HOOKS MIGRATION: Use executeViaHooks as PRIMARY execution method
       // Fallback chain: hooks_session → chat_completion → stub mode
       // TIMEOUT: Wrap execution with timeout control
+      //
+      // RESOURCE INJECTION: Pass FULL tool definitions, not just IDs
+      // OpenClaw needs complete definitions to execute tools
       const hooksResult = await withTimeout(
         adapter.executeViaHooks({
           agentId: payload.agent.agentId,
@@ -711,8 +795,13 @@ export class JobDispatcherService {
           prompt,
           name: payload.agent.name,
           context: {
+            // IDs for backwards compatibility
             tools: payload.allowedResources.tools,
             skills: payload.allowedResources.skills,
+            // FULL DEFINITIONS for runtime execution
+            toolDefinitions: payload.allowedResources.toolDefinitions,
+            skillDefinitions: payload.allowedResources.skillDefinitions,
+            // Other context
             maxTokens: payload.constraints.maxTokens,
             temperature: payload.agent.temperature,
           },
@@ -763,16 +852,35 @@ export class JobDispatcherService {
         traceBuilder.acceptedAsync();
       }
 
-      // RESOURCE TRACEABILITY: Track injected resources
+      // RESOURCE TRACEABILITY: Track injected resources AND definition mode
+      const toolDefinitions = payload.allowedResources.toolDefinitions || [];
+      const skillDefinitions = payload.allowedResources.skillDefinitions || [];
+      const hasToolDefs = toolDefinitions.length > 0;
+      const hasSkillDefs = skillDefinitions.length > 0;
+
       if (hooksResult.resourcesInjected) {
         traceBuilder.resourcesInjected(
           hooksResult.resourcesInjected.tools,
           hooksResult.resourcesInjected.skills,
           hooksResult.resourcesInjected.injectionMode
         );
+        // Add definition mode traceability
+        traceBuilder.resourcesDefinitionMode(
+          hasToolDefs || hasSkillDefs ? 'full_definitions' : (assignedTools.length > 0 || assignedSkills.length > 0 ? 'ids_only' : 'none'),
+          toolDefinitions.length,
+          skillDefinitions.length,
+          toolDefinitions.map(t => t.name)
+        );
       } else if (assignedTools.length > 0 || assignedSkills.length > 0) {
         // Resources were injected via prompt (fallback mode)
         traceBuilder.resourcesInjected(assignedTools, assignedSkills, 'prompt');
+        // In prompt fallback mode, check if we had definitions
+        traceBuilder.resourcesDefinitionMode(
+          hasToolDefs || hasSkillDefs ? 'full_definitions' : 'ids_only',
+          toolDefinitions.length,
+          skillDefinitions.length,
+          toolDefinitions.map(t => t.name)
+        );
       }
 
       // RESOURCE USAGE VERIFICATION: OpenClaw does NOT provide structured confirmation
@@ -786,6 +894,15 @@ export class JobDispatcherService {
           'OpenClaw does not provide structured resource usage confirmation'
         );
       }
+
+      // TOOL-FIRST POLICY: Track policy and attempt status
+      // Policy is tool_first when resources are assigned, standard otherwise
+      const hasResources = assignedTools.length > 0 || assignedSkills.length > 0;
+      traceBuilder.toolPolicy(hasResources ? 'tool_first' : 'standard');
+
+      // tool_attempted will be determined after execution completes (via runtime events)
+      // For now, leave undefined - will be populated by ToolUsageVerificationService
+      // We only set it here if we have direct evidence (e.g., tool loop was entered)
 
       // BLOQUE 10: Track response (with AI origin verification)
       if (hooksResult.response) {
@@ -936,6 +1053,162 @@ export class JobDispatcherService {
       }
 
       // =========================================================================
+      // TOOL ENFORCEMENT GATE (Force tool execution when tools_available)
+      // =========================================================================
+      let enforcementAttempts = 0;
+      let enforcementTriggered = false;
+      let enforcementResult: 'success' | 'failed' | 'not_applicable' = 'not_applicable';
+
+      // Enforcement is active when tools are available and policy is tool_first
+      const enforcementActive = hasResources && finalResponse && finalExecutionMode !== 'stub';
+
+      if (enforcementActive) {
+        traceBuilder.toolEnforcement(true);
+
+        // Enforcement loop - retry if model doesn't use tools
+        let currentResponse = finalResponse;
+        let currentPrompt = prompt;
+
+        while (enforcementAttempts <= MAX_ENFORCEMENT_RETRIES) {
+          // Check if response contains a tool call
+          const detectedToolInResponse = detectToolCall(currentResponse || '');
+
+          if (detectedToolInResponse) {
+            // Model used a tool - enforcement successful
+            logger.info({
+              jobId,
+              taskId: payload.taskId,
+              enforcementAttempts,
+              event: 'ENFORCEMENT_TOOL_DETECTED',
+            }, `[Enforcement] Tool call detected after ${enforcementAttempts} retries`);
+
+            enforcementResult = 'success';
+            finalResponse = currentResponse;
+            // Mark tool as attempted since we detected a call
+            traceBuilder.toolAttempted(true);
+            break;
+          }
+
+          // Check if model has a valid reason to bypass tools
+          const bypassCheck = detectValidToolBypass(currentResponse || '');
+
+          if (bypassCheck.valid) {
+            // Valid bypass - accept response without tool
+            logger.info({
+              jobId,
+              taskId: payload.taskId,
+              enforcementAttempts,
+              bypassReason: bypassCheck.reason,
+              event: 'ENFORCEMENT_VALID_BYPASS',
+            }, `[Enforcement] Valid tool bypass: ${bypassCheck.reason}`);
+
+            enforcementResult = 'success'; // Explicit bypass is considered success
+            finalResponse = currentResponse;
+            traceBuilder.toolAttempted(false, bypassCheck.reason);
+            break;
+          }
+
+          // No tool call and no valid bypass - check if we should retry
+          if (enforcementAttempts >= MAX_ENFORCEMENT_RETRIES) {
+            // Max retries reached - accept response but mark enforcement as failed
+            logger.warn({
+              jobId,
+              taskId: payload.taskId,
+              enforcementAttempts,
+              event: 'ENFORCEMENT_MAX_RETRIES',
+            }, `[Enforcement] Max retries (${MAX_ENFORCEMENT_RETRIES}) reached, accepting response without tool`);
+
+            enforcementResult = 'failed';
+            enforcementTriggered = true;
+            finalResponse = currentResponse;
+            traceBuilder.toolAttempted(false, 'model_refused_after_enforcement_retries');
+            break;
+          }
+
+          // Trigger enforcement retry
+          enforcementTriggered = true;
+          enforcementAttempts++;
+
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            attempt: enforcementAttempts,
+            event: 'ENFORCEMENT_RETRY',
+          }, `[Enforcement] Response rejected, retrying with enforcement prompt (attempt ${enforcementAttempts})`);
+
+          // Build enforcement prompt
+          currentPrompt = prompt + ENFORCEMENT_PROMPT_SUFFIX;
+
+          // Make enforcement retry call
+          const enforceResult = await withTimeout(
+            adapter.executeViaHooks({
+              agentId: payload.agent.agentId,
+              taskId: payload.taskId,
+              jobId: jobId,
+              prompt: currentPrompt,
+              name: payload.agent.name,
+              context: {
+                tools: payload.allowedResources.tools,
+                skills: payload.allowedResources.skills,
+                maxTokens: payload.constraints.maxTokens,
+                temperature: payload.agent.temperature,
+              },
+            }),
+            timeoutMs,
+            abortController
+          );
+
+          if (enforceResult.success && enforceResult.response) {
+            currentResponse = enforceResult.response;
+
+            // Record additional cost for enforcement retry
+            const enforceInputTokens = enforceResult.usage?.inputTokens || Math.ceil(currentPrompt.length / 4);
+            const enforceOutputTokens = enforceResult.usage?.outputTokens || Math.ceil(enforceResult.response.length / 4);
+            budgetManager.recordCost({
+              task_id: payload.taskId,
+              agent_id: agentId,
+              operation: 'execution',
+              tier: 'medium',
+              input_tokens: enforceInputTokens,
+              output_tokens: enforceOutputTokens,
+              estimated_cost_usd: budgetCheck.estimated_cost_usd * 0.3, // Estimate 30% cost for retry
+              budget_decision: budgetCheck.decision,
+            });
+          } else {
+            // Retry call failed - break out and use last valid response
+            logger.warn({
+              jobId,
+              taskId: payload.taskId,
+              attempt: enforcementAttempts,
+              event: 'ENFORCEMENT_RETRY_FAILED',
+            }, `[Enforcement] Retry call failed, using previous response`);
+
+            enforcementResult = 'failed';
+            traceBuilder.toolAttempted(false, 'enforcement_retry_call_failed');
+            break;
+          }
+        }
+
+        // Record enforcement metrics
+        if (enforcementTriggered) {
+          traceBuilder.enforcementTriggered();
+        }
+        traceBuilder.enforcementResult(enforcementAttempts, enforcementResult);
+
+        logger.info({
+          jobId,
+          taskId: payload.taskId,
+          enforcementTriggered,
+          enforcementAttempts,
+          enforcementResult,
+          event: 'ENFORCEMENT_COMPLETE',
+        }, `[Enforcement] Complete: triggered=${enforcementTriggered}, attempts=${enforcementAttempts}, result=${enforcementResult}`);
+      } else {
+        // Enforcement not active (no tools or stub mode)
+        traceBuilder.toolEnforcement(false);
+      }
+
+      // =========================================================================
       // TOOL-CALLING LOOP (Max 1 tool call per task)
       // =========================================================================
       let toolExecutionResult: ToolExecutionResult | null = null;
@@ -944,15 +1217,22 @@ export class JobDispatcherService {
         const detectedTool = detectToolCall(finalResponse);
 
         if (detectedTool) {
+          // Lookup tool definition from payload
+          const toolDefinition = payload.allowedResources.toolDefinitions?.find(
+            td => td.name === detectedTool.toolName || td.id === detectedTool.toolName
+          );
+
           logger.info({
             jobId,
             taskId: payload.taskId,
             toolName: detectedTool.toolName,
             input: detectedTool.input,
+            hasDefinition: !!toolDefinition,
+            definitionType: toolDefinition?.type,
             event: 'TOOL_CALL_DETECTED',
-          }, `[ToolLoop] Detected tool call: ${detectedTool.toolName}`);
+          }, `[ToolLoop] Detected tool call: ${detectedTool.toolName} (definition: ${toolDefinition ? toolDefinition.type : 'builtin'})`);
 
-          // Execute the tool
+          // Execute the tool with definition if available
           const toolService = getToolExecutionService();
           toolExecutionResult = await toolService.execute({
             toolName: detectedTool.toolName,
@@ -960,6 +1240,7 @@ export class JobDispatcherService {
             taskId: payload.taskId,
             agentId,
             jobId,
+            toolDefinition, // Pass definition for dynamic execution
           });
 
           logger.info({
@@ -970,6 +1251,29 @@ export class JobDispatcherService {
             durationMs: toolExecutionResult.durationMs,
             event: 'TOOL_CALL_EXECUTED',
           }, `[ToolLoop] Tool executed: ${toolExecutionResult.success ? 'success' : 'failed'}`);
+
+          // Record real tool execution in traceability
+          const toolType = toolDefinition?.type || 'builtin';
+          traceBuilder.toolExecutionReal(
+            toolExecutionResult.executionId,
+            detectedTool.toolName,
+            toolType as 'api' | 'script' | 'binary' | 'builtin',
+            toolExecutionResult.success,
+            toolExecutionResult.durationMs,
+            !!toolDefinition,
+            toolExecutionResult.error
+          );
+
+          // Record security check result in traceability
+          if (toolExecutionResult.security) {
+            traceBuilder.toolSecurityCheck(
+              toolExecutionResult.security.checked,
+              toolExecutionResult.security.passed,
+              toolExecutionResult.security.failureCode,
+              toolExecutionResult.security.failureReason,
+              !!toolExecutionResult.security.policyApplied
+            );
+          }
 
           // Build follow-up prompt with tool result
           const toolResultContext = this.buildToolResultContext(detectedTool, toolExecutionResult);
@@ -1032,6 +1336,16 @@ export class JobDispatcherService {
               taskId: payload.taskId,
               event: 'TOOL_LOOP_COMPLETED',
             }, '[ToolLoop] Follow-up IA call completed');
+
+            // Record follow-up call in traceability
+            traceBuilder.toolFollowupCall(
+              true,
+              true,
+              followUpResult.usage ? {
+                input: followUpResult.usage.inputTokens,
+                output: followUpResult.usage.outputTokens,
+              } : undefined
+            );
           } else {
             // Follow-up failed, include tool output directly in response
             const originalResponse = finalResponse || '';
@@ -1041,11 +1355,141 @@ export class JobDispatcherService {
               taskId: payload.taskId,
               event: 'TOOL_LOOP_FOLLOWUP_FAILED',
             }, '[ToolLoop] Follow-up IA call failed, using tool output directly');
+
+            // Record failed follow-up call
+            traceBuilder.toolFollowupCall(true, false);
           }
         }
       }
 
-      // Build final traceability
+      // =========================================================================
+      // ATR LOOP: Autonomous Task Resolution
+      // Retry if tools_available but not used (max 2 retries)
+      // =========================================================================
+      let atrState = createATRState();
+      const hasToolsAvailable = assignedTools.length > 0;
+
+      // Only run ATR loop if:
+      // 1. Tools are available
+      // 2. We got a response (not failed)
+      // 3. No tool execution already happened via ToolLoop
+      if (hasToolsAvailable && finalResponse && !toolExecutionResult) {
+        // Get runtime events to check for tool:call
+        const runtimeEventsResult = await getRuntimeEvents(payload.taskId);
+        const runtimeEvents = runtimeEventsResult.events.map(e => ({
+          event: e.event,
+          ...e.metadata,
+        }));
+
+        // Initial evaluation
+        let evaluation = evaluateATR({
+          tools_available: true,
+          tool_ids: assignedTools,
+          has_response: true,
+          response_content: finalResponse,
+          runtime_events: runtimeEvents,
+          tool_usage_status: 'unverified', // We don't have verified status yet
+        });
+
+        // Process initial evaluation
+        let atrResult = processATRIteration(atrState, evaluation);
+        atrState = atrResult.state;
+
+        // ATR retry loop
+        while (atrResult.action === 'retry' && atrState.attempt <= ATR_MAX_RETRIES) {
+          logger.info({
+            jobId,
+            taskId: payload.taskId,
+            attempt: atrState.attempt,
+            reason: evaluation.reason,
+          }, '[ATR] Retrying execution with tool-first emphasis');
+
+          // Build retry prompt with ATR suffix
+          const retryPrompt = prompt + buildATRRetryPrompt(atrState.attempt, evaluation.reason);
+
+          // Re-execute via hooks
+          const retryResult = await withTimeout(
+            adapter.executeViaHooks({
+              agentId: payload.agent.agentId,
+              taskId: payload.taskId,
+              jobId: jobId,
+              prompt: retryPrompt,
+              name: payload.agent.name,
+              context: {
+                tools: payload.allowedResources.tools,
+                skills: payload.allowedResources.skills,
+                toolDefinitions: payload.allowedResources.toolDefinitions,
+                skillDefinitions: payload.allowedResources.skillDefinitions,
+                maxTokens: payload.constraints.maxTokens,
+                temperature: payload.agent.temperature,
+              },
+            }),
+            timeoutMs,
+            abortController
+          );
+
+          if (retryResult.success && retryResult.response) {
+            finalResponse = retryResult.response;
+            finalSuccess = true;
+
+            // Re-check runtime events
+            const retryRuntimeResult = await getRuntimeEvents(payload.taskId);
+            const retryRuntimeEvents = retryRuntimeResult.events.map(e => ({
+              event: e.event,
+              ...e.metadata,
+            }));
+
+            // Re-evaluate
+            evaluation = evaluateATR({
+              tools_available: true,
+              tool_ids: assignedTools,
+              has_response: true,
+              response_content: finalResponse,
+              runtime_events: retryRuntimeEvents,
+              tool_usage_status: 'unverified',
+            });
+          } else {
+            // Retry failed - escalate
+            evaluation = {
+              should_retry: false,
+              reason: 'external_block',
+              explanation: 'ATR retry execution failed',
+              tool_used_verified: false,
+            };
+          }
+
+          atrResult = processATRIteration(atrState, evaluation);
+          atrState = atrResult.state;
+        }
+
+        // Record ATR results in traceability
+        for (const entry of atrState.history) {
+          traceBuilder.resolutionAttempt(
+            entry.attempt,
+            entry.reason,
+            entry.action,
+            entry.tool_used_after
+          );
+        }
+
+        if (atrState.final_status) {
+          traceBuilder.finalResolution(atrState.final_status);
+        }
+
+        if (atrState.requires_human && atrState.human_reason) {
+          traceBuilder.humanEscalation(atrState.human_reason);
+        }
+
+        logger.info({
+          jobId,
+          taskId: payload.taskId,
+          attempts: atrState.attempt,
+          final_status: atrState.final_status,
+          requires_human: atrState.requires_human,
+        }, '[ATR] Loop completed');
+      }
+
+      // Build final traceability (includes ATR results)
       const trace = traceBuilder.completed().build();
 
       // Process result (adapt to expected format)
@@ -1054,7 +1498,7 @@ export class JobDispatcherService {
       const adaptedResult = {
         success: finalSuccess,
         sessionId: hooksResult.sessionKey, // Session key from initial dispatch
-        response: finalResponse, // Final response (may include tool loop result)
+        response: finalResponse, // Final response (may include ATR retry result)
         error: finalError,
         // Final state (NOT initial accepted_async state)
         accepted: finalAccepted,
@@ -1267,14 +1711,85 @@ export class JobDispatcherService {
       temperature: agentConfig.temperature as number | undefined,
     };
 
-    // Build allowed resources
+    // Build allowed resources with FULL DEFINITIONS (not just IDs)
     const { toolService, skillService } = getServices();
     const agentTools = await toolService.getAgentTools(agent.id);
     const agentSkills = await skillService.getAgentSkills(agent.id);
 
+    // Build executable tool definitions (only for active tools with valid structure)
+    const toolDefinitions: import('./types.js').ExecutableToolDefinition[] = [];
+    for (const tool of agentTools) {
+      // Only include active tools with required fields
+      if (tool.status === 'active' && tool.name && tool.path) {
+        toolDefinitions.push({
+          id: tool.id,
+          name: tool.name,
+          description: tool.description,
+          type: tool.type as 'script' | 'binary' | 'api',
+          path: tool.path,
+          inputSchema: tool.inputSchema,
+          outputSchema: tool.outputSchema,
+          config: tool.config,
+        });
+      } else {
+        logger.warn({
+          toolId: tool.id,
+          toolName: tool.name,
+          status: tool.status,
+          hasPath: !!tool.path,
+        }, 'Tool excluded from execution: missing required fields or inactive');
+      }
+    }
+
+    // Build executable skill definitions (with their tools)
+    const skillDefinitions: import('./types.js').ExecutableSkillDefinition[] = [];
+    for (const skill of agentSkills) {
+      if (skill.status === 'active') {
+        // Get tools linked to this skill
+        const skillTools = await skillService.getSkillToolsExpanded(skill.id);
+        const skillToolDefs: import('./types.js').ExecutableToolDefinition[] = [];
+
+        for (const link of skillTools) {
+          if (link.tool.status === 'active' && link.tool.name && link.tool.path) {
+            skillToolDefs.push({
+              id: link.tool.id,
+              name: link.tool.name,
+              description: link.tool.description,
+              type: link.tool.type as 'script' | 'binary' | 'api',
+              path: link.tool.path,
+              inputSchema: link.tool.inputSchema,
+              outputSchema: link.tool.outputSchema,
+              config: link.config || link.tool.config, // Skill-level config overrides tool config
+            });
+          }
+        }
+
+        skillDefinitions.push({
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          capabilities: skill.capabilities,
+          tools: skillToolDefs.length > 0 ? skillToolDefs : undefined,
+        });
+      }
+    }
+
+    logger.info({
+      agentId: agent.id,
+      toolCount: agentTools.length,
+      executableToolCount: toolDefinitions.length,
+      skillCount: agentSkills.length,
+      executableSkillCount: skillDefinitions.length,
+    }, 'Built executable resource definitions');
+
     const allowedResources: JobAllowedResources = {
+      // IDs for backwards compatibility and traceability
       tools: agentTools.map((t: { id: string }) => t.id),
       skills: agentSkills.map((s: { id: string }) => s.id),
+      // Full definitions for runtime execution
+      toolDefinitions: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+      skillDefinitions: skillDefinitions.length > 0 ? skillDefinitions : undefined,
+      // Capability flags
       webSearch: agent.capabilities?.includes('web_search') || false,
       codeExecution: agent.capabilities?.includes('code_execution') || false,
       fileAccess: agent.capabilities?.includes('file_access') || false,
@@ -1422,23 +1937,72 @@ export class JobDispatcherService {
     }
 
     // RESOURCE INJECTION: Include available tools/skills in prompt
-    // This serves as fallback when OpenClaw doesn't natively use the resources from body
-    const tools = payload.allowedResources.tools;
-    const skills = payload.allowedResources.skills;
+    // PRIORITY: Full definitions (executable) > IDs only (informational)
+    const toolDefinitions = payload.allowedResources.toolDefinitions || [];
+    const skillDefinitions = payload.allowedResources.skillDefinitions || [];
+    const toolIds = payload.allowedResources.tools;
+    const skillIds = payload.allowedResources.skills;
 
-    if (tools.length > 0 || skills.length > 0) {
+    const hasToolDefinitions = toolDefinitions.length > 0;
+    const hasSkillDefinitions = skillDefinitions.length > 0;
+    const hasResources = hasToolDefinitions || hasSkillDefinitions || toolIds.length > 0 || skillIds.length > 0;
+
+    if (hasResources) {
       parts.push(`## Available Resources`);
 
-      if (tools.length > 0) {
-        parts.push(`### Tools (${tools.length})`);
-        parts.push(`You have access to the following tools:\n${tools.map(t => `- ${t}`).join('\n')}`);
-        parts.push('Use these tools when needed to complete the task.');
+      // TOOL-FIRST POLICY: When resources are available, instruct agent to prefer them
+      parts.push(`**IMPORTANT: Tool-First Execution Policy**`);
+      parts.push(`You have tools/skills available for this task. Follow this policy:`);
+      parts.push(`1. ALWAYS attempt to use available tools/skills BEFORE responding with text-only answers`);
+      parts.push(`2. If a tool can accomplish part of the task, USE IT - do not describe what you would do`);
+      parts.push(`3. If tools are not applicable or fail, explain why in your response`);
+      parts.push(`4. Direct text responses should be used ONLY when tools genuinely cannot help\n`);
+
+      // TOOL DEFINITIONS: Full executable specifications
+      if (hasToolDefinitions) {
+        parts.push(`### Tools (${toolDefinitions.length})`);
+        parts.push(`You have access to the following tools with their execution details:\n`);
+        for (const tool of toolDefinitions) {
+          parts.push(`**${tool.name}** (${tool.type})`);
+          if (tool.description) {
+            parts.push(`  Description: ${tool.description}`);
+          }
+          parts.push(`  Path: ${tool.path}`);
+          if (tool.inputSchema && Object.keys(tool.inputSchema).length > 0) {
+            parts.push(`  Input Schema: \`${JSON.stringify(tool.inputSchema)}\``);
+          }
+          parts.push('');
+        }
+        parts.push('**Execute these tools using the run_command format: `run_command: <command>`**');
+      } else if (toolIds.length > 0) {
+        // Fallback: IDs only (less useful, but informational)
+        parts.push(`### Tools (${toolIds.length})`);
+        parts.push(`You have access to the following tools:\n${toolIds.map(t => `- ${t}`).join('\n')}`);
+        parts.push('**Note: Full tool definitions not available. Tools may not be executable.**');
       }
 
-      if (skills.length > 0) {
-        parts.push(`### Skills (${skills.length})`);
-        parts.push(`You have the following skills available:\n${skills.map(s => `- ${s}`).join('\n')}`);
-        parts.push('Leverage these skills as appropriate for the task.');
+      // SKILL DEFINITIONS: With their tools
+      if (hasSkillDefinitions) {
+        parts.push(`### Skills (${skillDefinitions.length})`);
+        parts.push(`You have the following skills available:\n`);
+        for (const skill of skillDefinitions) {
+          parts.push(`**${skill.name}**`);
+          if (skill.description) {
+            parts.push(`  Description: ${skill.description}`);
+          }
+          if (skill.capabilities && skill.capabilities.length > 0) {
+            parts.push(`  Capabilities: ${skill.capabilities.join(', ')}`);
+          }
+          if (skill.tools && skill.tools.length > 0) {
+            parts.push(`  Tools: ${skill.tools.map(t => t.name).join(', ')}`);
+          }
+          parts.push('');
+        }
+        parts.push('**Invoke these skills proactively for applicable operations.**');
+      } else if (skillIds.length > 0) {
+        parts.push(`### Skills (${skillIds.length})`);
+        parts.push(`You have the following skills available:\n${skillIds.map(s => `- ${s}`).join('\n')}`);
+        parts.push('**Note: Full skill definitions not available.**');
       }
     }
 
@@ -1448,6 +2012,16 @@ export class JobDispatcherService {
     parts.push(`- Max tool calls: ${payload.constraints.maxToolCalls}`);
     if (payload.constraints.requireConfirmation) {
       parts.push('- IMPORTANT: Destructive operations require confirmation');
+    }
+    // Add tool policy indicator for traceability
+    if (hasResources) {
+      parts.push('- Execution Policy: tool-first (prefer tools over direct response)');
+      // Indicate injection mode for debugging
+      if (hasToolDefinitions || hasSkillDefinitions) {
+        parts.push('- Resource Mode: full_definitions (executable)');
+      } else {
+        parts.push('- Resource Mode: ids_only (informational)');
+      }
     }
 
     return parts.join('\n\n');

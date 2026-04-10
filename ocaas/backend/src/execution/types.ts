@@ -85,15 +85,126 @@ export interface JobAgentContext {
   temperature?: number;
 }
 
+// ============================================================================
+// TOOL SECURITY POLICY
+// ============================================================================
+
+/**
+ * Security policy for tool execution.
+ * Tools without a valid policy or with enabled=false are BLOCKED.
+ */
+export interface ToolSecurityPolicy {
+  /** Is this tool enabled for execution? */
+  enabled: boolean;
+
+  /** Allow outbound network requests (for API tools) */
+  allowNetwork: boolean;
+
+  /** Allow filesystem access (for script/binary tools) */
+  allowFilesystem: boolean;
+
+  /** Allow binary execution (for binary tools) */
+  allowBinaryExecution: boolean;
+
+  /** Allowed paths for script/binary execution (must match one) */
+  allowedPaths?: string[];
+
+  /** Allowed URL hosts for API tools (must match one) */
+  allowedHosts?: string[];
+
+  /** Allowed HTTP methods for API tools */
+  allowedMethods?: Array<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'>;
+
+  /** Maximum execution timeout in ms (default: 30000, max: 120000) */
+  timeoutMs?: number;
+
+  /** Maximum output size in bytes (default: 1MB) */
+  maxOutputBytes?: number;
+
+  /** Trusted: skip some validations (only for system tools) */
+  trusted?: boolean;
+}
+
+/**
+ * Default security policy - restrictive
+ */
+export const DEFAULT_TOOL_SECURITY_POLICY: ToolSecurityPolicy = {
+  enabled: false,
+  allowNetwork: false,
+  allowFilesystem: false,
+  allowBinaryExecution: false,
+  timeoutMs: 30000,
+  maxOutputBytes: 1024 * 1024, // 1MB
+};
+
+/**
+ * Executable tool definition for OpenClaw runtime
+ * Contains all information needed for the runtime to execute the tool
+ */
+export interface ExecutableToolDefinition {
+  /** Tool ID (for traceability) */
+  id: string;
+
+  /** Tool name (unique identifier for invocation) */
+  name: string;
+
+  /** Human-readable description */
+  description?: string;
+
+  /** Tool type: determines execution method */
+  type: 'script' | 'binary' | 'api';
+
+  /** Path to executable/script (for script/binary) or endpoint URL (for api) */
+  path: string;
+
+  /** Input schema (JSON Schema format) for parameter validation */
+  inputSchema?: Record<string, unknown>;
+
+  /** Output schema (JSON Schema format) */
+  outputSchema?: Record<string, unknown>;
+
+  /** Additional configuration */
+  config?: Record<string, unknown>;
+
+  /** Security policy for this tool */
+  securityPolicy?: ToolSecurityPolicy;
+}
+
+/**
+ * Executable skill definition for OpenClaw runtime
+ */
+export interface ExecutableSkillDefinition {
+  /** Skill ID (for traceability) */
+  id: string;
+
+  /** Skill name */
+  name: string;
+
+  /** Human-readable description */
+  description?: string;
+
+  /** Capabilities provided by this skill */
+  capabilities?: string[];
+
+  /** Tools included in this skill */
+  tools?: ExecutableToolDefinition[];
+}
+
 /**
  * Resources the agent is allowed to use
  */
 export interface JobAllowedResources {
-  /** Allowed tool IDs */
+  /** Allowed tool IDs (for backwards compatibility and traceability) */
   tools: string[];
 
-  /** Allowed skill IDs */
+  /** Allowed skill IDs (for backwards compatibility and traceability) */
   skills: string[];
+
+  /** Executable tool definitions (full definitions for runtime) */
+  toolDefinitions?: ExecutableToolDefinition[];
+
+  /** Executable skill definitions (full definitions for runtime) */
+  skillDefinitions?: ExecutableSkillDefinition[];
 
   /** Can use web search */
   webSearch: boolean;
@@ -453,6 +564,152 @@ export interface JobRecord {
 
   /** Updated timestamp */
   updatedAt: number;
+}
+
+// ============================================================================
+// GLOBAL EXECUTION LIMITS
+// ============================================================================
+
+/**
+ * Global execution limits per task.
+ * These limits prevent runaway executions.
+ */
+export interface TaskExecutionLimits {
+  /** Maximum tool executions per task (default: 100) */
+  maxToolExecutionsPerTask: number;
+
+  /** Maximum total execution time in ms (default: 600000 = 10 min) */
+  maxTotalExecutionMsPerTask: number;
+
+  /** Maximum concurrent tool executions (default: 5) */
+  maxConcurrentTools: number;
+
+  /** Maximum tool execution retries per task (default: 10) */
+  maxRetriesPerTask: number;
+}
+
+/**
+ * Default execution limits - conservative
+ */
+export const DEFAULT_EXECUTION_LIMITS: TaskExecutionLimits = {
+  maxToolExecutionsPerTask: 100,
+  maxTotalExecutionMsPerTask: 600000, // 10 minutes
+  maxConcurrentTools: 5,
+  maxRetriesPerTask: 10,
+};
+
+/**
+ * Current execution state for a task
+ */
+export interface TaskExecutionState {
+  /** Task ID */
+  taskId: string;
+
+  /** Total tool executions so far */
+  toolExecutionCount: number;
+
+  /** Total execution time in ms */
+  totalExecutionMs: number;
+
+  /** Currently running tool executions */
+  currentConcurrent: number;
+
+  /** Total retries so far */
+  retryCount: number;
+
+  /** First execution timestamp */
+  firstExecutionAt?: number;
+
+  /** Last execution timestamp */
+  lastExecutionAt?: number;
+}
+
+/**
+ * Execution limit check result
+ */
+export interface ExecutionLimitCheckResult {
+  /** Can execution proceed? */
+  allowed: boolean;
+
+  /** Limit that was exceeded (if blocked) */
+  limitExceeded?: 'max_executions' | 'max_time' | 'max_concurrent' | 'max_retries';
+
+  /** Current value vs limit */
+  current?: number;
+  limit?: number;
+
+  /** Message */
+  message?: string;
+}
+
+// ============================================================================
+// AUDIT LOG
+// ============================================================================
+
+/**
+ * Audit log entry for tool execution.
+ * Immutable record for compliance and debugging.
+ */
+export interface ToolExecutionAuditEntry {
+  /** Unique audit entry ID */
+  id: string;
+
+  /** Execution ID from ToolExecutionService */
+  executionId: string;
+
+  /** Timestamp when audit entry was created */
+  timestamp: number;
+
+  /** Tool name */
+  toolName: string;
+
+  /** Tool type (api, script, binary, run_command) */
+  toolType: 'api' | 'script' | 'binary' | 'run_command' | 'unknown';
+
+  /** Task ID */
+  taskId: string;
+
+  /** Job ID (if applicable) */
+  jobId?: string;
+
+  /** Agent ID */
+  agentId: string;
+
+  /** Was execution successful? */
+  success: boolean;
+
+  /** Duration in ms */
+  durationMs: number;
+
+  /** Input summary (truncated for audit) */
+  inputSummary?: string;
+
+  /** Output summary (truncated for audit) */
+  outputSummary?: string;
+
+  /** Error code (if failed) */
+  errorCode?: string;
+
+  /** Error message (if failed) */
+  errorMessage?: string;
+
+  /** Security check passed? */
+  securityPassed?: boolean;
+
+  /** Security failure code */
+  securityFailureCode?: string;
+
+  /** Input validation passed? */
+  inputValidationPassed?: boolean;
+
+  /** Input validation errors */
+  inputValidationErrors?: string[];
+
+  /** Was blocked by execution limits? */
+  blockedByLimits?: boolean;
+
+  /** Limit that was exceeded */
+  limitExceeded?: string;
 }
 
 // ============================================================================

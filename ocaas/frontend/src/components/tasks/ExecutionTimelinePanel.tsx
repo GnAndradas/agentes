@@ -206,24 +206,28 @@ export function ExecutionTimelinePanel({ taskId, refreshInterval = 5000 }: Execu
       </div>
 
       {/* Layer summary */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {(Object.keys(data.layers) as TimelineLayer[]).map(layerKey => {
-          const layer = layerConfig[layerKey];
-          const stats = data.layers[layerKey];
-          const LayerIcon = layer.icon;
-          return (
-            <div
-              key={layerKey}
-              className={`flex items-center gap-1 px-2 py-1 rounded ${layer.bgColor} ${!stats.available ? 'opacity-40' : ''}`}
-            >
-              <LayerIcon className={`w-3 h-3 ${layer.color}`} />
-              <span className={`text-[10px] ${layer.color}`}>
-                {layer.label}: {stats.eventCount}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      {data.layers && typeof data.layers === 'object' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(Object.keys(data.layers) as TimelineLayer[]).map(layerKey => {
+            const layer = layerConfig[layerKey];
+            if (!layer) return null;
+            const stats = data.layers[layerKey];
+            if (!stats) return null;
+            const LayerIcon = layer.icon;
+            return (
+              <div
+                key={layerKey}
+                className={`flex items-center gap-1 px-2 py-1 rounded ${layer.bgColor} ${!stats.available ? 'opacity-40' : ''}`}
+              >
+                <LayerIcon className={`w-3 h-3 ${layer.color}`} />
+                <span className={`text-[10px] ${layer.color}`}>
+                  {layer.label}: {stats.eventCount ?? 0}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Correlation info */}
       {(data.sessionKey || data.jobId) && (
@@ -242,7 +246,7 @@ export function ExecutionTimelinePanel({ taskId, refreshInterval = 5000 }: Execu
       )}
 
       {/* Events list */}
-      {data.events.length > 0 ? (
+      {Array.isArray(data.events) && data.events.length > 0 ? (
         <div className="bg-dark-900 rounded-lg overflow-hidden max-h-80 overflow-y-auto">
           {data.events.map((event, idx) => (
             <EventRow

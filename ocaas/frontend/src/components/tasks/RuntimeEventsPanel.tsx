@@ -206,7 +206,7 @@ export function RuntimeEventsPanel({ taskId, refreshInterval = 5000 }: RuntimeEv
           <span className="text-[9px] text-dark-500 font-normal">(progress-tracker hook)</span>
         </div>
         <Badge variant={data.hasEvents ? 'active' : 'default'} className="text-[10px]">
-          {data.events.length} events
+          {Array.isArray(data.events) ? data.events.length : 0} events
         </Badge>
       </div>
 
@@ -243,7 +243,7 @@ export function RuntimeEventsPanel({ taskId, refreshInterval = 5000 }: RuntimeEv
       )}
 
       {/* Events list */}
-      {data.hasEvents ? (
+      {data.hasEvents && Array.isArray(data.events) && data.events.length > 0 ? (
         <div className="bg-dark-900 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
           {data.events.map((event, idx) => (
             <EventRow

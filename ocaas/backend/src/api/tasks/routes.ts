@@ -54,4 +54,8 @@ export async function taskRoutes(fastify: FastifyInstance) {
 
   // DEBUG SUMMARY: Operational debugging for troubleshooting
   fastify.get('/:id/debug-summary', h.getDebugSummary);
+
+  // TOOL USAGE VERIFICATION: Determine if tools were actually executed
+  // 7-phase protocol: runtime events → contractual check → timeline → result
+  fastify.get('/:id/tool-usage-verification', h.getToolUsageVerification);
 }

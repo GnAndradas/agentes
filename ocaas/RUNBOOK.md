@@ -964,6 +964,126 @@ El sistema puede aparentar funcionar pero hooks y ejecución **NO funcionarán**
 
 ---
 
+## [CRITICAL] Clean Redeploy (macOS)
+
+Antes de reiniciar OCAAS, **SIEMPRE** ejecutar:
+
+### 1. Verificar puertos ocupados
+
+```bash
+# Puertos canónicos
+lsof -i :3001  # OCAAS backend
+lsof -i :5173  # OCAAS frontend
+lsof -i :18789 # OpenClaw gateway
+```
+
+### 2. Matar procesos viejos
+
+```bash
+# Matar node/tsx en puertos OCAAS
+pkill -f "node.*3001" || true
+pkill -f "node.*5173" || true
+
+# Alternativa por PID
+kill -9 $(lsof -t -i:3001) 2>/dev/null || true
+kill -9 $(lsof -t -i:5173) 2>/dev/null || true
+```
+
+### 3. Reiniciar en puertos canónicos
+
+```bash
+# Backend (debe ser SIEMPRE puerto 3001)
+cd ocaas/backend && npm run dev
+
+# Frontend (debe ser SIEMPRE puerto 5173)
+cd ocaas/frontend && npm run dev
+```
+
+**IMPORTANTE:** Si el puerto está ocupado por otra instancia, npm iniciará en puerto alternativo (3002, 5174). Esto **ROMPE** la integración con OpenClaw porque los hooks están configurados para puertos específicos.
+
+---
+
+## [CRITICAL] Hooks.Accepted Semantics
+
+### Lo que "Accepted: No" significa
+
+`Accepted: No` **NO significa fallo**. Significa que OpenClaw decidió NO usar hooks_session para esta invocación específica.
+
+### Escenarios válidos con Accepted=No
+
+| Configured | Reached | Accepted | AI Response | Resultado |
+|------------|---------|----------|-------------|-----------|
+| Yes | Yes | **No** | Yes | ✅ **VÁLIDO** - OpenClaw usó chat_completion |
+| Yes | Yes | Yes | Yes | ✅ VÁLIDO - OpenClaw usó hooks_session |
+| No | No | No | Yes | ✅ VÁLIDO - Sin hooks, chat directo |
+| Yes | No | - | No | ❌ FALLO - Gateway no alcanzable |
+
+### Interpretación correcta
+
+```
+hooks.configured = true   → Token hooks cargado en backend
+hooks.reached = true      → Gateway respondió al POST /hooks/agent
+hooks.accepted = false    → Gateway decidió NO usar hooks (normal)
+ai_response = presente    → Hay respuesta de IA (éxito)
+```
+
+**REGLA:** Solo hay fallo real si:
+1. `hooks.configured=false` cuando debería estar configurado
+2. `hooks.reached=false` cuando gateway debería responder
+3. `ai_response` está vacío/ausente cuando se esperaba respuesta
+
+---
+
+## [CRITICAL] Deploy Validation Check
+
+Después de cada deploy, validar en este orden:
+
+### 1. Health checks básicos
+
+```bash
+# Backend health
+curl -s localhost:3001/health
+# Esperado: {"status":"ok",...}
+
+# Gateway status
+curl -s localhost:3001/api/system/gateway | jq
+# Esperado: rest.reachable=true, rest.authenticated=true, hooks.configured=true
+```
+
+### 2. Crear task de prueba
+
+```bash
+curl -X POST localhost:3001/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test deploy validation","type":"general"}'
+```
+
+### 3. Verificar job/trace/completion
+
+```bash
+# Obtener task ID del paso anterior
+TASK_ID="<id-del-paso-anterior>"
+
+# Verificar diagnostics
+curl -s "localhost:3001/api/tasks/$TASK_ID/diagnostics" | jq
+
+# Campos a verificar:
+# - traceability.hook_ingress_success (true si hooks configurados)
+# - traceability.final_execution_path (hook_runtime|chat_fallback|stub)
+# - execution.ai_model_used (modelo usado)
+```
+
+### Checklist de validación
+
+- [ ] `/health` responde OK
+- [ ] `/api/system/gateway` muestra `rest.reachable=true`
+- [ ] Task de prueba se crea correctamente
+- [ ] Task se ejecuta (pasa a running → completed)
+- [ ] Diagnostics muestra traceability completo
+- [ ] No hay errores en logs del backend
+
+---
+
 ## Troubleshooting
 
 ### Task no se ejecuta

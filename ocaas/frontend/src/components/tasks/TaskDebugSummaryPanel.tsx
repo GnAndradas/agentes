@@ -193,10 +193,13 @@ export function TaskDebugSummaryPanel({ taskId, refreshInterval = 10000 }: TaskD
   const overallStatus = statusConfig[data.overall_status];
   const OverallIcon = overallStatus.icon;
 
+  // HARDENING: Safely handle missing or non-array issues
+  const safeIssues = Array.isArray(data.issues) ? data.issues : [];
+
   // Group issues by severity for priority display
-  const errorIssues = data.issues.filter(i => i.status === 'fail');
-  const warningIssues = data.issues.filter(i => i.status === 'degraded');
-  const infoIssues = data.issues.filter(i => i.status === 'pass' || i.status === 'unknown');
+  const errorIssues = safeIssues.filter(i => i.status === 'fail');
+  const warningIssues = safeIssues.filter(i => i.status === 'degraded');
+  const infoIssues = safeIssues.filter(i => i.status === 'pass' || i.status === 'unknown');
 
   return (
     <div className="space-y-3 p-4">
@@ -220,11 +223,11 @@ export function TaskDebugSummaryPanel({ taskId, refreshInterval = 10000 }: TaskD
       </div>
 
       {/* Issues list - errors first, then warnings, then info */}
-      {data.issues.length > 0 ? (
+      {safeIssues.length > 0 ? (
         <div className="bg-dark-900 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
           {/* Errors */}
           {errorIssues.map((issue) => {
-            const globalIdx = data.issues.indexOf(issue);
+            const globalIdx = safeIssues.indexOf(issue);
             return (
               <IssueRow
                 key={globalIdx}
@@ -236,7 +239,7 @@ export function TaskDebugSummaryPanel({ taskId, refreshInterval = 10000 }: TaskD
           })}
           {/* Warnings */}
           {warningIssues.map((issue) => {
-            const globalIdx = data.issues.indexOf(issue);
+            const globalIdx = safeIssues.indexOf(issue);
             return (
               <IssueRow
                 key={globalIdx}
@@ -248,7 +251,7 @@ export function TaskDebugSummaryPanel({ taskId, refreshInterval = 10000 }: TaskD
           })}
           {/* Info */}
           {infoIssues.map((issue) => {
-            const globalIdx = data.issues.indexOf(issue);
+            const globalIdx = safeIssues.indexOf(issue);
             return (
               <IssueRow
                 key={globalIdx}

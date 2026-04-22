@@ -1,0 +1,64 @@
+{
+  "name": "intent_classifier",
+  "description": "Classify user messages into intents (consult/task/ambiguous) and extract task parameters",
+  "version": "1.0.0",
+  "type": "classification",
+  "tools": ["ocaas_router"],
+  "parameters": {
+    "type": "object",
+    "required": ["message", "context"],
+    "properties": {
+      "message": {
+        "type": "string",
+        "description": "User message to classify"
+      },
+      "context": {
+        "type": "object",
+        "description": "Conversation context",
+        "properties": {
+          "source": {"type": "string"},
+          "user_id": {"type": "string"},
+          "conversation_id": {"type": "string"},
+          "message_id": {"type": "string"},
+          "history": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Previous messages for context"
+          }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["intent", "confidence", "risk_level", "requires_confirmation", "summary"],
+    "properties": {
+      "intent": {
+        "type": "string",
+        "enum": ["consult", "task", "ambiguous"]
+      },
+      "confidence": {
+        "type": "number"
+      },
+      "risk_level": {
+        "type": "string",
+        "enum": ["low", "medium", "high", "critical"]
+      },
+      "requires_confirmation": {
+        "type": "boolean"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "task_payload": {
+        "type": "object"
+      },
+      "clarification_question": {
+        "type": "string"
+      },
+      "direct_answer": {
+        "type": "string"
+      }
+    }
+  }
+}

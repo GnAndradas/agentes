@@ -553,3 +553,133 @@ export const DEFAULT_COST_LIMITS: CostLimits = {
   max_subtasks_per_decomposition: 10,
   expensive_call_timeout_ms: 120000,
 };
+
+// ============================================================================
+// INTENT ROUTER (OpenClaw → OCAAS)
+// ============================================================================
+
+/**
+ * Intent classification from OpenClaw router
+ */
+export type IntentType = 'consult' | 'task' | 'ambiguous';
+
+/**
+ * Risk level for task intent
+ */
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * Payload from OpenClaw Intent Router
+ * POST /api/intake/router
+ */
+export interface IntentRouterPayload {
+  /** Source channel: telegram, api, web, etc. */
+  source: string;
+
+  /** User ID within the channel */
+  channel_user_id: string;
+
+  /** Conversation/chat ID (for context grouping) */
+  conversation_id: string;
+
+  /** Message ID within the conversation */
+  message_id: string;
+
+  /** Raw message text from user */
+  raw_message: string;
+
+  /** Classified intent */
+  intent: IntentType;
+
+  /** Classification confidence (0-1) */
+  confidence: number;
+
+  /** Risk level (for task intents) */
+  risk_level: RiskLevel;
+
+  /** Does this require human confirmation? */
+  requires_confirmation: boolean;
+
+  /** AI-generated summary of the request */
+  summary: string;
+
+  /** Task payload (populated if intent === 'task') */
+  task_payload?: IntentTaskPayload;
+
+  /** Clarification question (populated if intent === 'ambiguous') */
+  clarification_question?: string;
+
+  /** Direct answer (populated if intent === 'consult') */
+  direct_answer?: string;
+
+  /** Timestamp from OpenClaw */
+  timestamp?: number;
+
+  /** OpenClaw session ID (if available) */
+  openclaw_session_id?: string;
+}
+
+/**
+ * Task payload extracted by Intent Router
+ */
+export interface IntentTaskPayload {
+  /** Suggested task title */
+  title: string;
+
+  /** Task description */
+  description: string;
+
+  /** Suggested task type */
+  type?: string;
+
+  /** Suggested priority (1-5) */
+  priority?: number;
+
+  /** Suggested capabilities */
+  required_capabilities?: string[];
+
+  /** Extracted entities/parameters */
+  extracted_params?: Record<string, unknown>;
+
+  /** Deadline if mentioned */
+  deadline?: string;
+}
+
+/**
+ * Response from OCAAS to Intent Router
+ */
+export interface IntentRouterResponse {
+  /** Whether the request was accepted */
+  accepted: boolean;
+
+  /** Task ID if created */
+  task_id?: string;
+
+  /** Current status */
+  status: 'created' | 'queued' | 'rejected' | 'clarification_needed' | 'answered';
+
+  /** Human-readable message */
+  message: string;
+
+  /** If clarification needed, the question to ask */
+  clarification_question?: string;
+
+  /** If consult was answered directly */
+  direct_answer?: string;
+
+  /** Tracking ID for this intake */
+  tracking_id: string;
+
+  /** Timestamp */
+  processed_at: number;
+}
+
+/**
+ * Default values for router payload validation
+ */
+export const DEFAULT_INTENT_PAYLOAD: Partial<IntentRouterPayload> = {
+  intent: 'ambiguous',
+  confidence: 0,
+  risk_level: 'medium',
+  requires_confirmation: true,
+};

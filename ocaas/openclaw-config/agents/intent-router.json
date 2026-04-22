@@ -1,0 +1,15 @@
+{
+  "name": "intent-router",
+  "description": "Routes incoming messages by classifying intent and dispatching to OCAAS",
+  "version": "1.0.0",
+  "type": "router",
+  "capabilities": ["intent-classification", "routing", "triage"],
+  "skills": ["intent_classifier"],
+  "tools": ["ocaas_router"],
+  "config": {
+    "model": "default",
+    "max_tokens": 2048,
+    "temperature": 0.3
+  },
+  "system_prompt_file": "intent-router-prompt.md"
+}

@@ -19,6 +19,7 @@
 16. [Comandos Utiles](#comandos-utiles)
 17. [Variables de Entorno](#variables-de-entorno)
 18. [Operational Validation Checklist](#operational-validation-checklist) [NEW]
+19. [Intent Router (OpenClaw ↔ OCAAS)](#intent-router-openclaw--ocaas) [NEW]
 
 ---
 
@@ -1370,6 +1371,216 @@ Validates env vars, backend, gateway, task FSM.
 
 ---
 
-*Actualizado: 2026-04-09*
+## [NEW] Intent Router (OpenClaw ↔ OCAAS)
+
+### Overview
+
+The Intent Router enables OpenClaw to classify incoming messages and route them appropriately:
+- **consult**: Direct answer, no task created
+- **task**: Create task in OCAAS
+- **ambiguous**: Request clarification
+
+### Architecture
+
+```
+User Message
+    ↓
+Channel (Telegram/API/Web)
+    ↓
+OpenClaw Gateway
+    ↓
+intent-router agent (classifies intent)
+    ↓
+ocaas_router tool (HTTP call)
+    ↓
+POST /api/intake/router
+    ↓
+OCAAS processes:
+  - consult → acknowledge
+  - task → create task
+  - ambiguous → return clarification
+    ↓
+Response to user
+```
+
+**CRITICAL:** OpenClaw router is NOT the control plane. OCAAS remains the control plane.
+
+### Prerequisites (macOS)
+
+**Recommended runtime:**
+- Node 20.x (NOT Node 24 - avoid better-sqlite3 issues)
+- OCAAS backend on port 3001
+- OCAAS frontend on port 5173
+- OpenClaw gateway on port 18789
+
+**Verify:**
+```bash
+node -v
+npm -v
+```
+
+### OCAAS Backend Support
+
+The codebase includes:
+- `POST /api/intake/router`
+- Intake handlers and routes
+- Contracts/types for: consult, task, ambiguous
+
+**Verify endpoint exists after startup:**
+```bash
+curl -i http://localhost:3001/api/intake/router
+```
+Expected: 400 (validation error) or method error, NOT 404.
+
+### OpenClaw Router Assets
+
+Located in `openclaw-config/`:
+- `tools/ocaas-router.json` - HTTP tool definition
+- `skills/intent-classifier.json` - Classification skill
+- `agents/intent-router.json` - Agent configuration
+- `agents/intent-router-prompt.md` - System prompt
+
+**These are NOT auto-installed.** Must be deployed to OpenClaw workspace manually.
+
+### OpenClaw Configuration (MANUAL, REQUIRED)
+
+**Steps:**
+
+1. Install router tool:
+```bash
+cp openclaw-config/tools/ocaas-router.json ~/.openclaw/workspace/tools/
+```
+
+2. Install intent-classifier skill:
+```bash
+cp openclaw-config/skills/intent-classifier.json ~/.openclaw/workspace/skills/
+```
+
+3. Install intent-router agent:
+```bash
+cp openclaw-config/agents/intent-router.json ~/.openclaw/workspace/agents/
+cp openclaw-config/agents/intent-router-prompt.md ~/.openclaw/workspace/agents/
+```
+
+4. Register and activate agent:
+```bash
+openclaw agent register intent-router
+openclaw agent activate intent-router
+```
+
+5. Set agent as default intake for channel (if applicable)
+
+### OpenClaw Tool Environment Variables
+
+The `ocaas_router` tool expects:
+```env
+OCAAS_API_URL=http://localhost:3001
+OCAAS_API_KEY=<same as API_SECRET_KEY in OCAAS>
+```
+
+Ensure these are available to OpenClaw's tool configuration resolution.
+
+### OCAAS Backend .env (macOS)
+
+```env
+PORT=3001
+HOST=0.0.0.0
+DATABASE_URL=./data/ocaas.db
+
+OPENCLAW_GATEWAY_URL=http://localhost:18789
+OPENCLAW_WORKSPACE_PATH=~/.openclaw/workspace
+OPENCLAW_API_KEY=<GATEWAY_TOKEN>
+OPENCLAW_HOOKS_TOKEN=<HOOKS_TOKEN>
+
+API_SECRET_KEY=<MIN_32_CHARS>
+
+DEFAULT_OPENCLAW_AGENT_ID=
+TASK_DISPATCH_MODE=auto
+```
+
+### Startup Sequence (macOS)
+
+1. **Start OpenClaw gateway**
+
+2. **Verify OpenClaw REST:**
+```bash
+curl -s http://localhost:18789/v1/models \
+  -H "Authorization: Bearer <GATEWAY_TOKEN>"
+```
+
+3. **Start OCAAS backend:**
+```bash
+cd agentes/ocaas/backend
+npm run dev
+```
+
+4. **Verify OCAAS:**
+```bash
+curl http://localhost:3001/health
+curl -s http://localhost:3001/api/system/gateway
+curl -i http://localhost:3001/api/intake/router
+```
+
+5. **Start OCAAS frontend:**
+```bash
+cd agentes/ocaas/frontend
+npm run dev
+```
+
+6. **Only after above:**
+- Install OpenClaw intent-router assets
+- Bind router agent to channel/inbox
+- Send test message from channel
+
+### Intent Router Expected Behavior
+
+| Intent | OpenClaw Action | OCAAS Action |
+|--------|-----------------|--------------|
+| consult | Provide direct answer | Acknowledge, NO task created |
+| task | Extract task_payload | Create task, return taskId |
+| ambiguous | Generate clarification question | Return pending_confirmation |
+
+### Validation Checklist (MANDATORY)
+
+**A. Backend:**
+- [ ] `/api/intake/router` exists and validates payload
+- [ ] Backend compiles on macOS
+- [ ] Node version pinned to 20.x
+
+**B. OpenClaw router config:**
+- [ ] `ocaas_router` tool installed
+- [ ] `intent_classifier` skill installed
+- [ ] `intent-router` agent installed
+- [ ] Agent bound to intended channel/default intake path
+- [ ] `OCAAS_API_URL` resolves from OpenClaw side
+- [ ] `OCAAS_API_KEY` resolves from OpenClaw side
+
+**C. End-to-end behavior:**
+- [ ] Consult message does NOT create task
+- [ ] Task message creates task in OCAAS
+- [ ] Ambiguous message does NOT silently execute
+- [ ] No 404 on `/api/intake/router`
+- [ ] No auth mismatch between OpenClaw tool and OCAAS endpoint
+
+### Important Architectural Rule
+
+```
+Router agent in OpenClaw:
+  - classifies
+  - routes
+  - communicates with OCAAS
+
+OCAAS:
+  - creates and governs tasks
+  - keeps canonical task state
+  - dispatches execution to OpenClaw
+
+Do NOT treat the OpenClaw router agent as the control plane.
+```
+
+---
+
+*Actualizado: 2026-04-22*
 *Sections marked [NEW] or [UPDATED] reflect PROMPT 7-13 changes*
 *Sections marked [CRITICAL] address operational gaps for clean/existing installs*
+*Intent Router section added for OpenClaw ↔ OCAAS integration*

@@ -1,0 +1,122 @@
+{
+  "name": "ocaas_router",
+  "description": "Route classified intents to OCAAS orchestrator. Use after classifying user intent as consult/task/ambiguous.",
+  "version": "1.0.0",
+  "type": "http",
+  "config": {
+    "method": "POST",
+    "url": "${OCAAS_API_URL}/api/intake/router",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer ${OCAAS_API_KEY}"
+    },
+    "timeout_ms": 30000
+  },
+  "parameters": {
+    "type": "object",
+    "required": [
+      "source",
+      "channel_user_id",
+      "conversation_id",
+      "message_id",
+      "raw_message",
+      "intent",
+      "confidence",
+      "risk_level",
+      "requires_confirmation",
+      "summary"
+    ],
+    "properties": {
+      "source": {
+        "type": "string",
+        "description": "Source channel: telegram, api, web, slack, etc."
+      },
+      "channel_user_id": {
+        "type": "string",
+        "description": "User ID within the source channel"
+      },
+      "conversation_id": {
+        "type": "string",
+        "description": "Conversation/chat ID for context grouping"
+      },
+      "message_id": {
+        "type": "string",
+        "description": "Unique message ID within the conversation"
+      },
+      "raw_message": {
+        "type": "string",
+        "description": "Original message text from user"
+      },
+      "intent": {
+        "type": "string",
+        "enum": ["consult", "task", "ambiguous"],
+        "description": "Classified intent type"
+      },
+      "confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Classification confidence (0-1)"
+      },
+      "risk_level": {
+        "type": "string",
+        "enum": ["low", "medium", "high", "critical"],
+        "description": "Risk level assessment"
+      },
+      "requires_confirmation": {
+        "type": "boolean",
+        "description": "Whether human confirmation is required"
+      },
+      "summary": {
+        "type": "string",
+        "description": "AI-generated summary of the request"
+      },
+      "task_payload": {
+        "type": "object",
+        "description": "Task details (required when intent=task)",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Task title"
+          },
+          "description": {
+            "type": "string",
+            "description": "Task description"
+          },
+          "type": {
+            "type": "string",
+            "description": "Task type (general, code, research, etc.)"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Priority 1-5 (1=highest)"
+          },
+          "required_capabilities": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Required agent capabilities"
+          },
+          "extracted_params": {
+            "type": "object",
+            "description": "Extracted entities/parameters"
+          },
+          "deadline": {
+            "type": "string",
+            "description": "Deadline if mentioned"
+          }
+        },
+        "required": ["title", "description"]
+      },
+      "clarification_question": {
+        "type": "string",
+        "description": "Question to ask if intent=ambiguous"
+      },
+      "direct_answer": {
+        "type": "string",
+        "description": "Answer to provide if intent=consult"
+      }
+    }
+  }
+}

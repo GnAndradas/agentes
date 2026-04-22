@@ -194,10 +194,18 @@ export class TaskService {
   }
 
   async assign(id: string, agentId: string): Promise<TaskDTO> {
-    const task = await this.getById(id);
+    let task = await this.getById(id);
     const now = nowTimestamp();
 
-    // Validate state transition
+    // Auto-queue if in pending state (FSM: pending → queued → assigned)
+    // This allows API callers to assign directly without explicit queue step
+    if (task.status === TASK_STATUS.PENDING) {
+      logger.info({ taskId: id }, 'Auto-queuing task before assignment (pending → queued)');
+      await this.queue(id);
+      task = await this.getById(id); // Refresh task state
+    }
+
+    // Validate state transition (now from queued)
     if (!isValidTransition(task.status, TASK_STATUS.ASSIGNED)) {
       logger.warn({
         taskId: id,

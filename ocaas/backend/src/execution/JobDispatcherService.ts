@@ -1489,6 +1489,31 @@ export class JobDispatcherService {
         }, '[ATR] Loop completed');
       }
 
+      // =========================================================================
+      // FASE 2: HOOKS_SESSION SUCCESS CRITERIA
+      // =========================================================================
+      // Determine hook ingress success and final execution path
+      const hookIngressSuccess = hooksResult.executionMode === 'hooks_session' &&
+        (hooksResult.success === true || hooksResult.accepted === true);
+      const hookRuntimeObserved = hookIngressSuccess && !!finalResponse;
+
+      // Set the new traceability fields
+      traceBuilder.hookIngressSuccess(!!hookIngressSuccess);
+      traceBuilder.hookRuntimeObserved(!!hookRuntimeObserved);
+
+      // Determine final execution path
+      let finalPath: 'hook_runtime' | 'hook_ingress_only' | 'chat_fallback' | 'stub';
+      if (finalExecutionMode === 'stub') {
+        finalPath = 'stub';
+      } else if (finalExecutionMode === 'chat_completion') {
+        finalPath = usedAsyncFallback ? 'chat_fallback' : 'chat_fallback';
+      } else if (hooksResult.executionMode === 'hooks_session') {
+        finalPath = hookRuntimeObserved ? 'hook_runtime' : 'hook_ingress_only';
+      } else {
+        finalPath = 'chat_fallback';
+      }
+      traceBuilder.finalExecutionPath(finalPath);
+
       // Build final traceability (includes ATR results)
       const trace = traceBuilder.completed().build();
 

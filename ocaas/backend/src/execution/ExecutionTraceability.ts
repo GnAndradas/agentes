@@ -109,6 +109,33 @@ export interface ExecutionTraceability {
   execution_fallback_used: boolean;
   execution_fallback_reason?: string;
 
+  // ==========================================================================
+  // HOOKS_SESSION SUCCESS CRITERIA (FASE 2 fix)
+  // ==========================================================================
+
+  /**
+   * Hook ingress success: request was sent to hooks endpoint and accepted
+   * True if: gateway reachable, auth OK, hooks accepted the request
+   * Does NOT require openclaw_session to be true
+   */
+  hook_ingress_success?: boolean;
+
+  /**
+   * Hook runtime observed: evidence that hook actually executed
+   * True if: received meaningful response OR accepted_async with eventual response
+   * This is observability, not a hard requirement
+   */
+  hook_runtime_observed?: boolean;
+
+  /**
+   * Final execution path taken
+   * - 'hook_runtime': Hooks executed and returned response
+   * - 'hook_ingress_only': Hooks accepted but no response (async without confirmation)
+   * - 'chat_fallback': Fell back to chat_completion
+   * - 'stub': Emergency stub mode
+   */
+  final_execution_path?: 'hook_runtime' | 'hook_ingress_only' | 'chat_fallback' | 'stub';
+
   /** Execution timestamps */
   execution_started_at: number;
   execution_completed_at?: number;
@@ -659,12 +686,16 @@ export interface RuntimeReadyCheck {
 /**
  * Check if agent is runtime_ready before execution
  *
- * IMPORTANT: runtime_ready = true ONLY if:
- * - Gateway is configured and connected
- * - AND (has openclaw_session OR execution_mode != 'hooks_session')
+ * FASE 2 FIX: hooks_session does NOT require openclaw_session.
+ * Hook ingress works with sessionKey routing, not real sessions.
  *
- * For hooks_session without openclaw_session: runtime_ready = false
- * (but can_proceed_with_fallback = true if chat_completion available)
+ * runtime_ready = true if:
+ * - Gateway is configured and connected
+ * - (openclaw_session is optional for hooks_session - just additional observability)
+ *
+ * hooks_session success is determined by:
+ * 1. hook_ingress_success: gateway reachable, auth OK, request accepted
+ * 2. hook_runtime_observed: got meaningful response (optional)
  */
 export function checkRuntimeReady(
   agentName: string,
@@ -705,24 +736,11 @@ export function checkRuntimeReady(
     };
   }
 
-  // For hooks_session: runtime_ready requires actual session
-  // For chat_completion: ready if gateway connected
-  const hasOpenclawSession = !!agentSessionId;
+  // FASE 2 FIX: hooks_session NO longer requires openclaw_session
+  // The hook ingress mechanism uses sessionKey routing, not persistent sessions.
+  // Success is determined by hook_ingress_success + response, not by session existence.
 
-  if (executionMode === 'hooks_session' && !hasOpenclawSession) {
-    // hooks_session mode but no session - NOT runtime_ready
-    // but CAN proceed with chat_completion fallback
-    return {
-      ready: false,
-      reason: 'hooks_session mode requires openclaw_session',
-      lifecycle_state: matStatus.state,
-      materialization_status: matStatus,
-      can_proceed_with_fallback: true,
-      fallback_mode: 'chat_completion',
-    };
-  }
-
-  // Ready for execution
+  // Ready for execution - gateway connected is sufficient
   return {
     ready: true,
     lifecycle_state: matStatus.state,
@@ -814,6 +832,28 @@ export class ExecutionTraceabilityBuilder {
   fallbackUsed(reason: string): this {
     this.trace.execution_fallback_used = true;
     this.trace.execution_fallback_reason = reason;
+    return this;
+  }
+
+  // ==========================================================================
+  // HOOKS_SESSION SUCCESS CRITERIA (FASE 2)
+  // ==========================================================================
+
+  /** Mark hook ingress success (request accepted by hooks endpoint) */
+  hookIngressSuccess(success: boolean): this {
+    this.trace.hook_ingress_success = success;
+    return this;
+  }
+
+  /** Mark hook runtime observed (got meaningful response) */
+  hookRuntimeObserved(observed: boolean): this {
+    this.trace.hook_runtime_observed = observed;
+    return this;
+  }
+
+  /** Set final execution path */
+  finalExecutionPath(path: 'hook_runtime' | 'hook_ingress_only' | 'chat_fallback' | 'stub'): this {
+    this.trace.final_execution_path = path;
     return this;
   }
 

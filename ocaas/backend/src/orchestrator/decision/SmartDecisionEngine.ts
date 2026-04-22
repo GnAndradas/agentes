@@ -279,47 +279,111 @@ export class SmartDecisionEngine {
     const startTime = Date.now();
     const decisionId = randomUUID();
 
+    const dispatchMode = config.dispatcher.mode;
+
     logger.info({
       taskId: task.id,
       decisionId,
       operationMode: this.modeConfig.mode,
-      dispatchMode: config.dispatcher.mode,
+      dispatchMode,
     }, 'Starting decision process');
 
     const { eventService } = getServices();
 
-    // DISPATCH MODE CHECK: If 'default_agent' mode, use configured default agent
-    if (config.dispatcher.mode === 'default_agent') {
-      const defaultAgent = this.resolveDefaultAgent(agents);
-      if (defaultAgent) {
-        logger.info({
+    // =========================================================================
+    // DISPATCH MODE HANDLING (FASE 2/3/4 FIX)
+    // =========================================================================
+
+    // MANUAL MODE: Require explicit agent assignment
+    if (dispatchMode === 'manual') {
+      // If task already has agentId, allow it
+      if (task.agentId) {
+        const assignedAgent = agents.find(a => a.id === task.agentId);
+        if (assignedAgent) {
+          logger.info({
+            taskId: task.id,
+            decisionId,
+            agentId: assignedAgent.id,
+            dispatchMode: 'manual',
+            agentResolutionSource: 'pre_assigned',
+          }, 'Using pre-assigned agent (manual mode)');
+
+          const decision = this.buildDecision(
+            decisionId, task.id, 'assign', assignedAgent.id, 1.0,
+            `Task uses pre-assigned agent "${assignedAgent.name}" (TASK_DISPATCH_MODE=manual)`,
+            'heuristic', startTime,
+            { heuristicsAttempted: false, agentScores: [{ agentId: assignedAgent.id, agentName: assignedAgent.name, totalScore: 1.0, capabilityMatch: 1.0 }], suggestedActions: [], dispatchModeUsed: 'manual', agentResolutionSource: 'pre_assigned' }
+          );
+          this.updateMetrics(decision);
+          await this.emitDecisionComplete(decision, task);
+          return decision;
+        }
+      }
+
+      // No pre-assigned agent - require manual assignment
+      logger.warn({
+        taskId: task.id,
+        decisionId,
+        dispatchMode: 'manual',
+        agentResolutionSource: 'manual_required',
+      }, 'Manual dispatch mode requires explicit agent assignment');
+
+      const decision = this.buildDecision(
+        decisionId, task.id, 'escalate', undefined, 0.0,
+        'Task requires manual agent assignment (TASK_DISPATCH_MODE=manual)',
+        'heuristic', startTime,
+        { heuristicsAttempted: false, suggestedActions: [{ type: 'escalate', reason: 'manual_assignment_required', priority: 1 }], dispatchModeUsed: 'manual', agentResolutionSource: 'manual_required' }
+      );
+      this.updateMetrics(decision);
+      await this.emitDecisionComplete(decision, task);
+      return decision;
+    }
+
+    // DEFAULT_AGENT MODE: Always use default agent
+    if (dispatchMode === 'default_agent') {
+      const defaultAgent = this.resolveDefaultAgentStrict(agents);
+
+      if (defaultAgent.error) {
+        // Error: default agent not found or not usable
+        logger.error({
           taskId: task.id,
           decisionId,
-          defaultAgentId: defaultAgent.id,
           dispatchMode: 'default_agent',
-        }, 'Using default agent (dispatch mode)');
+          error: defaultAgent.error,
+          configuredId: config.dispatcher.defaultAgentId,
+        }, 'Default agent resolution failed');
 
         const decision = this.buildDecision(
-          decisionId,
-          task.id,
-          'assign',
-          defaultAgent.id,
-          1.0, // High confidence - explicit config
-          `Task assigned to default agent "${defaultAgent.name}" via TASK_DISPATCH_MODE=default_agent`,
-          'heuristic',
-          startTime,
-          {
-            heuristicsAttempted: false,
-            agentScores: [{ agentId: defaultAgent.id, agentName: defaultAgent.name, totalScore: 1.0, capabilityMatch: 1.0 }],
-            suggestedActions: [],
-          }
+          decisionId, task.id, 'escalate', undefined, 0.0,
+          `Default agent resolution failed: ${defaultAgent.error}`,
+          'heuristic', startTime,
+          { heuristicsAttempted: false, suggestedActions: [{ type: 'escalate', reason: defaultAgent.error, priority: 1 }], dispatchModeUsed: 'default_agent', agentResolutionSource: 'error' }
         );
-
         this.updateMetrics(decision);
         await this.emitDecisionComplete(decision, task);
         return decision;
       }
+
+      logger.info({
+        taskId: task.id,
+        decisionId,
+        defaultAgentId: defaultAgent.agent!.id,
+        dispatchMode: 'default_agent',
+        agentResolutionSource: defaultAgent.source,
+      }, 'Using default agent (dispatch mode)');
+
+      const decision = this.buildDecision(
+        decisionId, task.id, 'assign', defaultAgent.agent!.id, 1.0,
+        `Task assigned to default agent "${defaultAgent.agent!.name}" via TASK_DISPATCH_MODE=default_agent`,
+        'heuristic', startTime,
+        { heuristicsAttempted: false, agentScores: [{ agentId: defaultAgent.agent!.id, agentName: defaultAgent.agent!.name, totalScore: 1.0, capabilityMatch: 1.0 }], suggestedActions: [], dispatchModeUsed: 'default_agent', agentResolutionSource: defaultAgent.source }
+      );
+      this.updateMetrics(decision);
+      await this.emitDecisionComplete(decision, task);
+      return decision;
     }
+
+    // AUTO MODE: Continue to normal decision flow (will apply fallback later if needed)
 
     // Emit decision started event
     await eventService.emit({
@@ -932,47 +996,60 @@ export class SmartDecisionEngine {
   }
 
   /**
-   * Resolve the default agent based on config.dispatcher settings.
-   *
-   * Priority:
-   * 1. config.dispatcher.defaultAgentId (if set and exists)
-   * 2. Agent with name 'default-general-agent' (bootstrap default)
-   * 3. First 'general' type agent
-   * 4. First available agent
+   * Agent resolution result with traceability
    */
-  private resolveDefaultAgent(agents: AgentDTO[]): AgentDTO | null {
-    if (agents.length === 0) return null;
+  private resolveDefaultAgentStrict(agents: AgentDTO[]): {
+    agent: AgentDTO | null;
+    source: 'configured_id' | 'bootstrap_default' | 'first_general' | 'first_available' | 'none';
+    error?: 'default_agent_not_found' | 'default_agent_not_active' | 'no_agents_available';
+  } {
+    // No agents available
+    if (agents.length === 0) {
+      return { agent: null, source: 'none', error: 'no_agents_available' };
+    }
 
-    // 1. Check configured default agent ID
+    // 1. Check configured default agent ID (STRICT - must exist and be active)
     if (config.dispatcher.defaultAgentId) {
       const configuredAgent = agents.find(a => a.id === config.dispatcher.defaultAgentId);
-      if (configuredAgent) {
-        logger.debug({ agentId: configuredAgent.id }, 'Using configured default agent');
-        return configuredAgent;
+      if (!configuredAgent) {
+        // Configured ID doesn't exist in active agents
+        return { agent: null, source: 'none', error: 'default_agent_not_found' };
       }
-      logger.warn({
-        configuredId: config.dispatcher.defaultAgentId,
-        availableAgents: agents.map(a => a.id),
-      }, 'Configured default agent not found, falling back');
+      // Check if agent is usable (status check if needed - agents list should already be active)
+      if (configuredAgent.status !== 'active') {
+        return { agent: null, source: 'none', error: 'default_agent_not_active' };
+      }
+      return { agent: configuredAgent, source: 'configured_id' };
     }
 
     // 2. Check for bootstrap default agent
-    const bootstrapDefault = agents.find(a => a.name === 'default-general-agent');
+    const bootstrapDefault = agents.find(a => a.name === 'default-general-agent' && a.status === 'active');
     if (bootstrapDefault) {
-      logger.debug({ agentId: bootstrapDefault.id }, 'Using bootstrap default agent');
-      return bootstrapDefault;
+      return { agent: bootstrapDefault, source: 'bootstrap_default' };
     }
 
     // 3. First general agent
-    const generalAgent = agents.find(a => a.type === 'general');
+    const generalAgent = agents.find(a => a.type === 'general' && a.status === 'active');
     if (generalAgent) {
-      logger.debug({ agentId: generalAgent.id }, 'Using first general agent as default');
-      return generalAgent;
+      return { agent: generalAgent, source: 'first_general' };
     }
 
-    // 4. First available agent
-    logger.debug({ agentId: agents[0]!.id }, 'Using first available agent as default');
-    return agents[0]!;
+    // 4. First available active agent
+    const firstActive = agents.find(a => a.status === 'active');
+    if (firstActive) {
+      return { agent: firstActive, source: 'first_available' };
+    }
+
+    return { agent: null, source: 'none', error: 'no_agents_available' };
+  }
+
+  /**
+   * Resolve the default agent based on config.dispatcher settings.
+   * (Legacy method for backward compatibility - use resolveDefaultAgentStrict for new code)
+   */
+  private resolveDefaultAgent(agents: AgentDTO[]): AgentDTO | null {
+    const result = this.resolveDefaultAgentStrict(agents);
+    return result.agent;
   }
 
   /**
@@ -1095,27 +1172,42 @@ export class SmartDecisionEngine {
     error?: unknown
   ): StructuredDecision {
     const activeAgents = agents.filter(a => a.status === 'active');
+    const dispatchMode = config.dispatcher.mode;
 
-    // PROMPT 18: ALWAYS find an agent if any are active
-    // Priority: general/orchestrator > first available
+    // FALLBACK AGENT RESOLUTION with dispatch mode awareness
     let targetAgent: string | undefined;
     let assignReason = '';
+    let agentResolutionSource: string = 'none';
 
     if (activeAgents.length > 0) {
-      // Find general-purpose agent first (best for unknown tasks)
-      const general = activeAgents.find(a => a.type === 'general');
-      const orchestrator = activeAgents.find(a => a.type === 'orchestrator');
+      // AUTO MODE: Try configured default agent first, then fallback chain
+      if (dispatchMode === 'auto' && config.dispatcher.defaultAgentId) {
+        const defaultResult = this.resolveDefaultAgentStrict(activeAgents);
+        if (defaultResult.agent) {
+          targetAgent = defaultResult.agent.id;
+          assignReason = `Fallback to default agent "${defaultResult.agent.name}" (auto mode)`;
+          agentResolutionSource = `default_agent_${defaultResult.source}`;
+        }
+      }
 
-      if (general) {
-        targetAgent = general.id;
-        assignReason = `Fallback to general agent "${general.name}"`;
-      } else if (orchestrator) {
-        targetAgent = orchestrator.id;
-        assignReason = `Fallback to orchestrator agent "${orchestrator.name}"`;
-      } else {
-        // Use first available agent
-        targetAgent = activeAgents[0]!.id;
-        assignReason = `Fallback to first available agent "${activeAgents[0]!.name}"`;
+      // If no default agent found, use PROMPT 18 fallback chain
+      if (!targetAgent) {
+        const general = activeAgents.find(a => a.type === 'general');
+        const orchestrator = activeAgents.find(a => a.type === 'orchestrator');
+
+        if (general) {
+          targetAgent = general.id;
+          assignReason = `Fallback to general agent "${general.name}"`;
+          agentResolutionSource = 'fallback_general';
+        } else if (orchestrator) {
+          targetAgent = orchestrator.id;
+          assignReason = `Fallback to orchestrator agent "${orchestrator.name}"`;
+          agentResolutionSource = 'fallback_orchestrator';
+        } else {
+          targetAgent = activeAgents[0]!.id;
+          assignReason = `Fallback to first available agent "${activeAgents[0]!.name}"`;
+          agentResolutionSource = 'fallback_first_available';
+        }
       }
     }
 
@@ -1136,7 +1228,9 @@ export class SmartDecisionEngine {
       targetAgent,
       activeAgentsCount: activeAgents.length,
       reason,
-    }, 'PROMPT 18: Fallback decision created');
+      dispatchMode,
+      agentResolutionSource,
+    }, 'Fallback decision created');
 
     return this.buildDecision(
       id,
@@ -1150,6 +1244,8 @@ export class SmartDecisionEngine {
       {
         heuristicsAttempted: true,
         heuristicFailReason: 'all_methods_failed',
+        dispatchModeUsed: dispatchMode,
+        agentResolutionSource,
         // PROMPT 18: Include agent scores if we assigned
         agentScores: targetAgent ? [{
           agentId: targetAgent,

@@ -75,6 +75,12 @@ export interface StructuredDecision {
   fromCache: boolean;
   /** Cache key used */
   cacheKey?: string;
+
+  // Dispatch traceability
+  /** Dispatch mode used: 'auto' | 'default_agent' | 'manual' */
+  dispatchModeUsed?: string;
+  /** How the agent was resolved: 'qualified_agent' | 'default_agent_*' | 'pre_assigned' | 'manual_required' | 'fallback_*' */
+  agentResolutionSource?: string;
 }
 
 export interface AgentScore {

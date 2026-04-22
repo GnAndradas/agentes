@@ -54,3 +54,5 @@ junit.xml
 
 # Workspace directories (OpenClaw runtime)
 .openclaw/
+
+subir.bat

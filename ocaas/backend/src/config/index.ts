@@ -67,6 +67,12 @@ export const config = {
   execution: {
     jobTimeoutMs: env.JOB_EXECUTION_TIMEOUT_MS,
   },
+  dispatcher: {
+    // Default agent ID for task dispatch (when no agent is explicitly assigned)
+    defaultAgentId: env.DEFAULT_OPENCLAW_AGENT_ID,
+    // Dispatch mode: 'auto' | 'default_agent' | 'manual'
+    mode: env.TASK_DISPATCH_MODE,
+  },
 } as const;
 
 export type Config = typeof config;

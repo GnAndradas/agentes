@@ -28,10 +28,16 @@
 EXECUTION MODES (ordenados por prioridad):
 
 1. hooks_session   - PRIMARY: /hooks/agent con sessionKey (stateful)
-                     Requiere: OPENCLAW_HOOKS_TOKEN configurado
+                     Requiere:
+                     - OPENCLAW_HOOKS_TOKEN configurado en OCAAS
+                     - hooks.enabled=true en OpenClaw
+                     - hooks.allowRequestSessionKey=true si OCAAS envia sessionKey por request
+                     - hooks.allowedSessionKeyPrefixes incluyendo "hook:"
 
 2. chat_completion - FALLBACK: /v1/chat/completions (stateless)
-                     Requiere: OPENCLAW_API_KEY configurado
+                     Requiere:
+                     - OPENCLAW_API_KEY configurado en OCAAS
+                     - gateway.http.endpoints.chatCompletions.enabled=true en OpenClaw
 
 3. stub            - EMERGENCY: Sin OpenClaw, respuesta simulada
                      Activo cuando: nada configurado/conectado
@@ -39,6 +45,11 @@ EXECUTION MODES (ordenados por prioridad):
 NOTA: Los agentes NO son sesiones reales de OpenClaw.
       El runtime_ready siempre es false actualmente.
       Skills/Tools se escriben pero OpenClaw no los lee.
+
+IMPORTANTE (hallazgo operativo real):
+- Tener hooks.token NO activa /hooks/agent por si solo.
+- Si hooks.enabled no es true, /hooks/agent responde 404.
+- Si chatCompletions.enabled no es true, /v1/chat/completions responde 404.
 ```
 
 ---
@@ -279,6 +290,55 @@ cat ~/.openclaw/openclaw.json | jq '.hooks.token'
 OPENCLAW_API_KEY=<gateway_token_from_step_1>
 OPENCLAW_HOOKS_TOKEN=<hooks_token_from_step_1>
 ```
+
+### Configuracion minima real en `~/.openclaw/openclaw.json`
+
+Para que OCAAS funcione con el flujo actual del runbook, OpenClaw debe tener como minimo:
+
+```json
+{
+  "gateway": {
+    "auth": {
+      "token": "<GATEWAY_TOKEN>"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "token": "<HOOKS_TOKEN>",
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["hook:"],
+    "defaultSessionKey": "hook:ingress"
+  }
+}
+```
+
+### Explicacion de cada campo necesario
+
+- `hooks.enabled=true`
+  - sin esto, `/hooks/agent` devuelve 404 aunque `hooks.token` exista.
+- `hooks.token`
+  - token de auth para `/hooks/agent` y `/hooks/wake`.
+- `hooks.allowRequestSessionKey=true`
+  - necesario porque OCAAS envia `sessionKey` en el payload.
+- `hooks.allowedSessionKeyPrefixes=["hook:"]`
+  - obligatorio para acotar los session keys aceptados cuando se habilita request routing.
+- `hooks.defaultSessionKey="hook:ingress"`
+  - no sustituye el sessionKey dinamico de OCAAS, pero deja una ruta por defecto segura.
+- `gateway.http.endpoints.chatCompletions.enabled=true`
+  - necesario para el fallback REST de OCAAS.
+
+### Valores reales usados durante esta puesta en marcha
+
+- `gateway.auth.token` -> se replica en `OPENCLAW_API_KEY`
+- `hooks.token` -> se replica en `OPENCLAW_HOOKS_TOKEN`
+- ambos tokens deben ser distintos
 
 **REGLAS:**
 - OpenClaw es la fuente de verdad - OCAAS replica los tokens
@@ -1158,6 +1218,47 @@ LOG_LEVEL=info
 cd ocaas/backend
 npm run dev
 ```
+
+### Orden correcto de arranque (validado en esta instalacion)
+
+1. Verificar OpenClaw gateway arriba
+```bash
+openclaw status
+```
+
+2. Verificar que `~/.openclaw/openclaw.json` incluye:
+- `gateway.http.endpoints.chatCompletions.enabled=true`
+- `hooks.enabled=true`
+- `hooks.token`
+- `hooks.allowRequestSessionKey=true`
+- `hooks.allowedSessionKeyPrefixes=["hook:"]`
+
+3. Verificar que `agentes/ocaas/backend/.env` replica:
+- `OPENCLAW_API_KEY`
+- `OPENCLAW_HOOKS_TOKEN`
+
+4. Levantar backend SOLO si 3001 esta libre
+```bash
+lsof -nP -iTCP:3001 -sTCP:LISTEN
+cd backend && npm run dev
+```
+
+5. Levantar frontend SOLO si 5173 esta libre
+```bash
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+cd frontend && npm run dev -- --host 0.0.0.0
+```
+
+### Errores reales observados y su significado
+
+- `404 Not Found` en `/hooks/agent`
+  - causa real: `hooks.enabled` no estaba activado.
+- `404 Not Found` en `/v1/chat/completions`
+  - causa real: `chatCompletions.enabled` no estaba activado.
+- `Port 3001 is already in use`
+  - habia un backend ya levantado; no arrancar un segundo proceso.
+- `hooksConnected: false` en OCAAS con hook ya operativo
+  - era un problema de diagnostico interno de OCAAS, no del gateway.
 
 ---
 

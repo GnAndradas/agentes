@@ -1,5 +1,6 @@
 import { createLogger } from '../utils/logger.js';
 import { EVENT_TYPE, GENERATION_STATUS } from '../config/constants.js';
+import { reconcileGeneration } from '../generator/BundleReconciler.js';
 import type { EventService } from './EventService.js';
 import type { GenerationService } from './GenerationService.js';
 import type { ApprovalService } from '../approval/ApprovalService.js';
@@ -473,6 +474,21 @@ export class ActivationWorkflowService {
 
       // Mark as active in DB (GenerationService.activate has its own FSM guard)
       const activated = await this.generationService.activate(generationId);
+
+      // RECONCILER: Ensure proper resource linking after activation
+      // This handles individual approvals that bypass bundle linking flow
+      try {
+        const reconcileResult = await reconcileGeneration(generationId);
+        logger.info({
+          generationId,
+          type,
+          reconcileStatus: reconcileResult.status,
+          linksCreated: reconcileResult.linksCreated,
+        }, 'Generation activated and reconciled');
+      } catch (reconcileErr) {
+        // Reconciliation failure should not fail activation
+        logger.warn({ err: reconcileErr, generationId }, 'Reconciliation failed (non-fatal)');
+      }
 
       logger.info({ generationId, type }, 'Generation activated via workflow');
       return { success: true, generation: activated };

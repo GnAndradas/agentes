@@ -13,6 +13,7 @@ import { orchestratorLogger } from '../../utils/logger.js';
 import { getOpenClawAdapter } from '../../integrations/openclaw/index.js';
 import { getServices } from '../../services/index.js';
 import { EVENT_TYPE } from '../../config/constants.js';
+import { config } from '../../config/index.js';
 import type { TaskDTO, AgentDTO } from '../../types/domain.js';
 import type {
   StructuredDecision,
@@ -282,9 +283,43 @@ export class SmartDecisionEngine {
       taskId: task.id,
       decisionId,
       operationMode: this.modeConfig.mode,
+      dispatchMode: config.dispatcher.mode,
     }, 'Starting decision process');
 
     const { eventService } = getServices();
+
+    // DISPATCH MODE CHECK: If 'default_agent' mode, use configured default agent
+    if (config.dispatcher.mode === 'default_agent') {
+      const defaultAgent = this.resolveDefaultAgent(agents);
+      if (defaultAgent) {
+        logger.info({
+          taskId: task.id,
+          decisionId,
+          defaultAgentId: defaultAgent.id,
+          dispatchMode: 'default_agent',
+        }, 'Using default agent (dispatch mode)');
+
+        const decision = this.buildDecision(
+          decisionId,
+          task.id,
+          'assign',
+          defaultAgent.id,
+          1.0, // High confidence - explicit config
+          `Task assigned to default agent "${defaultAgent.name}" via TASK_DISPATCH_MODE=default_agent`,
+          'heuristic',
+          startTime,
+          {
+            heuristicsAttempted: false,
+            agentScores: [{ agentId: defaultAgent.id, agentName: defaultAgent.name, totalScore: 1.0, capabilityMatch: 1.0 }],
+            suggestedActions: [],
+          }
+        );
+
+        this.updateMetrics(decision);
+        await this.emitDecisionComplete(decision, task);
+        return decision;
+      }
+    }
 
     // Emit decision started event
     await eventService.emit({
@@ -894,6 +929,50 @@ export class SmartDecisionEngine {
     }
 
     return null;
+  }
+
+  /**
+   * Resolve the default agent based on config.dispatcher settings.
+   *
+   * Priority:
+   * 1. config.dispatcher.defaultAgentId (if set and exists)
+   * 2. Agent with name 'default-general-agent' (bootstrap default)
+   * 3. First 'general' type agent
+   * 4. First available agent
+   */
+  private resolveDefaultAgent(agents: AgentDTO[]): AgentDTO | null {
+    if (agents.length === 0) return null;
+
+    // 1. Check configured default agent ID
+    if (config.dispatcher.defaultAgentId) {
+      const configuredAgent = agents.find(a => a.id === config.dispatcher.defaultAgentId);
+      if (configuredAgent) {
+        logger.debug({ agentId: configuredAgent.id }, 'Using configured default agent');
+        return configuredAgent;
+      }
+      logger.warn({
+        configuredId: config.dispatcher.defaultAgentId,
+        availableAgents: agents.map(a => a.id),
+      }, 'Configured default agent not found, falling back');
+    }
+
+    // 2. Check for bootstrap default agent
+    const bootstrapDefault = agents.find(a => a.name === 'default-general-agent');
+    if (bootstrapDefault) {
+      logger.debug({ agentId: bootstrapDefault.id }, 'Using bootstrap default agent');
+      return bootstrapDefault;
+    }
+
+    // 3. First general agent
+    const generalAgent = agents.find(a => a.type === 'general');
+    if (generalAgent) {
+      logger.debug({ agentId: generalAgent.id }, 'Using first general agent as default');
+      return generalAgent;
+    }
+
+    // 4. First available agent
+    logger.debug({ agentId: agents[0]!.id }, 'Using first available agent as default');
+    return agents[0]!;
   }
 
   /**

@@ -28,10 +28,16 @@
 EXECUTION MODES (ordenados por prioridad):
 
 1. hooks_session   - PRIMARY: /hooks/agent con sessionKey (stateful)
-                     Requiere: OPENCLAW_HOOKS_TOKEN configurado
+                     Requiere:
+                     - OPENCLAW_HOOKS_TOKEN configurado en OCAAS
+                     - hooks.enabled=true en OpenClaw
+                     - hooks.allowRequestSessionKey=true
+                     - hooks.allowedSessionKeyPrefixes incluyendo "hook:"
 
 2. chat_completion - FALLBACK: /v1/chat/completions (stateless)
-                     Requiere: OPENCLAW_API_KEY configurado
+                     Requiere:
+                     - OPENCLAW_API_KEY configurado en OCAAS
+                     - gateway.http.endpoints.chatCompletions.enabled=true en OpenClaw
 
 3. stub            - EMERGENCY: Sin OpenClaw, respuesta simulada
                      Activo cuando: nada configurado/conectado
@@ -39,6 +45,10 @@ EXECUTION MODES (ordenados por prioridad):
 NOTA: Los agentes NO son sesiones reales de OpenClaw.
       El runtime_ready siempre es false actualmente.
       Skills/Tools se escriben pero OpenClaw no los lee.
+
+IMPORTANTE:
+- `hooks.token` por si solo NO habilita `/hooks/agent`.
+- `hooks.enabled=true` es obligatorio o la ruta responde 404.
 ```
 
 ---
@@ -1095,6 +1105,68 @@ LOG_LEVEL=info
 cd ocaas/backend
 npm run dev
 ```
+
+### Configuracion minima necesaria en OpenClaw
+
+```json
+{
+  "gateway": {
+    "auth": {
+      "token": "<GATEWAY_TOKEN>"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "token": "<HOOKS_TOKEN>",
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["hook:"],
+    "defaultSessionKey": "hook:ingress"
+  }
+}
+```
+
+### Checklist de arranque validado
+
+1. Confirmar OpenClaw arriba:
+```bash
+openclaw status
+```
+
+2. Confirmar en `~/.openclaw/openclaw.json`:
+- `gateway.http.endpoints.chatCompletions.enabled=true`
+- `hooks.enabled=true`
+- `hooks.token` presente
+- `hooks.allowRequestSessionKey=true`
+- `hooks.allowedSessionKeyPrefixes=["hook:"]`
+
+3. Confirmar `backend/.env` con:
+- `OPENCLAW_API_KEY`
+- `OPENCLAW_HOOKS_TOKEN`
+
+4. Antes de arrancar backend, verificar puerto:
+```bash
+lsof -nP -iTCP:3001 -sTCP:LISTEN
+```
+
+5. Si ya hay proceso en 3001, NO arrancar otro.
+
+### Hallazgos operativos reales
+
+- Si `/hooks/agent` devuelve 404:
+  - revisar primero `hooks.enabled=true`.
+- Si `/v1/chat/completions` devuelve 404:
+  - revisar `gateway.http.endpoints.chatCompletions.enabled=true`.
+- Si OCAAS muestra `hooksConnected: false` pero el hook responde 200:
+  - el problema puede estar en el diagnostico interno, no en OpenClaw.
+- Si backend falla con `Port 3001 is already in use`:
+  - ya hay un backend activo; reutilizarlo o matarlo antes de relanzar.
 
 ---
 

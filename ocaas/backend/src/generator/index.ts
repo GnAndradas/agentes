@@ -6,6 +6,14 @@ export { getToolGenerator } from './ToolGenerator.js';
 export { getAgentGenerator } from './AgentGenerator.js';
 // PROMPT 9: Systemic generator for bundles
 export { getSystemicGenerator, type BundleInput, type BundleOutput } from './SystemicGeneratorService.js';
+// Bundle reconciler for resource linking
+export {
+  reconcileBundle,
+  reconcileGeneration,
+  BundleReconciler,
+  type ReconcileResult,
+  type ReconcileStatus,
+} from './BundleReconciler.js';
 export * from './templates/index.js';
 
 // BLOQUE 9: Agent materialization exports

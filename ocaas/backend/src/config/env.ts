@@ -49,6 +49,16 @@ const envSchema = z.object({
 
   // Execution timeouts
   JOB_EXECUTION_TIMEOUT_MS: z.coerce.number().default(60000), // 60 seconds default
+
+  // Task Dispatch Configuration
+  // DEFAULT_OPENCLAW_AGENT_ID: Agent ID to use when no specific agent is assigned
+  // If set, tasks without agent assignment will use this agent
+  DEFAULT_OPENCLAW_AGENT_ID: z.string().optional(),
+  // TASK_DISPATCH_MODE: How tasks are dispatched to OpenClaw
+  // - 'auto': Automatically dispatch tasks to agents based on matching
+  // - 'default_agent': Always use DEFAULT_OPENCLAW_AGENT_ID (fallback to first active)
+  // - 'manual': Require explicit agent assignment before dispatch
+  TASK_DISPATCH_MODE: z.enum(['auto', 'default_agent', 'manual']).default('auto'),
 });
 
 export type Env = z.infer<typeof envSchema>;

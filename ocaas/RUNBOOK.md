@@ -20,6 +20,9 @@
 17. [Variables de Entorno](#variables-de-entorno)
 18. [Operational Validation Checklist](#operational-validation-checklist) [NEW]
 19. [Intent Router (OpenClaw ↔ OCAAS)](#intent-router-openclaw--ocaas) [NEW]
+20. [Definition of Done — Production Ready](#definition-of-done--production-ready) [NEW]
+21. [Not Requirements](#not-requirements) [NEW]
+22. [Known Operational Issues](#known-operational-issues) [NEW]
 
 ---
 
@@ -1700,7 +1703,139 @@ Do NOT treat the OpenClaw router agent as the control plane.
 
 ---
 
-*Actualizado: 2026-04-22*
+## Definition of Done — Production Ready
+
+### Criterios de Éxito Real (Realistas)
+
+Un deployment de OCAAS + OpenClaw está **production ready** cuando:
+
+| Criterio | Verificación |
+|----------|--------------|
+| OCAAS crea tasks correctamente | `POST /api/tasks` → 201, task en DB |
+| OpenClaw responde (hooks o fallback) | `response_received = true` |
+| AI genera respuesta útil | `aiSucceeded = true` |
+| Estado final consistente | `completed` o `failed` (no stuck) |
+| UI funcional | TaskDetail, panels, diagnostics cargan |
+
+### Execution Paths Válidos
+
+Cualquiera de estos paths es válido para production:
+
+```
+✅ hook_runtime        - hooks_session exitoso con respuesta
+✅ hook_ingress_only   - hooks alcanzados pero respuesta via otro path
+✅ chat_fallback       - /v1/chat/completions (fallback normal)
+```
+
+**Todos producen `aiSucceeded = true` si OpenClaw responde.**
+
+### Validación Mínima
+
+```bash
+# 1. Backend health
+curl -s localhost:3001/health | jq '.status'
+# Esperado: "ok"
+
+# 2. Gateway status
+curl -s localhost:3001/api/system/gateway | jq '{reachable: .rest.reachable, auth: .rest.authenticated}'
+# Esperado: {reachable: true, auth: true}
+
+# 3. Crear task de prueba
+curl -X POST localhost:3001/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test deploy","type":"general"}'
+# Esperado: 201 con id
+
+# 4. Verificar ejecución
+curl -s "localhost:3001/api/tasks/{id}/generation-trace" | jq '{aiSucceeded, response_received: (.finalOutput != null)}'
+# Esperado: {aiSucceeded: true, response_received: true}
+```
+
+---
+
+## Not Requirements
+
+### Lo que NO es necesario para production:
+
+| Item | Razón |
+|------|-------|
+| WebSocket conectado | Solo para live updates, no para ejecución |
+| hooks_session puro | chat_fallback es válido |
+| `openclaw_session = true` | No existe sesión persistente real |
+| JSONL runtime logs | Opcional, no bloquea ejecución |
+| `runtime_ready = true` | Siempre false actualmente, es cosmético |
+| `Accepted = Yes` | `Accepted = No` con respuesta es válido |
+
+### Confusiones Comunes
+
+```
+❌ "hooks no funcionan porque Accepted=No"
+   → Accepted=No solo significa que gateway decidió NO usar hooks para esa request.
+   → Si hay respuesta de IA, el sistema funciona.
+
+❌ "necesito WebSocket para que funcione"
+   → WebSocket es para streaming/live updates, no para ejecución core.
+
+❌ "openclaw_session debe ser true"
+   → No existe sesión persistente. El sessionKey es solo correlación.
+```
+
+---
+
+## Known Operational Issues
+
+### Issues Esperados (No Son Bugs)
+
+| Issue | Explicación | Acción |
+|-------|-------------|--------|
+| `Accepted: No` con respuesta OK | Gateway usó chat path interno | Ninguna, es válido |
+| `hook_ingress_success: false` + `aiSucceeded: true` | Hooks no alcanzados pero fallback funcionó | Verificar OPENCLAW_HOOKS_TOKEN si quieres hooks |
+| No JSONL logs en `~/.openclaw/runs/` | progress-tracker hook no activo o no configurado | Opcional, no afecta ejecución |
+| `websocket.connected: false` | WebSocket no requerido | Ignorar |
+| Jobs con status `queued`/`assigned` sin config | Status adicionales del backend | UI muestra fallback visual |
+
+### Validación de Hooks Reales
+
+Si quieres confirmar que hooks funcionan (no solo fallback):
+
+```bash
+# Verificar que hooksApiRequest usa x-openclaw-token
+curl -X POST https://api.openclaw.dev/hooks/agent \
+  -H "x-openclaw-token: $OPENCLAW_HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"test","sessionKey":"hook:test:manual"}'
+# Esperado: 200 con respuesta (no 401)
+```
+
+Si obtienes 401, el token es incorrecto o hooks no están habilitados en OpenClaw.
+
+### Deploy Clean (macOS)
+
+Antes de cada deploy:
+
+```bash
+# 1. Verificar puertos
+lsof -i :3001
+lsof -i :5173
+
+# 2. Matar procesos previos
+pkill -f "node.*3001" || true
+pkill -f "node.*5173" || true
+
+# 3. Verificar Node version
+node --version  # Debe ser v20.x
+
+# 4. Arrancar en puertos canónicos
+cd ocaas/backend && npm run dev   # Puerto 3001
+cd ocaas/frontend && npm run dev  # Puerto 5173
+```
+
+**IMPORTANTE:** Si npm inicia en puerto alternativo (3002, 5174), la integración con OpenClaw se rompe porque los hooks están configurados para puertos específicos.
+
+---
+
+*Actualizado: 2026-04-23*
 *Sections marked [NEW] or [UPDATED] reflect PROMPT 7-13 changes*
 *Sections marked [CRITICAL] address operational gaps for clean/existing installs*
 *Intent Router section added for OpenClaw ↔ OCAAS integration*
+*Definition of Done + Not Requirements + Known Issues added for realistic deploy criteria*

@@ -1,7 +1,7 @@
 import { CheckCircle, XCircle, AlertTriangle, Clock, Loader2, Ban } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Badge } from '../ui';
-import type { JobSummary, JobStatus as JobStatusType } from '../../types';
+import type { JobSummary } from '../../types';
 
 interface JobStatusPanelProps {
   jobs: JobSummary[];
@@ -10,7 +10,10 @@ interface JobStatusPanelProps {
   compact?: boolean;
 }
 
-const statusConfig: Record<JobStatusType, { icon: React.ElementType; color: string; bg: string }> = {
+// Default fallback for unknown/unmapped status values
+const DEFAULT_STATUS_CONFIG = { icon: Clock, color: 'text-dark-400', bg: 'bg-dark-700' };
+
+const statusConfig: Record<string, { icon: React.ElementType; color: string; bg: string }> = {
   pending: { icon: Clock, color: 'text-dark-400', bg: 'bg-dark-700' },
   running: { icon: Loader2, color: 'text-blue-400', bg: 'bg-blue-500/20' },
   accepted: { icon: CheckCircle, color: 'text-cyan-400', bg: 'bg-cyan-500/20' },
@@ -19,6 +22,9 @@ const statusConfig: Record<JobStatusType, { icon: React.ElementType; color: stri
   blocked: { icon: AlertTriangle, color: 'text-yellow-400', bg: 'bg-yellow-500/20' },
   cancelled: { icon: Ban, color: 'text-dark-400', bg: 'bg-dark-700' },
   timeout: { icon: Clock, color: 'text-orange-400', bg: 'bg-orange-500/20' },
+  // Additional states that may come from backend
+  queued: { icon: Clock, color: 'text-dark-400', bg: 'bg-dark-700' },
+  assigned: { icon: Clock, color: 'text-blue-400', bg: 'bg-blue-500/20' },
 };
 
 function formatDuration(ms: number): string {
@@ -43,7 +49,8 @@ export function JobStatusPanel({ jobs, onSelectJob, selectedJobId, compact = fal
   return (
     <div className="space-y-2">
       {jobs.map((job) => {
-        const config = statusConfig[job.status];
+        // HARDENING: Safe lookup with fallback for unknown status values
+        const config = statusConfig[job.status] ?? DEFAULT_STATUS_CONFIG;
         const Icon = config.icon;
         const isSelected = selectedJobId === job.id;
         const duration = job.completedAt
@@ -144,7 +151,8 @@ export function JobStatusPanel({ jobs, onSelectJob, selectedJobId, compact = fal
 
 // Compact version for inline display
 export function JobStatusBadge({ job }: { job: JobSummary }) {
-  const config = statusConfig[job.status];
+  // HARDENING: Safe lookup with fallback for unknown status values
+  const config = statusConfig[job.status] ?? DEFAULT_STATUS_CONFIG;
   const Icon = config.icon;
 
   return (

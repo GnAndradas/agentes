@@ -745,11 +745,13 @@ export function TaskDetail() {
           />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 p-4">
             <div>
-              <JobStatusPanel
-                jobs={jobs}
-                selectedJobId={selectedJobId}
-                onSelectJob={setSelectedJobId}
-              />
+              <PanelErrorBoundary panelName="Job Status">
+                <JobStatusPanel
+                  jobs={jobs}
+                  selectedJobId={selectedJobId}
+                  onSelectJob={setSelectedJobId}
+                />
+              </PanelErrorBoundary>
             </div>
             <div>
               {/* Show blocked job details if selected */}

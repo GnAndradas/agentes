@@ -372,6 +372,72 @@ export class OpenClawGateway {
   }
 
   /**
+   * Make a synchronous hooks API request WITH RESPONSE
+   * Used for /hooks/agent when we need the response (not fire-and-forget)
+   * Uses x-openclaw-token header (NOT Authorization: Bearer)
+   */
+  private async hooksApiRequest<T>(
+    endpoint: string,
+    body: Record<string, unknown>,
+    timeout = DEFAULT_TIMEOUT
+  ): Promise<T> {
+    const url = `${this.baseUrl}/hooks${endpoint}`;
+    const headers = this.getWebhookHeaders();
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      logger.debug({ endpoint }, 'Sending hooks API request (with response)');
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const text = await response.text();
+
+        if (response.status === 401) {
+          this.lastError = 'Hooks auth failed - check OPENCLAW_HOOKS_TOKEN';
+          throw new OpenClawError(this.lastError, { endpoint, status: response.status });
+        }
+        if (response.status === 429) {
+          this.lastError = 'Rate limited - too many requests';
+          throw new OpenClawError(this.lastError, { endpoint, status: response.status });
+        }
+
+        this.lastError = `Hooks request failed: ${response.status}`;
+        throw new OpenClawError(`${this.lastError} ${text}`, { endpoint, status: response.status });
+      }
+
+      const text = await response.text();
+      if (!text) {
+        return {} as T;
+      }
+
+      return JSON.parse(text) as T;
+    } catch (err) {
+      clearTimeout(timeoutId);
+
+      if (err instanceof OpenClawError) throw err;
+
+      if (err instanceof Error && err.name === 'AbortError') {
+        this.lastError = `Hooks request timed out after ${timeout}ms`;
+        throw new OpenClawError(this.lastError, { endpoint, timeout });
+      }
+
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      this.lastError = `Hooks connection failed: ${message}`;
+      throw new OpenClawError(this.lastError, { endpoint });
+    }
+  }
+
+  /**
    * Connect and verify gateway is available
    * Uses GET /v1/models as health check
    */
@@ -1263,7 +1329,8 @@ export class OpenClawGateway {
         }
       }
 
-      const response = await this.apiRequest<ChatCompletionResponse>('POST', '/hooks/agent', body);
+      // FIX: Use hooksApiRequest with x-openclaw-token auth (NOT apiRequest with Bearer)
+      const response = await this.hooksApiRequest<ChatCompletionResponse>('/agent', body);
       const content = response.choices?.[0]?.message?.content || '';
 
       // Determine injection mode for traceability

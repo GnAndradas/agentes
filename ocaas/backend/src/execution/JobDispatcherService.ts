@@ -841,6 +841,31 @@ export class JobDispatcherService {
         traceBuilder.fallbackUsed(hooksResult.fallbackReason || 'Unknown fallback reason');
       }
 
+      // =========================================================================
+      // HOOK INGRESS SUCCESS: Capture IMMEDIATELY based on initial hooks result
+      // =========================================================================
+      // This must be captured HERE before any ATR/fallback transforms the state.
+      // hook_ingress_success = true means:
+      // - Request reached the hooks endpoint (not stub mode)
+      // - Gateway was reachable and auth was valid
+      // - accepted=true OR success=true OR useful response received from hooks path
+      //
+      // IMPORTANT: Even if we later fall back to chat_completion, if hooks initially
+      // responded successfully, hook_ingress_success should remain true.
+      // This distinguishes "hooks worked but we used fallback for other reasons"
+      // from "hooks never reached/failed".
+      const initialHooksIngressSuccess = (
+        // Must have actually tried hooks (not stub mode from the start)
+        hooksResult.executionMode !== 'stub' &&
+        // Evidence of successful hooks ingress:
+        (
+          hooksResult.accepted === true ||
+          hooksResult.success === true ||
+          // If we got a response from hooks path (even via fallback chain that started with hooks)
+          (hooksResult.executionMode === 'hooks_session' && !!hooksResult.response)
+        )
+      );
+
       // PROMPT 17: transport_success should only be true if we got an actual response
       // OR if fallback was used successfully (set later)
       // hooks accepted but no response = transport NOT complete yet
@@ -1490,24 +1515,31 @@ export class JobDispatcherService {
       }
 
       // =========================================================================
-      // FASE 2: HOOKS_SESSION SUCCESS CRITERIA
+      // FASE 2: HOOKS_SESSION SUCCESS CRITERIA (FIXED)
       // =========================================================================
-      // Determine hook ingress success and final execution path
-      const hookIngressSuccess = hooksResult.executionMode === 'hooks_session' &&
-        (hooksResult.success === true || hooksResult.accepted === true);
-      const hookRuntimeObserved = hookIngressSuccess && !!finalResponse;
+      // Use initialHooksIngressSuccess captured earlier (before ATR/fallback transforms)
+      // This ensures we don't lose the fact that hooks worked even if we fell back later.
+      //
+      // hookRuntimeObserved = hooks ingress succeeded AND we got a useful final response
+      // (either from hooks directly or from the execution path that started with hooks)
+      const hookRuntimeObserved = initialHooksIngressSuccess && !!finalResponse;
 
       // Set the new traceability fields
-      traceBuilder.hookIngressSuccess(!!hookIngressSuccess);
-      traceBuilder.hookRuntimeObserved(!!hookRuntimeObserved);
+      traceBuilder.hookIngressSuccess(initialHooksIngressSuccess);
+      traceBuilder.hookRuntimeObserved(hookRuntimeObserved);
 
       // Determine final execution path
+      // This reflects the ACTUAL path used, not just what we attempted
       let finalPath: 'hook_runtime' | 'hook_ingress_only' | 'chat_fallback' | 'stub';
       if (finalExecutionMode === 'stub') {
         finalPath = 'stub';
       } else if (finalExecutionMode === 'chat_completion') {
-        finalPath = usedAsyncFallback ? 'chat_fallback' : 'chat_fallback';
-      } else if (hooksResult.executionMode === 'hooks_session') {
+        // Used chat_completion - but distinguish if hooks was initially successful
+        // If initialHooksIngressSuccess=true but we ended up using chat_completion,
+        // it means hooks worked but we fell back for some reason (ATR, timeout, etc.)
+        finalPath = 'chat_fallback';
+      } else if (initialHooksIngressSuccess) {
+        // Hooks ingress succeeded and we're still in hooks mode
         finalPath = hookRuntimeObserved ? 'hook_runtime' : 'hook_ingress_only';
       } else {
         finalPath = 'chat_fallback';

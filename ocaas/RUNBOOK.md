@@ -23,6 +23,7 @@
 20. [Definition of Done — Production Ready](#definition-of-done--production-ready) [NEW]
 21. [Not Requirements](#not-requirements) [NEW]
 22. [Known Operational Issues](#known-operational-issues) [NEW]
+23. [Legacy Compatibility Prevention](#legacy-compatibility-prevention) [NEW]
 
 ---
 
@@ -1834,8 +1835,77 @@ cd ocaas/frontend && npm run dev  # Puerto 5173
 
 ---
 
-*Actualizado: 2026-04-23*
+## Legacy Compatibility Prevention
+
+### Modelo de Datos Canónico
+
+El modelo canónico de OCAAS es `TaskDTO`. **NO** introducir formatos alternativos.
+
+```typescript
+// CORRECTO - usar siempre TaskDTO
+import type { TaskDTO } from '../types/domain.js';
+
+function processTask(task: TaskDTO): void { ... }
+
+// INCORRECTO - NO usar modelos ad-hoc
+function processTask(task: { id: string; title?: string }): void { ... }
+```
+
+### Archivos Clave (No Modificar Tipos)
+
+| Archivo | Tipo Canónico | Uso |
+|---------|---------------|-----|
+| `types/domain.ts` | `TaskDTO` | Definición única de Task |
+| `orchestrator/types.ts` | `QueuedTask` | Wrapper con metadata de queue |
+| `orchestrator/QueueManager.ts` | `TaskDTO` | Cola de tasks |
+| `orchestrator/TaskRouter.ts` | `TaskDTO` | Routing de tasks |
+| `orchestrator/feedback/FeedbackService.ts` | `AgentFeedback` | Feedback de agentes |
+
+### Helpers de Acceso (SI se necesita compatibilidad)
+
+Si en el futuro se necesita compatibilidad temporal con otro formato:
+
+```typescript
+// src/utils/legacyCompat.ts
+
+/** @deprecated - Use TaskDTO directly */
+export function resolveTaskId(item: TaskDTO | LegacyFormat): string {
+  logger.warn('Using legacy task format — deprecated');
+  return 'id' in item ? item.id : item.taskId;
+}
+```
+
+### Feature Flags de Compatibilidad
+
+Si se introduce compatibilidad temporal, usar flags explícitos:
+
+```bash
+# .env
+USE_LEGACY_QUEUE_MODEL=false  # Default: false, mantener en false
+USE_SYNC_FEEDBACK_COMPAT=false  # Default: false
+```
+
+### Reglas de Desarrollo
+
+1. **NO** crear interfaces de task alternativas a `TaskDTO`
+2. **NO** usar `any` para tasks - siempre tipar explícitamente
+3. **NO** acceder a campos de task por indexación (`task['id']`) - usar acceso directo (`task.id`)
+4. **SI** se detecta formato legacy en runtime, loguear warning:
+   ```typescript
+   logger.warn({ taskId, format: 'legacy' }, 'Using legacy task format — deprecated');
+   ```
+
+### Estado Actual (2026-04-24)
+
+✅ Modelo consolidado en `TaskDTO`
+✅ No hay código legacy activo
+✅ QueueManager, TaskRouter, FeedbackService usan tipos correctos
+
+---
+
+*Actualizado: 2026-04-24*
 *Sections marked [NEW] or [UPDATED] reflect PROMPT 7-13 changes*
 *Sections marked [CRITICAL] address operational gaps for clean/existing installs*
 *Intent Router section added for OpenClaw ↔ OCAAS integration*
 *Definition of Done + Not Requirements + Known Issues added for realistic deploy criteria*
+*Legacy Compatibility Prevention section added to prevent future regressions*

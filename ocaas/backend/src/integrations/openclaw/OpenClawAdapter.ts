@@ -682,13 +682,19 @@ export class OpenClawAdapter {
 
   /**
    * Initialize adapter (connect to gateway)
+   *
+   * IMPORTANT: WebSocket connection is non-blocking and fire-and-forget.
+   * Server startup should NOT wait for WebSocket to connect.
    */
   async initialize(): Promise<boolean> {
     try {
       const connected = await this.gateway.connect();
       if (connected) {
-        // Also try WebSocket
-        await this.gateway.connectWebSocket();
+        // WebSocket is fire-and-forget - do NOT await
+        // It will reconnect automatically in the background
+        this.gateway.connectWebSocket().catch(err => {
+          logger.debug({ err }, 'WebSocket connect failed (non-blocking, will retry)');
+        });
       }
       return connected;
     } catch (err) {

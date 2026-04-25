@@ -19,7 +19,7 @@ import WebSocket from 'ws';
 
 const logger = integrationLogger.child({ component: 'OpenClawGateway' });
 
-const DEFAULT_TIMEOUT = 30000; // 30 seconds
+const DEFAULT_TIMEOUT = 10000; // 10 seconds (reduced from 30s for faster startup)
 const GENERATION_TIMEOUT = 120000; // 2 minutes for LLM generation
 const STALE_CHECK_INTERVAL = 60000; // 1 minute
 const WS_PING_INTERVAL = 30000; // 30 seconds ping interval
@@ -28,6 +28,7 @@ const WS_PING_INTERVAL = 30000; // 30 seconds ping interval
 const WS_RECONNECT_BASE_DELAY = 1000; // 1 second initial
 const WS_RECONNECT_MAX_DELAY = 60000; // 1 minute max
 const WS_MAX_RECONNECT_ATTEMPTS = 10; // Stop after 10 failures
+const WS_CONNECT_TIMEOUT = 5000; // 5 seconds for initial WS connection (reduced from DEFAULT_TIMEOUT)
 
 /**
  * OpenAI-compatible chat completion response
@@ -875,14 +876,14 @@ export class OpenClawGateway {
           resolve(false);
         });
 
-        // Timeout for connection
+        // Timeout for connection (short timeout for startup, reconnects can be longer)
         setTimeout(() => {
           if (!this.wsConnected) {
-            logger.warn({ wsUrl: this.wsUrl, timeout: DEFAULT_TIMEOUT }, 'WebSocket connection timeout');
+            logger.warn({ wsUrl: this.wsUrl, timeout: WS_CONNECT_TIMEOUT }, 'WebSocket connection timeout');
             this.ws?.close();
             resolve(false);
           }
-        }, DEFAULT_TIMEOUT);
+        }, WS_CONNECT_TIMEOUT);
 
       } catch (err) {
         logger.error({ err, wsUrl: this.wsUrl }, 'Failed to create WebSocket connection');

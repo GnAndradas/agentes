@@ -416,8 +416,15 @@ export class OpenClawAdapter {
   }
 
   /**
-   * Fallback execution via chat_completion (direct, no hooks)
-   * Public for use in async timeout scenarios where we need to bypass hooks.
+   * Fallback execution via REST chat_completion (direct, no hooks, no spawn)
+   *
+   * IMPORTANT: This method uses REST API directly (/v1/chat/completions).
+   * It does NOT use spawn/send which require gateway connection state.
+   *
+   * Used for:
+   * - async timeout fallback
+   * - hooks failure fallback
+   * - any scenario requiring pure REST without session
    */
   async executeChatCompletionDirect(
     input: ExecuteViaHooksInput,
@@ -435,33 +442,75 @@ export class OpenClawAdapter {
       };
     }
 
+    logger.info({
+      agentId: input.agentId,
+      taskId: input.taskId,
+      sessionKey,
+      fallbackReason,
+    }, 'executeChatCompletionDirect: using REST API fallback (no spawn/send)');
+
     try {
-      // Use executeAgent which uses spawn+send (chat_completion)
-      const result = await this.executeAgent({
-        agentId: input.agentId,
-        taskId: input.taskId,
-        prompt: input.prompt,
+      // Use gateway.chatCompletionDirect() which is pure REST
+      // Does NOT use spawn/send, does NOT check restConnected state
+      const context = input.context as { maxTokens?: number } | undefined;
+      const result = await this.gateway.chatCompletionDirect({
+        systemPrompt: `You are agent ${input.agentId}. Complete the following task.`,
+        userPrompt: input.prompt,
+        maxTokens: context?.maxTokens,
+        timeout: 30000, // 30s timeout for fallback
       });
 
+      if (!result.success) {
+        logger.warn({
+          agentId: input.agentId,
+          taskId: input.taskId,
+          error: result.error,
+        }, 'executeChatCompletionDirect: REST fallback failed');
+
+        return {
+          success: false,
+          sessionKey,
+          executionMode: 'chat_completion',
+          fallbackUsed: true,
+          fallbackReason,
+          error: { code: 'execution_error', message: result.error || 'REST chat completion failed' },
+        };
+      }
+
+      logger.info({
+        agentId: input.agentId,
+        taskId: input.taskId,
+        responseLength: result.content?.length,
+      }, 'executeChatCompletionDirect: REST fallback succeeded');
+
       return {
-        success: result.success,
+        success: true,
         sessionKey,
         executionMode: 'chat_completion',
         fallbackUsed: true,
         fallbackReason,
-        response: result.response,
+        response: result.content,
         usage: result.usage,
-        trace: result.trace,
-        error: result.error,
+        trace: {
+          model: 'openclaw/default',
+          transport: 'rest_api',
+        },
       };
     } catch (err) {
+      const error = normalizeError(err);
+      logger.error({
+        err,
+        agentId: input.agentId,
+        taskId: input.taskId,
+      }, 'executeChatCompletionDirect: exception during REST fallback');
+
       return {
         success: false,
         sessionKey,
-        executionMode: 'stub',
+        executionMode: 'chat_completion',
         fallbackUsed: true,
         fallbackReason,
-        error: normalizeError(err),
+        error,
       };
     }
   }

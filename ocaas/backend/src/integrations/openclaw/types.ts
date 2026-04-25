@@ -220,6 +220,7 @@ export interface ExecuteViaHooksResult {
   /** AI trace evidence */
   trace?: {
     model: string;
+    transport?: 'hooks_agent' | 'rest_api' | 'webhook';
   };
 
   /** Error if failed */

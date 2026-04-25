@@ -1191,6 +1191,89 @@ export class OpenClawGateway {
   }
 
   /**
+   * FALLBACK: Direct chat completion via REST (no connection state check)
+   *
+   * This method is used for fallback scenarios where we need to attempt
+   * REST API directly without relying on cached connection state.
+   *
+   * Unlike generate(), this method:
+   * - Does NOT check restConnected (attempts REST directly)
+   * - Does NOT revalidate connection (would block)
+   * - Has explicit timeout (no infinite Promise)
+   * - Returns structured error immediately on failure
+   *
+   * POST /v1/chat/completions with Authorization: Bearer
+   */
+  async chatCompletionDirect(options: {
+    systemPrompt?: string;
+    userPrompt: string;
+    maxTokens?: number;
+    timeout?: number;
+  }): Promise<GenerateResult> {
+    if (!this.apiKey) {
+      return { success: false, error: 'OpenClaw API key not configured' };
+    }
+
+    const timeout = options.timeout || DEFAULT_TIMEOUT;
+
+    try {
+      // Build messages array (OpenAI format)
+      const messages: Array<{ role: string; content: string }> = [];
+
+      if (options.systemPrompt) {
+        messages.push({ role: 'system', content: options.systemPrompt });
+      }
+
+      messages.push({ role: 'user', content: options.userPrompt });
+
+      // Build request body
+      const requestBody: Record<string, unknown> = { model: 'openclaw/default', messages };
+      if (options.maxTokens) {
+        requestBody.max_tokens = options.maxTokens;
+      }
+
+      logger.debug({ timeout, messageLength: options.userPrompt.length }, 'chatCompletionDirect: attempting REST fallback');
+
+      const response = await this.apiRequest<ChatCompletionResponse>(
+        'POST',
+        '/v1/chat/completions',
+        requestBody,
+        timeout
+      );
+
+      const content = response.choices?.[0]?.message?.content || '';
+
+      if (!content) {
+        logger.warn('chatCompletionDirect: empty response');
+        return { success: false, error: 'Empty response from OpenClaw REST API' };
+      }
+
+      // Update connection state since REST worked
+      this.restConnected = true;
+      this.lastCheckTime = Date.now();
+
+      logger.info({
+        promptLength: options.userPrompt.length,
+        responseLength: content.length,
+        model: response.model,
+      }, 'chatCompletionDirect: REST fallback succeeded');
+
+      return {
+        success: true,
+        content,
+        usage: response.usage ? {
+          inputTokens: response.usage.prompt_tokens,
+          outputTokens: response.usage.completion_tokens,
+        } : undefined,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err }, 'chatCompletionDirect: REST fallback failed');
+      return { success: false, error: message };
+    }
+  }
+
+  /**
    * Send notification via webhook (fire-and-forget)
    *
    * POST /hooks/agent with deliver: true

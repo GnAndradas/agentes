@@ -9,6 +9,8 @@ export class QueueManager {
   private processing = new Set<string>();
   private processingBatches = new Set<string>(); // Batches with running tasks
   private sequentialMode = false; // Global sequential mode
+  // Store processing tasks metadata for markDone/getTask lookups
+  private processingTasks = new Map<string, QueuedTask>();
 
   setSequentialMode(enabled: boolean): void {
     this.sequentialMode = enabled;
@@ -101,26 +103,60 @@ export class QueueManager {
   }
 
   markProcessing(taskId: string): void {
-    this.processing.add(taskId);
-
-    // Track batch if applicable
-    const item = this.queue.find(q => q.task.id === taskId);
-    if (item?.task.batchId) {
-      this.processingBatches.add(item.task.batchId);
+    // FIX: Move task from queue to processing (not just add to processing set)
+    // This prevents head-of-line blocking where a processing task still sits at queue[0]
+    const index = this.queue.findIndex(q => q.task.id === taskId);
+    if (index >= 0) {
+      const item = this.queue[index]!;
+      // Store metadata for later lookups (getTask, markDone, etc.)
+      this.processingTasks.set(taskId, item);
+      // Remove from queue
+      this.queue.splice(index, 1);
+      // Track batch lock
+      if (item.task.batchId) {
+        this.processingBatches.add(item.task.batchId);
+      }
+      logger.debug({ taskId, queueSize: this.queue.length }, 'Task moved from queue to processing');
     }
+    this.processing.add(taskId);
   }
 
   markDone(taskId: string): void {
-    // Find the task to get its batch before removing
-    const item = this.queue.find(q => q.task.id === taskId);
+    // FIX: Get task from processingTasks first (where it should be after markProcessing)
+    // Fall back to queue for safety
+    const processingItem = this.processingTasks.get(taskId);
+    const queueItem = this.queue.find(q => q.task.id === taskId);
+    const item = processingItem || queueItem;
     const batchId = item?.task.batchId;
 
+    // Clean up from all tracking structures
     this.processing.delete(taskId);
-    this.remove(taskId);
+    this.processingTasks.delete(taskId);
+    // Also remove from queue if somehow still there
+    const index = this.queue.findIndex(q => q.task.id === taskId);
+    if (index >= 0) {
+      this.queue.splice(index, 1);
+    }
 
-    // Release batch lock
+    // FIX: Recalculate batch locks instead of simple delete
+    // Only release batch lock if no other tasks from same batch are still processing
     if (batchId) {
-      this.processingBatches.delete(batchId);
+      this.recalculateProcessingBatches();
+    }
+
+    logger.debug({ taskId, batchId, queueSize: this.queue.length, processingCount: this.processing.size }, 'Task marked done');
+  }
+
+  /**
+   * Recalculate processingBatches based on tasks actually in processing
+   * This ensures we don't prematurely release batch locks
+   */
+  private recalculateProcessingBatches(): void {
+    this.processingBatches.clear();
+    for (const [, item] of this.processingTasks) {
+      if (item.task.batchId) {
+        this.processingBatches.add(item.task.batchId);
+      }
     }
   }
 
@@ -148,6 +184,7 @@ export class QueueManager {
   clear(): void {
     this.queue = [];
     this.processing.clear();
+    this.processingTasks.clear();
     this.processingBatches.clear();
   }
 
@@ -174,9 +211,13 @@ export class QueueManager {
   }
 
   /**
-   * Get a specific task from the queue (for priority retry)
+   * Get a specific task from queue or processing (for priority retry, etc.)
    */
   getTask(taskId: string): QueuedTask | null {
+    // Check processingTasks first (task may have been moved there by markProcessing)
+    const processingItem = this.processingTasks.get(taskId);
+    if (processingItem) return processingItem;
+    // Fall back to queue
     return this.queue.find(q => q.task.id === taskId) || null;
   }
 

@@ -311,8 +311,12 @@ export class TaskRouter {
 
       // Check if there's already a pending generation or resource creation for this task
       if (actionExecutor.hasPendingGeneration(task.id) || resourceRetryService.hasPendingResource(task.id)) {
-        logger.debug({ taskId: task.id }, 'Task has pending resource creation, waiting');
-        return false;
+        // FIX: Remove task from active queue to prevent head-of-line blocking
+        // Task will be re-added when resource generation completes (via retryTask)
+        this.queue.remove(task.id);
+        logger.info({ taskId: task.id }, 'Task waiting for generation/resource - removed from active queue to allow queue drain');
+        // Continue processing next task in queue
+        return this.processNext();
       }
 
       if (decision.missingReport && decision.missingReport.suggestions.length > 0) {
